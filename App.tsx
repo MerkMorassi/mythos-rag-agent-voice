@@ -1,4 +1,5 @@
 
+
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   GoogleGenAI, 
@@ -9,23 +10,32 @@ import {
 } from '@google/genai';
 import { 
   searchDocuments, 
-  getSystemInstructions, 
-  saveSystemInstructions,
   saveActiveChat, 
   loadActiveChat,
-  saveChatSession 
+  saveChatSession,
+  getGeneralInstructions,
+  saveGeneralInstructions,
+  getAgentConfig,
+  saveAgentConfig
 } from './services/db';
 import { createPcmBlob, base64ToUint8Array, decodeAudioData } from './services/audioUtils';
 import Visualizer from './components/Visualizer';
 import KnowledgeManager from './components/KnowledgeManager';
 import ChatHistoryManager from './components/ChatHistoryManager';
-import SettingsManager, { DEFAULT_CONFIG, ModelConfig } from './components/SettingsManager';
-import { ConnectionState, LogMessage } from './types';
+import SettingsManager from './components/SettingsManager';
+import { ConnectionState, LogMessage, ModelConfig, DEFAULT_MODEL_CONFIG } from './types';
 import { AGENTS, Agent } from './agents';
 
-const MODEL_NAME = 'gemini-2.5-flash-native-audio-preview-09-2025';
+// LIVE MODEL
+const LIVE_MODEL_NAME = 'gemini-2.5-flash-native-audio-preview-09-2025';
 
-// Comprehensive list of known Gemini voices (Removed Despina, Autonoe, Erinome, Gacrux, Laomedeia, Pulcherrima, Sulafat, Vindemiatrix, Achernar)
+// GATING MODELS
+const GATING_MODELS = [
+  { id: 'gemini-3-pro-preview', name: 'Gemini 3.0 Pro' },
+  { id: 'gemini-3-flash-preview', name: 'Gemini 3.0 Flash' }
+];
+
+// Comprehensive list of known Gemini voices
 const PREBUILT_VOICES = [
   "Puck", "Charon", "Kore", "Fenrir", "Zephyr", // Classic
   "Aoede", "Callirrhoe", "Leda" // New / Star-themed
@@ -61,13 +71,31 @@ const terminateTool: FunctionDeclaration = {
   description: 'Terminates the live link.',
 };
 
+interface Attachment {
+  file: File;
+  type: 'image' | 'text';
+  preview: string; // Base64 for image, Snippet for text
+  content: string; // Base64 data or Raw Text
+  mimeType: string;
+}
+
 const App: React.FC = () => {
   const [connectionState, setConnectionState] = useState<ConnectionState>(ConnectionState.DISCONNECTED);
   const [logs, setLogs] = useState<LogMessage[]>([]);
-  const [volume, setVolume] = useState<number>(0);
+  const [systemStatus, setSystemStatus] = useState<string>("System Initialized. Awaiting Link Authorization.");
+  
   const [selectedAgentId, setSelectedAgentId] = useState<string>(AGENTS[0].id);
-  const [modelConfig, setModelConfig] = useState<ModelConfig>(DEFAULT_CONFIG);
-  const [systemInstruction, setSystemInstruction] = useState<string>('');
+  const [inputText, setInputText] = useState('');
+  const [attachment, setAttachment] = useState<Attachment | null>(null);
+  
+  // Gating / Orchestration State
+  const [useDeepAnalysis, setUseDeepAnalysis] = useState(false);
+  const [gatingModel, setGatingModel] = useState<string>(GATING_MODELS[0].id);
+
+  // Settings State
+  const [modelConfig, setModelConfig] = useState<ModelConfig>(DEFAULT_MODEL_CONFIG);
+  const [generalInstruction, setGeneralInstruction] = useState<string>('');
+  const [agentInstruction, setAgentInstruction] = useState<string>('');
   
   // Voice State
   const [selectedVoice, setSelectedVoice] = useState<string>(AGENTS[0].voice);
@@ -77,7 +105,7 @@ const App: React.FC = () => {
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [logsLoaded, setLogsLoaded] = useState(false);
   
-  // Refs for audio processing
+  // Refs
   const audioContextRef = useRef<AudioContext | null>(null);
   const inputAudioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -88,6 +116,7 @@ const App: React.FC = () => {
   const nextStartTimeRef = useRef<number>(0);
   const scheduledSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const logsEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Refs for streaming transcription
   const activeUserMessageRef = useRef<string>('');
@@ -110,35 +139,41 @@ const App: React.FC = () => {
     }
   }, [selectedAgentId]);
 
+  // Load General Instructions on Mount
+  useEffect(() => {
+    const loadGeneral = async () => {
+        const gen = await getGeneralInstructions();
+        setGeneralInstruction(gen);
+    };
+    loadGeneral();
+  }, []);
+
+  // Load Agent Config & Chat History when agent changes
   useEffect(() => {
     let isMounted = true;
-    const loadChat = async () => {
+    const loadData = async () => {
       setLogsLoaded(false);
       try {
+        // Load Chat
         const savedLogs = await loadActiveChat(selectedAgentId);
+        // Load Config
+        const savedConfig = await getAgentConfig(selectedAgentId);
+
         if (isMounted) {
           setLogs(savedLogs);
           setLogsLoaded(true);
+          setAgentInstruction(savedConfig.instruction);
+          setModelConfig(savedConfig.modelConfig);
         }
       } catch (e) {
-        setLogsLoaded(true);
+        if(isMounted) {
+            setLogsLoaded(true);
+        }
       }
     };
-    loadChat();
+    loadData();
     return () => { isMounted = false; };
   }, [selectedAgentId]);
-
-  useEffect(() => {
-    const loadInstructions = async () => {
-      try {
-        const stored = await getSystemInstructions();
-        setSystemInstruction(stored);
-      } catch (e) {
-        console.error("Failed to load system instructions", e);
-      }
-    };
-    loadInstructions();
-  }, []);
 
   useEffect(() => {
     if (logsLoaded) {
@@ -147,9 +182,14 @@ const App: React.FC = () => {
   }, [logs, selectedAgentId, logsLoaded]);
 
   const addLog = (type: LogMessage['type'], text: string, id?: string) => {
+    if (type === 'system') {
+        // Redirect system messages to the terminal display instead of chat logs
+        setSystemStatus(text);
+        return id || crypto.randomUUID();
+    }
+
     const logId = id || crypto.randomUUID();
     setLogs(prev => {
-        // If we have an ID and it already exists, update it
         const index = prev.findIndex(l => l.id === logId);
         if (index !== -1) {
             const updated = [...prev];
@@ -161,8 +201,36 @@ const App: React.FC = () => {
     return logId;
   };
 
-  const handleSaveSystemInstruction = async () => {
-    await saveSystemInstructions(systemInstruction);
+  const handleLoreUpdate = async () => {
+      setSystemStatus('Knowledge Base Updated: New Data Available');
+      
+      // Alert the agent if connected
+      if (connectionState === ConnectionState.CONNECTED && sessionRef.current) {
+          try {
+              // Inject a system message as a user turn (since system messages aren't always directly supported mid-stream in all contexts, 
+              // standard practice for Live API context injection is clientContent turns)
+              await sessionRef.current.send({
+                  clientContent: {
+                      turns: [{
+                          role: 'user',
+                          parts: [{ text: "[SYSTEM ALERT: New knowledge has been ingested into the local database. You can now search for this new information using your tools. Inform the user you are aware of the update.]" }]
+                      }],
+                      turnComplete: true
+                  }
+              });
+              addLog('system', 'Agent notified of knowledge update.');
+          } catch (e) {
+              console.error("Failed to notify agent of update", e);
+          }
+      }
+  };
+
+  const handleSaveSettings = async () => {
+    await saveGeneralInstructions(generalInstruction);
+    await saveAgentConfig(selectedAgentId, { 
+        instruction: agentInstruction, 
+        modelConfig 
+    });
   };
 
   const stopAudioPlayback = () => {
@@ -191,15 +259,208 @@ const App: React.FC = () => {
     }
   };
 
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
+      const isImage = file.type.startsWith('image/');
+      const isText = file.type === 'application/json' || file.name.endsWith('.md') || file.name.endsWith('.txt');
+
+      if (!isImage && !isText) {
+          alert("Unsupported file type. Please upload images, .txt, .md, or .json");
+          return;
+      }
+
+      const reader = new FileReader();
+      
+      reader.onload = (event) => {
+        const result = event.target?.result as string;
+        
+        if (isImage) {
+            // result is "data:image/png;base64,....."
+            const base64 = result.split(',')[1];
+            setAttachment({
+                file,
+                type: 'image',
+                preview: result,
+                content: base64,
+                mimeType: file.type
+            });
+        } else {
+            // Text content
+            setAttachment({
+                file,
+                type: 'text',
+                preview: '📄 ' + file.name,
+                content: result,
+                mimeType: 'text/plain'
+            });
+        }
+      };
+      
+      if (isImage) {
+        reader.readAsDataURL(file);
+      } else {
+        reader.readAsText(file);
+      }
+    }
+    // Reset input so same file can be selected again
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const clearAttachment = () => {
+    setAttachment(null);
+  };
+
+  // Gating / Analysis Logic
+  const performDeepAnalysis = async (att: Attachment, userPrompt: string): Promise<string> => {
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    
+    let parts: any[] = [];
+    
+    if (att.type === 'image') {
+        parts = [
+            {
+                inlineData: {
+                    mimeType: att.mimeType,
+                    data: att.content
+                }
+            },
+            {
+                text: userPrompt ? `Analyze this image in the context of: "${userPrompt}". Provide deep insight for the voice agent.` : "Analyze this image in detail for the voice agent."
+            }
+        ];
+    } else {
+        // Text
+        parts = [
+            {
+                text: `Analyze the following file content (${att.file.name}) and provide a detailed summary and insight for the voice agent.\n\nFILE CONTENT:\n${att.content}\n\nUSER CONTEXT: ${userPrompt}`
+            }
+        ];
+    }
+    
+    const response = await ai.models.generateContent({
+        model: gatingModel,
+        contents: { parts }
+    });
+    return response.text || "";
+  };
+
+  const handleSendText = async () => {
+    if ((!inputText.trim() && !attachment) || connectionState !== ConnectionState.CONNECTED) return;
+    
+    const text = inputText.trim();
+    const currentAttachment = attachment;
+    const isGated = useDeepAnalysis && currentAttachment;
+    
+    // Clear Input
+    setInputText('');
+    setAttachment(null);
+    setUseDeepAnalysis(false); // Reset toggle after send
+    
+    // Add visual log
+    const logText = currentAttachment 
+        ? (text ? `[Sent ${currentAttachment.type === 'image' ? 'Image' : 'File'}] ${text}` : `[Sent ${currentAttachment.type === 'image' ? 'Image' : 'File'}]`)
+        : text;
+    addLog('user', logText);
+    
+    try {
+        if(sessionRef.current) {
+            
+            // PATH A: DEEP ANALYSIS GATING
+            if (isGated) {
+                setSystemStatus(`Orchestrator: Offloading task to ${gatingModel}...`);
+                
+                try {
+                    const analysisResult = await performDeepAnalysis(currentAttachment, text);
+                    
+                    setSystemStatus('Orchestrator: Analysis Complete. Injecting context...');
+                    
+                    // Inject the analysis as a system/context turn
+                    const contextMessage = `[SYSTEM: The user uploaded '${currentAttachment.file.name}'. It was analyzed by the Orchestrator (${gatingModel}).]\n\nANALYSIS RESULT:\n${analysisResult}\n\nUSER COMMENT: ${text}`;
+                    
+                    await sessionRef.current.send({
+                        clientContent: {
+                            turns: [{
+                                role: 'user',
+                                parts: [{ text: contextMessage }]
+                            }],
+                            turnComplete: true
+                        }
+                    });
+                    
+                } catch (analysisErr) {
+                    console.error("Deep analysis failed", analysisErr);
+                    setSystemStatus('Orchestrator: Analysis Failed. Falling back to direct stream.');
+                    // Fallback to direct send if analysis fails
+                }
+            } 
+            
+            // PATH B: DIRECT STREAM (Default or Fallback)
+            if (!isGated) {
+                // 1. Handle Image: Use sendRealtimeInput (Native Multimodal)
+                if (currentAttachment && currentAttachment.type === 'image') {
+                    await sessionRef.current.sendRealtimeInput([{
+                        mimeType: currentAttachment.mimeType,
+                        data: currentAttachment.content
+                    }]);
+                    await new Promise(r => setTimeout(r, 100));
+                }
+
+                // 2. Handle Text Content
+                let textParts = [];
+                if (currentAttachment && currentAttachment.type === 'text') {
+                    textParts.push(`[System: User uploaded file '${currentAttachment.file.name}']\n\nCONTENT:\n${currentAttachment.content}\n\n`);
+                }
+                if (text) textParts.push(text);
+
+                if (textParts.length > 0) {
+                    await sessionRef.current.send({
+                        clientContent: {
+                            turns: [{
+                                role: 'user',
+                                parts: [{ text: textParts.join('') }]
+                            }],
+                            turnComplete: true
+                        }
+                    });
+                } else if (currentAttachment && currentAttachment.type === 'image') {
+                    // Trigger turn if only image
+                     await sessionRef.current.send({
+                         clientContent: {
+                             turns: [{ role: 'user', parts: [{ text: "I have uploaded an image." }] }],
+                             turnComplete: true
+                         }
+                    });
+                }
+            }
+        }
+    } catch(e) {
+        console.error("Error sending message:", e);
+        setSystemStatus('Error sending text/image message. Check console.');
+    }
+  };
+
   const connect = async () => {
     if (!process.env.API_KEY) return;
     setConnectionState(ConnectionState.CONNECTING);
+    setSystemStatus(`Initializing Link to ${currentAgent.handle}...`);
     
     // Context Injection
     const recentHistory = logs.slice(-10).map(l => `${l.type === 'user' ? 'User' : 'Agent'}: ${l.text}`).join('\n');
     const historyContext = recentHistory ? `\n\nRECENT CONVERSATION HISTORY (RESUME CONTEXT):\n${recentHistory}` : '';
-    const customInstructions = systemInstruction;
-    const fullInstruction = `${currentAgent.system_instruction}\n${RAG_INSTRUCTION}${historyContext}\n${customInstructions}`;
+    
+    // Prompt Construction
+    const parts = [
+        currentAgent.system_instruction, // Hardcoded Role
+        RAG_INSTRUCTION,                 // Tool Rules
+        "=== GENERAL USER INSTRUCTIONS ===",
+        generalInstruction,
+        `=== ${currentAgent.handle.toUpperCase()} SPECIFIC INSTRUCTIONS ===`,
+        agentInstruction,
+        historyContext
+    ];
+    
+    const fullInstruction = parts.filter(p => p.trim()).join('\n\n');
 
     // Determine final voice name
     const voiceName = isCustomVoice && customVoiceName.trim() ? customVoiceName.trim() : selectedVoice;
@@ -215,7 +476,7 @@ const App: React.FC = () => {
 
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       const sessionPromise = ai.live.connect({
-        model: MODEL_NAME,
+        model: LIVE_MODEL_NAME,
         config: {
           systemInstruction: fullInstruction,
           responseModalities: [Modality.AUDIO],
@@ -231,7 +492,7 @@ const App: React.FC = () => {
         callbacks: {
           onopen: async () => {
             setConnectionState(ConnectionState.CONNECTED);
-            addLog('system', `Link Established: ${currentAgent.handle} is online (Voice: ${voiceName}).`);
+            setSystemStatus(`Link Established: ${currentAgent.handle} is online (Voice: ${voiceName}).`);
 
             const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
             const source = inputCtx.createMediaStreamSource(micStream);
@@ -263,7 +524,6 @@ const App: React.FC = () => {
                 return;
             }
 
-            // Handle Transcriptions (Streaming Feedback)
             if (msg.serverContent?.inputTranscription) {
                 const text = msg.serverContent.inputTranscription.text;
                 activeUserMessageRef.current += text;
@@ -279,7 +539,6 @@ const App: React.FC = () => {
             }
 
             if (msg.serverContent?.turnComplete) {
-                // Finalize the current turn logs by giving them unique permanent IDs
                 if (activeUserMessageRef.current) {
                     addLog('user', activeUserMessageRef.current);
                     activeUserMessageRef.current = '';
@@ -288,7 +547,6 @@ const App: React.FC = () => {
                     addLog('model', activeModelMessageRef.current);
                     activeModelMessageRef.current = '';
                 }
-                // Clear temporary turn IDs from log state to prevent duplicates
                 setLogs(prev => prev.filter(l => !l.id.startsWith('user-stream-') && !l.id.startsWith('model-stream-')));
                 activeTurnIdRef.current = null;
             }
@@ -300,13 +558,24 @@ const App: React.FC = () => {
                   const docs = await searchDocuments(query, undefined, selectedAgentId);
                   const result = docs.length ? JSON.stringify(docs) : "No local documents found.";
                   sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result } } }));
+                } else if (fc.name === 'downloadTranscript') {
+                  const history = await loadActiveChat(selectedAgentId);
+                  const text = history.map(l => `[${new Date(l.timestamp).toLocaleTimeString()}] ${l.type.toUpperCase()}: ${l.text}`).join('\n');
+                  const blob = new Blob([text], { type: 'text/plain' });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = `${currentAgent.handle}_Transcript_${new Date().toISOString()}.txt`;
+                  a.click();
+                  URL.revokeObjectURL(url);
+                  sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "Transcript downloaded." } } }));
                 } else if (fc.name === 'terminateConnection') {
                   disconnect();
                 }
               }
             }
 
-            // Play Audio Chunks Immediately (Streaming)
+            // Play Audio Chunks
             const modelTurn = msg.serverContent?.modelTurn;
             if (modelTurn?.parts && audioContextRef.current) {
                 const ctx = audioContextRef.current;
@@ -321,7 +590,6 @@ const App: React.FC = () => {
                         analyserRef.current!.connect(ctx.destination);
 
                         const now = ctx.currentTime;
-                        // Schedule next chunk to start exactly when the previous one ends
                         nextStartTimeRef.current = Math.max(nextStartTimeRef.current, now);
                         source.start(nextStartTimeRef.current);
                         nextStartTimeRef.current += audioBuffer.duration;
@@ -337,6 +605,7 @@ const App: React.FC = () => {
       sessionRef.current = await sessionPromise;
     } catch (e) {
       setConnectionState(ConnectionState.ERROR);
+      setSystemStatus("Connection Failed.");
     }
   };
 
@@ -348,15 +617,16 @@ const App: React.FC = () => {
     if (frameIntervalRef.current) clearInterval(frameIntervalRef.current);
     if (sessionRef.current) sessionRef.current.close?.();
     setConnectionState(ConnectionState.DISCONNECTED);
-    addLog('system', 'Link Terminated.');
+    setSystemStatus('Link Terminated.');
   };
 
   return (
     <div className="main-container">
       <div className="header-container">
-        <h1 className="header-title animate-pulse">MythOS :: Hypervisor</h1>
+        <h1 className="header-title animate-pulse">MYTHOS : : COMMS : : HYPERVISOR</h1>
         <div className="status-bar">
           <div className="status-item">CORE: <span style={{color:'#fff'}}>{currentAgent.handle}</span></div>
+          <div className="system-status-header"><span className="terminal-cursor" style={{marginRight:'0.5rem'}}></span>{systemStatus}</div>
           <div className="status-item">SYNC: <span style={{color: connectionState === ConnectionState.CONNECTED ? '#4ade80' : '#666'}}>{connectionState}</span></div>
         </div>
       </div>
@@ -426,22 +696,27 @@ const App: React.FC = () => {
           {isCameraActive ? 'CAM ON' : 'CAM OFF'}
         </button>
         
-        <KnowledgeManager currentAgentId={selectedAgentId} onUpdate={() => addLog('system', 'Lore Update Sync')} />
+        <KnowledgeManager currentAgentId={selectedAgentId} onUpdate={handleLoreUpdate} />
         <ChatHistoryManager currentLogs={logs} onLoadSession={setLogs} />
         <SettingsManager 
-            config={modelConfig} 
-            setConfig={setModelConfig} 
+            modelConfig={modelConfig} 
+            setModelConfig={setModelConfig} 
             disabled={connectionState !== ConnectionState.DISCONNECTED} 
-            systemInstruction={systemInstruction}
-            setSystemInstruction={setSystemInstruction}
-            saveSystemInstruction={handleSaveSystemInstruction}
+            generalInstruction={generalInstruction}
+            setGeneralInstruction={setGeneralInstruction}
+            agentInstruction={agentInstruction}
+            setAgentInstruction={setAgentInstruction}
+            agentName={currentAgent.handle}
+            onSave={handleSaveSettings}
         />
       </div>
 
       <div style={{display: 'grid', gridTemplateColumns: isCameraActive ? '1fr 1fr' : '1fr', gap:'1rem'}}>
-        <div className="section-panel">
-          <div className="section-header"><span className="section-header-title">Resonator Output</span></div>
-          <Visualizer analyser={analyserRef.current} isActive={connectionState === ConnectionState.CONNECTED} />
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <div className="section-panel">
+                <div className="section-header"><span className="section-header-title">Resonator Output</span></div>
+                <Visualizer analyser={analyserRef.current} isActive={connectionState === ConnectionState.CONNECTED} />
+            </div>
         </div>
         {isCameraActive && (
           <div className="section-panel" style={{overflow:'hidden', position:'relative'}}>
@@ -453,25 +728,96 @@ const App: React.FC = () => {
       </div>
 
       <div className="chat-history-container" style={{backgroundColor: '#050505', backgroundImage: 'radial-gradient(#111 1px, transparent 0)', backgroundSize: '20px 20px'}}>
-        {logs.length === 0 && (
-            <div className="chat-message-system">System Initialized. Awaiting Link Authorization.</div>
-        )}
         {logs.map(log => {
-          const isSystem = log.type === 'system';
-          const name = log.type === 'user' ? 'USER' : (log.type === 'model' ? currentAgent.handle.toUpperCase() : 'SYSTEM');
-          
+          if (log.type === 'system') return null; // Don't show system logs in main chat (backup check)
+          const name = log.type === 'user' ? 'USER' : 'AGENT';
           return (
             <div key={log.id} className={`chat-message-base chat-message-${log.type} ${log.id.includes('-stream-') ? 'animate-pulse' : ''}`}>
-              {!isSystem && (
-                <div style={{fontSize: '0.7rem', marginBottom: '0.2rem', opacity: 0.8, fontWeight: 'bold'}}>
-                  {name} <span style={{opacity:0.5, marginLeft: '0.2rem', fontWeight: 'normal'}}>[{new Date(log.timestamp).toLocaleTimeString()}]</span>
-                </div>
-              )}
+              <div style={{fontSize: '0.7rem', marginBottom: '0.2rem', opacity: 0.8, fontWeight: 'bold'}}>
+                {name} <span style={{opacity:0.5, marginLeft: '0.2rem', fontWeight: 'normal'}}>[{new Date(log.timestamp).toLocaleTimeString()}]</span>
+              </div>
               {log.text}
             </div>
           );
         })}
         <div ref={logsEndRef} />
+      </div>
+
+      <div className="chat-input-container">
+          <input 
+              type="file" 
+              accept="image/*,.txt,.md,.json" 
+              ref={fileInputRef} 
+              className="hidden" 
+              onChange={handleFileSelect} 
+          />
+          <button 
+              className="btn btn-secondary"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={connectionState !== ConnectionState.CONNECTED}
+              title="Attach File (Image, TXT, MD, JSON)"
+          >
+            📎
+          </button>
+          
+          <div className="chat-input-wrapper">
+              {attachment && (
+                  <div className="attachment-preview">
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          {attachment.type === 'image' ? (
+                              <img src={attachment.preview} alt="preview" className="attachment-thumb" />
+                          ) : (
+                              <span style={{ fontSize: '0.75rem', color: '#a3a3a3' }}>{attachment.preview}</span>
+                          )}
+                          
+                          {/* GATING CONTROLS */}
+                          <div className="gating-controls">
+                              <label className="gating-toggle" title="Perform Deep Reasoning before sending to Voice Agent">
+                                  <input 
+                                      type="checkbox" 
+                                      checked={useDeepAnalysis}
+                                      onChange={(e) => setUseDeepAnalysis(e.target.checked)}
+                                  />
+                                  <span>Deep Analysis</span>
+                              </label>
+                              {useDeepAnalysis && (
+                                  <select 
+                                      value={gatingModel}
+                                      onChange={(e) => setGatingModel(e.target.value)}
+                                      className="gating-select"
+                                  >
+                                      {GATING_MODELS.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                                  </select>
+                              )}
+                          </div>
+                      </div>
+
+                      <button 
+                          onClick={clearAttachment}
+                          style={{background:'none', border:'none', color:'#f87171', cursor:'pointer', fontWeight:'bold'}}
+                      >
+                          X
+                      </button>
+                  </div>
+              )}
+              <input 
+                  type="text" 
+                  className="chat-input" 
+                  placeholder={connectionState === ConnectionState.CONNECTED ? "Type a message..." : "Connect to chat..."}
+                  value={inputText}
+                  onChange={(e) => setInputText(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleSendText()}
+                  disabled={connectionState !== ConnectionState.CONNECTED}
+              />
+          </div>
+          
+          <button 
+              className="btn btn-secondary" 
+              onClick={handleSendText}
+              disabled={connectionState !== ConnectionState.CONNECTED || (!inputText.trim() && !attachment)}
+          >
+              SEND
+          </button>
       </div>
     </div>
   );

@@ -7,7 +7,8 @@ import {
   getDocumentsByAgentId, 
   deleteDocument, 
   bulkAddDocuments,
-  clearAllDocuments
+  clearAllDocuments,
+  deleteDocumentsByAgentId
 } from '../services/db';
 
 interface KnowledgeManagerProps {
@@ -292,10 +293,7 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
 
       setIsProcessing(true);
       try {
-          const idsToDelete = docs.map(d => d.id);
-          for (const id of idsToDelete) {
-              await deleteDocument(id);
-          }
+          await deleteDocumentsByAgentId(currentAgentId);
           await fetchDocs();
           onUpdate();
           alert(`Database purged for ${currentAgentId}.`);

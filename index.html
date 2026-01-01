@@ -81,6 +81,32 @@
           font-size: 0.75rem;
       }
 
+      /* Terminal Status Display */
+      .terminal-status {
+          background-color: #000;
+          border: 1px solid #333;
+          border-top: none;
+          padding: 0.5rem 1rem;
+          font-family: var(--font-mono);
+          font-size: 0.7rem;
+          color: #4ade80;
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          margin-top: -1rem; /* Connect to panel above */
+          border-bottom-left-radius: 0.375rem;
+          border-bottom-right-radius: 0.375rem;
+      }
+      
+      .terminal-cursor {
+          display: inline-block;
+          width: 6px;
+          height: 12px;
+          background-color: #4ade80;
+          animation: blink 1s step-end infinite;
+      }
+      @keyframes blink { 50% { opacity: 0; } }
+
       /* Form Elements */
       .form-input {
           width: 100%;
@@ -382,18 +408,6 @@
           color: #e5e5e5;
           border: 1px solid #333;
       }
-
-      .chat-message-system {
-          align-self: center;
-          text-align: center;
-          font-size: 0.75rem;
-          color: #666;
-          font-style: italic;
-          border-top: 1px solid #222;
-          border-bottom: 1px solid #222;
-          width: 100%;
-          padding: 0.25rem 0;
-      }
       
       .chat-message-tool {
           align-self: center;
@@ -401,6 +415,95 @@
           font-size: 0.75rem;
           color: #a78bfa;
           width: 100%;
+      }
+
+      /* Chat Input */
+      .chat-input-container {
+          display: flex;
+          gap: 0.5rem;
+          align-items: flex-end;
+      }
+
+      .chat-input-wrapper {
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+          gap: 0.5rem;
+      }
+
+      .attachment-preview {
+          background-color: #222;
+          padding: 0.5rem;
+          border: 1px solid #333;
+          border-radius: 0.25rem;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 0.5rem;
+          align-self: stretch;
+      }
+
+      .attachment-thumb {
+          width: 40px;
+          height: 40px;
+          object-fit: cover;
+          border-radius: 0.125rem;
+      }
+
+      .chat-input {
+          width: 100%;
+          background-color: var(--color-panel);
+          border: 1px solid var(--color-border);
+          color: var(--color-text-main);
+          padding: 0.75rem;
+          border-radius: 0.25rem;
+          outline: none;
+          font-family: var(--font-mono);
+          transition: border-color 0.15s ease-in-out;
+          box-sizing: border-box;
+      }
+
+      .chat-input:focus {
+          border-color: var(--color-accent);
+      }
+      
+      .chat-input:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+      }
+      
+      /* Gating Controls */
+      .gating-controls {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          background-color: #111;
+          padding: 0.25rem 0.5rem;
+          border-radius: 0.25rem;
+          border: 1px solid #333;
+      }
+      
+      .gating-toggle {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          cursor: pointer;
+          font-size: 0.7rem;
+          color: #a3a3a3;
+      }
+      
+      .gating-toggle input {
+          cursor: pointer;
+      }
+      
+      .gating-select {
+          background-color: #000;
+          color: #a3a3a3;
+          border: 1px solid #333;
+          font-size: 0.7rem;
+          padding: 0.1rem;
+          border-radius: 0.125rem;
+          font-family: var(--font-mono);
       }
 
       /* Feedback Buttons */
@@ -437,11 +540,23 @@
           padding-top: 0.5rem;
           border-top: 1px solid var(--color-border);
           margin-top: 1rem;
+          gap: 1rem;
       }
 
       .status-item {
           font-weight: bold;
           color: #a3a3a3;
+          white-space: nowrap;
+      }
+      
+      .system-status-header {
+          flex: 1;
+          text-align: center;
+          color: #4ade80;
+          font-family: var(--font-mono);
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
       }
 
       /* Modal / Overlay */

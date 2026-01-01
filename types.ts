@@ -1,3 +1,4 @@
+
 export interface KnowledgeDoc {
   id: string;
   agentId?: string; // Links document to a specific agent
@@ -27,4 +28,22 @@ export interface ChatSession {
   title: string;
   timestamp: number;
   logs: LogMessage[];
+}
+
+export interface ModelConfig {
+  temperature: number;
+  topP: number;
+  topK: number;
+}
+
+export const DEFAULT_MODEL_CONFIG: ModelConfig = {
+  temperature: 0.7,
+  topP: 0.95,
+  topK: 40,
+};
+
+export interface AgentConfig {
+  agentId: string;
+  systemInstruction: string;
+  modelConfig: ModelConfig;
 }

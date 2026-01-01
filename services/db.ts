@@ -1,4 +1,5 @@
-import { KnowledgeDoc, ChatSession, LogMessage } from '../types';
+
+import { KnowledgeDoc, ChatSession, LogMessage, AgentConfig, ModelConfig, DEFAULT_MODEL_CONFIG } from '../types';
 
 const DB_NAME = 'gemini_rag_db';
 const STORE_NAME = 'documents';
@@ -104,6 +105,26 @@ export const deleteDocument = async (id: string): Promise<void> => {
 
     request.onsuccess = () => resolve();
     request.onerror = () => reject(request.error);
+  });
+};
+
+export const deleteDocumentsByAgentId = async (agentId: string): Promise<void> => {
+  const db = await initDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction([STORE_NAME], 'readwrite');
+    const store = transaction.objectStore(STORE_NAME);
+    const index = store.index('agentId');
+    const request = index.getAllKeys(agentId);
+
+    request.onsuccess = () => {
+      const keys = request.result;
+      keys.forEach((key) => {
+        store.delete(key);
+      });
+    };
+
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
   });
 };
 
@@ -238,26 +259,27 @@ export const loadActiveChat = async (agentId: string): Promise<LogMessage[]> => 
 };
 
 
-// System Instructions Methods
+// --- CONFIGURATION MANAGEMENT ---
 
-export const saveSystemInstructions = async (instructions: string): Promise<void> => {
+// 1. General System Instructions (Global)
+export const saveGeneralInstructions = async (instructions: string): Promise<void> => {
   const db = await initDB();
   return new Promise((resolve, reject) => {
     const transaction = db.transaction([CONFIG_STORE_NAME], 'readwrite');
     const store = transaction.objectStore(CONFIG_STORE_NAME);
-    const request = store.put({ id: 'system_instructions', value: instructions });
+    const request = store.put({ id: 'general_instructions', value: instructions });
 
     request.onsuccess = () => resolve();
     request.onerror = () => reject(request.error);
   });
 };
 
-export const getSystemInstructions = async (): Promise<string> => {
+export const getGeneralInstructions = async (): Promise<string> => {
   const db = await initDB();
   return new Promise((resolve, reject) => {
     const transaction = db.transaction([CONFIG_STORE_NAME], 'readonly');
     const store = transaction.objectStore(CONFIG_STORE_NAME);
-    const request = store.get('system_instructions');
+    const request = store.get('general_instructions');
 
     request.onsuccess = () => {
       resolve(request.result?.value || '');
@@ -265,6 +287,39 @@ export const getSystemInstructions = async (): Promise<string> => {
     request.onerror = () => reject(request.error);
   });
 };
+
+// 2. Agent Specific Config (Instructions + Model Params)
+export const saveAgentConfig = async (agentId: string, config: { instruction: string, modelConfig: ModelConfig }): Promise<void> => {
+  const db = await initDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction([CONFIG_STORE_NAME], 'readwrite');
+    const store = transaction.objectStore(CONFIG_STORE_NAME);
+    const request = store.put({ id: `agent_config_${agentId}`, value: config });
+
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+};
+
+export const getAgentConfig = async (agentId: string): Promise<{ instruction: string, modelConfig: ModelConfig }> => {
+  const db = await initDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction([CONFIG_STORE_NAME], 'readonly');
+    const store = transaction.objectStore(CONFIG_STORE_NAME);
+    const request = store.get(`agent_config_${agentId}`);
+
+    request.onsuccess = () => {
+      resolve(request.result?.value || { instruction: '', modelConfig: DEFAULT_MODEL_CONFIG });
+    };
+    request.onerror = () => reject(request.error);
+  });
+};
+
+// Legacy support: We can remove getSystemInstructions and saveSystemInstructions as we are migrating to General/Agent specific
+// but I'll keep them aliased to General for now to prevent breaking immediate reload if data exists
+export const saveSystemInstructions = saveGeneralInstructions;
+export const getSystemInstructions = getGeneralInstructions;
+
 
 // Vector Utility: Cosine Similarity
 function cosineSimilarity(vecA: number[], vecB: number[]): number {
