@@ -182,12 +182,6 @@ const App: React.FC = () => {
   }, [logs, selectedAgentId, logsLoaded]);
 
   const addLog = (type: LogMessage['type'], text: string, id?: string) => {
-    if (type === 'system') {
-        // Redirect system messages to the terminal display instead of chat logs
-        setSystemStatus(text);
-        return id || crypto.randomUUID();
-    }
-
     const logId = id || crypto.randomUUID();
     setLogs(prev => {
         const index = prev.findIndex(l => l.id === logId);
@@ -202,23 +196,23 @@ const App: React.FC = () => {
   };
 
   const handleLoreUpdate = async () => {
+      const msg = "[SYSTEM ALERT: New knowledge has been ingested into the local database. You can now search for this new information using your tools. Inform the user you are aware of the update.]";
       setSystemStatus('Knowledge Base Updated: New Data Available');
+      addLog('system', "SYSTEM: Knowledge Base Updated. Alerting Agent...");
       
       // Alert the agent if connected
       if (connectionState === ConnectionState.CONNECTED && sessionRef.current) {
           try {
-              // Inject a system message as a user turn (since system messages aren't always directly supported mid-stream in all contexts, 
-              // standard practice for Live API context injection is clientContent turns)
+              // Inject a system message as a user turn
               await sessionRef.current.send({
                   clientContent: {
                       turns: [{
                           role: 'user',
-                          parts: [{ text: "[SYSTEM ALERT: New knowledge has been ingested into the local database. You can now search for this new information using your tools. Inform the user you are aware of the update.]" }]
+                          parts: [{ text: msg }]
                       }],
                       turnComplete: true
                   }
               });
-              addLog('system', 'Agent notified of knowledge update.');
           } catch (e) {
               console.error("Failed to notify agent of update", e);
           }
@@ -729,7 +723,14 @@ const App: React.FC = () => {
 
       <div className="chat-history-container" style={{backgroundColor: '#050505', backgroundImage: 'radial-gradient(#111 1px, transparent 0)', backgroundSize: '20px 20px'}}>
         {logs.map(log => {
-          if (log.type === 'system') return null; // Don't show system logs in main chat (backup check)
+          // Now rendering system messages in chat
+          if (log.type === 'system') {
+              return (
+                <div key={log.id} className="chat-message-system animate-pulse">
+                    {log.text}
+                </div>
+              );
+          }
           const name = log.type === 'user' ? 'USER' : 'AGENT';
           return (
             <div key={log.id} className={`chat-message-base chat-message-${log.type} ${log.id.includes('-stream-') ? 'animate-pulse' : ''}`}>
