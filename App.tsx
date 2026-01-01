@@ -152,7 +152,11 @@ const App: React.FC = () => {
   useEffect(() => {
     let isMounted = true;
     const loadData = async () => {
+      // Note: We intentionally DO NOT set logsLoaded(false) here because
+      // we handle it in the onChange handler to prevent race conditions during render.
+      // However, we set it here again just in case.
       setLogsLoaded(false);
+      
       try {
         // Load Chat
         const savedLogs = await loadActiveChat(selectedAgentId);
@@ -161,12 +165,14 @@ const App: React.FC = () => {
 
         if (isMounted) {
           setLogs(savedLogs);
-          setLogsLoaded(true);
           setAgentInstruction(savedConfig.instruction);
           setModelConfig(savedConfig.modelConfig);
+          setLogsLoaded(true); // Enable saving only after data is fully loaded
         }
       } catch (e) {
+        console.error("Error loading agent data", e);
         if(isMounted) {
+            setLogs([]); 
             setLogsLoaded(true);
         }
       }
@@ -175,6 +181,7 @@ const App: React.FC = () => {
     return () => { isMounted = false; };
   }, [selectedAgentId]);
 
+  // Auto-save chat history when logs change
   useEffect(() => {
     if (logsLoaded) {
       saveActiveChat(selectedAgentId, logs).catch(console.error);
@@ -198,6 +205,7 @@ const App: React.FC = () => {
   const handleLoreUpdate = async () => {
       const msg = "[SYSTEM ALERT: New knowledge has been ingested into the local database. You can now search for this new information using your tools. Inform the user you are aware of the update.]";
       setSystemStatus('Knowledge Base Updated: New Data Available');
+      // Visual log for user
       addLog('system', "SYSTEM: Knowledge Base Updated. Alerting Agent...");
       
       // Alert the agent if connected
@@ -215,6 +223,7 @@ const App: React.FC = () => {
               });
           } catch (e) {
               console.error("Failed to notify agent of update", e);
+              addLog('system', "SYSTEM ERROR: Failed to inject update alert to Agent.");
           }
       }
   };
@@ -393,11 +402,15 @@ const App: React.FC = () => {
             if (!isGated) {
                 // 1. Handle Image: Use sendRealtimeInput (Native Multimodal)
                 if (currentAttachment && currentAttachment.type === 'image') {
-                    await sessionRef.current.sendRealtimeInput([{
-                        mimeType: currentAttachment.mimeType,
-                        data: currentAttachment.content
-                    }]);
-                    await new Promise(r => setTimeout(r, 100));
+                    // Fix: sendRealtimeInput expects { media: { ... } } object, not an array
+                    await sessionRef.current.sendRealtimeInput({
+                        media: {
+                            mimeType: currentAttachment.mimeType,
+                            data: currentAttachment.content
+                        }
+                    });
+                    // Brief delay to ensure image processes before text triggers turn
+                    await new Promise(r => setTimeout(r, 150));
                 }
 
                 // 2. Handle Text Content
@@ -406,6 +419,11 @@ const App: React.FC = () => {
                     textParts.push(`[System: User uploaded file '${currentAttachment.file.name}']\n\nCONTENT:\n${currentAttachment.content}\n\n`);
                 }
                 if (text) textParts.push(text);
+
+                // If only image was sent (no text), we still need to trigger a turn for the model to "see" it and respond.
+                if (textParts.length === 0 && currentAttachment && currentAttachment.type === 'image') {
+                    textParts.push("I have uploaded an image.");
+                }
 
                 if (textParts.length > 0) {
                     await sessionRef.current.send({
@@ -417,20 +435,13 @@ const App: React.FC = () => {
                             turnComplete: true
                         }
                     });
-                } else if (currentAttachment && currentAttachment.type === 'image') {
-                    // Trigger turn if only image
-                     await sessionRef.current.send({
-                         clientContent: {
-                             turns: [{ role: 'user', parts: [{ text: "I have uploaded an image." }] }],
-                             turnComplete: true
-                         }
-                    });
                 }
             }
         }
     } catch(e) {
         console.error("Error sending message:", e);
         setSystemStatus('Error sending text/image message. Check console.');
+        addLog('system', `SYSTEM ERROR: Failed to send message (${e instanceof Error ? e.message : 'Unknown Error'})`);
     }
   };
 
@@ -628,7 +639,13 @@ const App: React.FC = () => {
       <div className="section-panel" style={{display:'flex', gap:'1rem', alignItems:'center'}}>
         <select 
             value={selectedAgentId} 
-            onChange={e => setSelectedAgentId(e.target.value)} 
+            onChange={e => {
+                // Critical: Reset state immediately to prevent race conditions in auto-save logic
+                // when switching agents.
+                setLogsLoaded(false); 
+                setLogs([]); 
+                setSelectedAgentId(e.target.value);
+            }} 
             disabled={connectionState !== ConnectionState.DISCONNECTED} 
             className="form-select control-select-agent"
         >

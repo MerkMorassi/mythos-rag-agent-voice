@@ -1,4 +1,5 @@
 
+
 import React, { useState, useEffect, useRef } from 'react';
 import { GoogleGenAI } from '@google/genai';
 import { KnowledgeDoc } from '../types';
@@ -57,6 +58,7 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
 
   useEffect(() => {
     if (isOpen) {
+      setDocs([]); // Clear docs immediately when switching or opening to avoid flash of wrong agent data
       fetchDocs();
     }
   }, [isOpen, currentAgentId]);
