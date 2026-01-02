@@ -47,3 +47,13 @@ export interface AgentConfig {
   systemInstruction: string;
   modelConfig: ModelConfig;
 }
+
+export interface CloudFile {
+  name: string; // The resource name (files/...)
+  displayName: string;
+  mimeType: string;
+  sizeBytes: string;
+  createTime: string;
+  state: 'STATE_UNSPECIFIED' | 'PROCESSING' | 'ACTIVE' | 'FAILED';
+  uri: string;
+}

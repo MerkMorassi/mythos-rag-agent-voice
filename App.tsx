@@ -19,11 +19,12 @@ import {
   addDocument
 } from './services/db';
 import { createPcmBlob, base64ToUint8Array, decodeAudioData } from './services/audioUtils';
+import { listCloudFiles } from './services/googleFiles';
 import Visualizer from './components/Visualizer';
 import KnowledgeManager from './components/KnowledgeManager';
 import ChatHistoryManager from './components/ChatHistoryManager';
 import SettingsManager from './components/SettingsManager';
-import { ConnectionState, LogMessage, ModelConfig, DEFAULT_MODEL_CONFIG } from './types';
+import { ConnectionState, LogMessage, ModelConfig, DEFAULT_MODEL_CONFIG, CloudFile } from './types';
 import { AGENTS, Agent } from './agents';
 
 // LIVE MODEL
@@ -129,6 +130,10 @@ const App: React.FC = () => {
   // Gating / Orchestration State
   const [useDeepAnalysis, setUseDeepAnalysis] = useState(false);
   const [gatingModel, setGatingModel] = useState<string>(GATING_MODELS[0].id);
+  
+  // Cloud File State
+  const [availableCloudFiles, setAvailableCloudFiles] = useState<CloudFile[]>([]);
+  const [activeCloudFileUri, setActiveCloudFileUri] = useState<string>('');
 
   // Settings State
   const [modelConfig, setModelConfig] = useState<ModelConfig>(DEFAULT_MODEL_CONFIG);
@@ -191,6 +196,9 @@ const App: React.FC = () => {
         setGeneralInstruction(gen);
     };
     loadGeneral();
+    
+    // Initial fetch of cloud files
+    updateCloudFileList();
   }, []);
 
   // Load Agent Config & Chat History when agent changes
@@ -227,6 +235,15 @@ const App: React.FC = () => {
       saveActiveChat(selectedAgentId, logs).catch(console.error);
     }
   }, [logs, selectedAgentId, logsLoaded]);
+
+  const updateCloudFileList = async () => {
+      try {
+          const files = await listCloudFiles();
+          setAvailableCloudFiles(files);
+      } catch (e) {
+          console.error("Failed to list cloud files in App", e);
+      }
+  };
 
   const showToast = (message: string, type: 'success'|'error'|'info' = 'info') => {
     const id = crypto.randomUUID();
@@ -279,7 +296,8 @@ const App: React.FC = () => {
   };
 
   const handleLoreUpdate = async () => {
-      const msg = "[SYSTEM ALERT: New knowledge has been ingested into the local database. You can now search for this new information using your tools. Inform the user you are aware of the update.]";
+      updateCloudFileList(); // Refresh cloud files if knowledge manager changed something
+      const msg = "[SYSTEM ALERT: New knowledge has been ingested into the local database or cloud context. You can now search for this new information using your tools. Inform the user you are aware of the update.]";
       setSystemStatus('Knowledge Base Updated');
       showToast('Knowledge Base Updated', 'success');
       
@@ -385,30 +403,55 @@ const App: React.FC = () => {
     setAttachment(null);
   };
 
-  const performDeepAnalysis = async (att: Attachment, userPrompt: string): Promise<string> => {
+  const performDeepAnalysis = async (att: Attachment | null, cloudFileUri: string, userPrompt: string): Promise<string> => {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     
     let parts: any[] = [];
-    
-    if (att.type === 'image') {
-        parts = [
-            {
+    let logMsg = "Analyzing ";
+
+    // 1. Cloud File (High Capacity)
+    if (cloudFileUri) {
+        const fileObj = availableCloudFiles.find(f => f.uri === cloudFileUri);
+        if (fileObj) {
+            parts.push({
+                fileData: {
+                    fileUri: fileObj.uri,
+                    mimeType: fileObj.mimeType
+                }
+            });
+            logMsg += `Cloud File: ${fileObj.displayName} `;
+        }
+    }
+
+    // 2. Local Attachment (Base64)
+    if (att) {
+        if (att.type === 'image') {
+            parts.push({
                 inlineData: {
                     mimeType: att.mimeType,
                     data: att.content
                 }
-            },
-            {
+            });
+            parts.push({
                 text: userPrompt ? `Analyze this image in the context of: "${userPrompt}". Provide deep insight for the voice agent.` : "Analyze this image in detail for the voice agent."
-            }
-        ];
-    } else {
-        parts = [
-            {
+            });
+            logMsg += `& Image `;
+        } else {
+            parts.push({
                 text: `Analyze the following file content (${att.file.name}) and provide a detailed summary and insight for the voice agent.\n\nFILE CONTENT:\n${att.content}\n\nUSER CONTEXT: ${userPrompt}`
-            }
-        ];
+            });
+            logMsg += `& Local Doc `;
+        }
+    } else if (cloudFileUri) {
+         // If only cloud file and no attachment, add the prompt
+         parts.push({
+             text: userPrompt ? `Analyze the attached file in the context of: "${userPrompt}".` : "Analyze the attached file."
+         });
     }
+
+    if (parts.length === 0) return "No content to analyze.";
+
+    console.log("Sending parts to Gating Model:", parts);
     
     const response = await ai.models.generateContent({
         model: gatingModel,
@@ -418,31 +461,40 @@ const App: React.FC = () => {
   };
 
   const handleSendText = async () => {
-    if ((!inputText.trim() && !attachment) || connectionState !== ConnectionState.CONNECTED) return;
+    if ((!inputText.trim() && !attachment && !activeCloudFileUri) || connectionState !== ConnectionState.CONNECTED) return;
     
     const text = inputText.trim();
     const currentAttachment = attachment;
-    const isGated = useDeepAnalysis && currentAttachment;
+    const currentCloudUri = activeCloudFileUri;
+    // Deep analysis is required if using a Cloud File (Live API doesn't support fileData URI natively yet)
+    const isGated = useDeepAnalysis || !!currentCloudUri; 
     
     setInputText('');
     setAttachment(null);
     setUseDeepAnalysis(false); 
+    setActiveCloudFileUri(''); // Reset selection
     
-    const logText = currentAttachment 
-        ? (text ? `[Sent ${currentAttachment.type === 'image' ? 'Image' : 'File'}] ${text}` : `[Sent ${currentAttachment.type === 'image' ? 'Image' : 'File'}]`)
-        : text;
+    let logText = text;
+    if (currentAttachment) logText = `[Sent ${currentAttachment.type}] ` + logText;
+    if (currentCloudUri) logText = `[Ref: CloudFile] ` + logText;
+
     addLog('user', logText);
     
     try {
         if(sessionRef.current) {
             
             if (isGated) {
-                setSystemStatus(`Orchestrator: Offloading task to ${gatingModel}...`);
+                setSystemStatus(`Orchestrator: Offloading to ${gatingModel}...`);
                 
                 try {
-                    const analysisResult = await performDeepAnalysis(currentAttachment, text);
+                    const analysisResult = await performDeepAnalysis(currentAttachment, currentCloudUri, text);
                     setSystemStatus('Orchestrator: Analysis Complete. Injecting context...');
-                    const contextMessage = `[SYSTEM: The user uploaded '${currentAttachment.file.name}'. It was analyzed by the Orchestrator (${gatingModel}).]\n\nANALYSIS RESULT:\n${analysisResult}\n\nUSER COMMENT: ${text}`;
+                    
+                    let contextMessage = `[SYSTEM: Orchestrator Report (${gatingModel})]\n`;
+                    if (currentCloudUri) contextMessage += `REF: Cloud File Analyzed.\n`;
+                    if (currentAttachment) contextMessage += `REF: User Upload (${currentAttachment.file.name}).\n`;
+                    contextMessage += `\nANALYSIS RESULT:\n${analysisResult}\n\nUSER COMMENT: ${text}`;
+                    
                     await safeSendClientContent([{ text: contextMessage }]);
                 } catch (analysisErr) {
                     console.error("Deep analysis failed", analysisErr);
@@ -932,6 +984,31 @@ const App: React.FC = () => {
                       </button>
                   </div>
               )}
+              
+              {/* Cloud File Selector - Shows only if Deep Analysis is active OR a cloud file is already selected */}
+              {(useDeepAnalysis || activeCloudFileUri) && availableCloudFiles.length > 0 && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0 0.25rem' }}>
+                      <span style={{ fontSize: '0.7rem', color: '#a78bfa', fontWeight: 'bold' }}>CLOUD CONTEXT:</span>
+                      <select 
+                          value={activeCloudFileUri}
+                          onChange={(e) => {
+                              setActiveCloudFileUri(e.target.value);
+                              // Auto-enable deep analysis if a cloud file is picked
+                              if (e.target.value) setUseDeepAnalysis(true);
+                          }}
+                          className="gating-select"
+                          style={{ maxWidth: '300px' }}
+                      >
+                          <option value="">-- None Selected --</option>
+                          {availableCloudFiles.map(f => (
+                              <option key={f.name} value={f.uri}>
+                                  {f.displayName} ({(parseInt(f.sizeBytes)/1024/1024).toFixed(1)}MB)
+                              </option>
+                          ))}
+                      </select>
+                  </div>
+              )}
+
               <input 
                   type="text" 
                   className="chat-input" 
@@ -950,7 +1027,7 @@ const App: React.FC = () => {
           <button 
               className="btn btn-secondary" 
               onClick={handleSendText}
-              disabled={connectionState !== ConnectionState.CONNECTED || (!inputText.trim() && !attachment)}
+              disabled={connectionState !== ConnectionState.CONNECTED || (!inputText.trim() && !attachment && !activeCloudFileUri)}
           >
               SEND
           </button>
