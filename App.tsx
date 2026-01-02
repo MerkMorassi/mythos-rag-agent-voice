@@ -796,8 +796,21 @@ const App: React.FC = () => {
                       continue;
                   }
 
-                  // 3. VECTOR SEARCH: Fallback
-                  const docs = await searchDocuments(query, undefined, selectedAgentId);
+                  // 3. VECTOR SEARCH: Generate Embedding + Search
+                  let queryVector = undefined;
+                  try {
+                      // We can use the existing `ai` instance from the connect scope, OR create a new lightweight one for just this call
+                      // The current `ai` instance is bound to the live session, but `ai.models.embedContent` is stateless.
+                      const embedResponse = await ai.models.embedContent({
+                          model: 'text-embedding-004',
+                          contents: [{ parts: [{ text: query }] }]
+                      });
+                      queryVector = embedResponse.embedding?.values;
+                  } catch (e) {
+                      console.warn("Embedding generation failed, falling back to keyword search", e);
+                  }
+
+                  const docs = await searchDocuments(query, queryVector, selectedAgentId);
                   const result = docs.length ? JSON.stringify(docs) : "No local documents found.";
                   sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result } } }));
                   
@@ -837,7 +850,6 @@ const App: React.FC = () => {
                   const text = (fc.args as any).text;
                   const title = (fc.args as any).title || "Agent Memory";
                   try {
-                       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
                        const embedResult = await ai.models.embedContent({
                             model: 'text-embedding-004',
                             contents: [{ parts: [{ text }] }],

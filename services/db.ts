@@ -360,6 +360,7 @@ function cosineSimilarity(vecA: number[], vecB: number[]): number {
 }
 
 export const searchDocuments = async (query: string, queryEmbedding?: number[], agentId?: string): Promise<KnowledgeDoc[]> => {
+  const startTime = performance.now();
   const docsToSearch = agentId ? await getDocumentsByAgentId(agentId) : await getAllDocuments();
   
   if (queryEmbedding && docsToSearch.some(d => d.embedding)) {
@@ -372,16 +373,22 @@ export const searchDocuments = async (query: string, queryEmbedding?: number[], 
       };
     });
 
-    return scoredDocs
+    const results = scoredDocs
       .sort((a, b) => b.score - a.score)
       .slice(0, 5)
       .map(item => item.doc);
+      
+    console.debug(`[RAG] Vector Search over ${docsToSearch.length} nodes took ${Math.round(performance.now() - startTime)}ms`);
+    return results;
   } else {
     // Fallback: Keyword Search
     const lowerQuery = query.toLowerCase();
-    return docsToSearch.filter(doc => 
+    const results = docsToSearch.filter(doc => 
       doc.title.toLowerCase().includes(lowerQuery) || 
       doc.content.toLowerCase().includes(lowerQuery)
     ).slice(0, 5);
+    
+    console.debug(`[RAG] Keyword Search over ${docsToSearch.length} nodes took ${Math.round(performance.now() - startTime)}ms`);
+    return results;
   }
 };

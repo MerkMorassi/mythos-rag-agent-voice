@@ -132,7 +132,9 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
       link.href = url;
       link.download = `MythOS_LorePack_${session.title.replace(/[^a-z0-9]/gi, '_')}.json`;
       link.click();
-      URL.revokeObjectURL(url);
+      
+      // CRITICAL FIX: Delay revocation for large files
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
   };
 
   const handleIngestToLore = async (session: ChatSession) => {
