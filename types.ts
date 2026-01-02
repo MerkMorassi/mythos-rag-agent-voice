@@ -85,3 +85,13 @@ export interface LorePack {
   header: LorePackHeader;
   sacred_archive: KnowledgeDoc[];
 }
+
+// --- MULTI-AGENT TYPES ---
+export interface MultiAgentMessage {
+    id: string;
+    senderId: string; // 'USER' | 'SYSTEM' | AgentID
+    senderName: string;
+    text: string;
+    timestamp: number;
+    isThinking?: boolean;
+}

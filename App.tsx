@@ -29,6 +29,8 @@ import Visualizer from './components/Visualizer';
 import { KnowledgeManager } from './components/KnowledgeManager';
 import ChatHistoryManager from './components/ChatHistoryManager';
 import SettingsManager from './components/SettingsManager';
+import { MultiAgentConsole } from './components/MultiAgentConsole'; 
+import { VoiceCommandList } from './components/VoiceCommandList';
 import { ConnectionState, LogMessage, ModelConfig, DEFAULT_MODEL_CONFIG, CloudFile } from './types';
 import { AGENTS } from './agents';
 
@@ -65,6 +67,7 @@ If the user asks about private docs or indexed lore, check the local DB first.
 If the conversation is a continuation, your memory of previous exchanges is provided in the system context.
 Use 'saveToKnowledgeBase' to persist new facts, memories, or user details to the long-term vector store.
 Use 'updateSystemInstructions' to permanently adjust your own behavioral guidelines or persona settings based on user feedback.
+Use 'updateModelConfiguration' when the user explicitly asks to change your creativity, speed, randomness, or precision (Temperature, TopK, TopP).
 Use 'terminateConnection' to end the link gracefully when the user is done.
 Use 'downloadTranscript' if the user wants a hard copy of the session.
 
@@ -108,6 +111,19 @@ const updateInstructionsTool: FunctionDeclaration = {
   },
 };
 
+const updateConfigTool: FunctionDeclaration = {
+  name: 'updateModelConfiguration',
+  description: 'Updates the model generation parameters based on user command. Use this to adjust Temperature (Creativity), TopP (Nucleus), or TopK (Token Pool).',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      temperature: { type: Type.NUMBER, description: 'Controls randomness. 0.0 is precise, 2.0 is highly creative.' },
+      topP: { type: Type.NUMBER, description: 'Nucleus sampling probability (0.0 to 1.0).' },
+      topK: { type: Type.NUMBER, description: 'Top-K token limit (1 to 40).' },
+    },
+  },
+};
+
 const saveMemoryTool: FunctionDeclaration = {
   name: 'saveToKnowledgeBase',
   description: 'Saves a text snippet (fact, memory, note) to the local vector database for future retrieval.',
@@ -148,7 +164,10 @@ interface Toast {
   type: 'success' | 'error' | 'info';
 }
 
+type ViewMode = 'UPLINK' | 'CONFERENCE';
+
 const App: React.FC = () => {
+  const [viewMode, setViewMode] = useState<ViewMode>('UPLINK');
   const [connectionState, setConnectionState] = useState<ConnectionState>(ConnectionState.DISCONNECTED);
   const [logs, setLogs] = useState<LogMessage[]>([]);
   const [systemStatus, setSystemStatus] = useState<string>("System Initialized.");
@@ -234,13 +253,15 @@ const App: React.FC = () => {
 
   // Update Status Bar dynamically when Disconnected
   useEffect(() => {
-      if (connectionState === ConnectionState.DISCONNECTED) {
+      if (connectionState === ConnectionState.DISCONNECTED && viewMode === 'UPLINK') {
           const voice = isCustomVoice ? (customVoiceName || 'CUSTOM') : selectedVoice;
           const mic = isMicMuted ? 'OFF' : 'ON';
           const cam = isCameraActive ? 'ON' : 'OFF';
           setSystemStatus(`READY :: ${currentAgent.handle.toUpperCase()} | VOICE: ${voice.toUpperCase()} | MIC: ${mic} | CAM: ${cam}`);
+      } else if (viewMode === 'CONFERENCE') {
+          setSystemStatus("MULTI-AGENT CONFERENCE MODE ACTIVE");
       }
-  }, [connectionState, selectedAgentId, selectedVoice, isCustomVoice, customVoiceName, isMicMuted, isCameraActive]);
+  }, [connectionState, selectedAgentId, selectedVoice, isCustomVoice, customVoiceName, isMicMuted, isCameraActive, viewMode]);
 
   // Load Agent Config & Chat History when agent changes
   useEffect(() => {
@@ -296,6 +317,13 @@ const App: React.FC = () => {
       }
   }, [inputText]);
 
+  // STOP SILENCE TIMER WHEN TYPING
+  useEffect(() => {
+      if (inputText.length > 0) {
+          stopSilenceTimer();
+      }
+  }, [inputText]);
+
   // --- SILENCE DETECTION LOGIC ---
   const stopSilenceTimer = () => {
       if (silenceTimerRef.current) {
@@ -307,6 +335,7 @@ const App: React.FC = () => {
   const startSilenceTimer = () => {
       stopSilenceTimer(); // Ensure no duplicates
       if (connectionState !== ConnectionState.CONNECTED) return;
+      if (inputText.length > 0) return; // Don't nudge if user is typing
 
       silenceTimerRef.current = window.setTimeout(() => {
           triggerSilenceNudge();
@@ -315,7 +344,9 @@ const App: React.FC = () => {
 
   const triggerSilenceNudge = async () => {
       if (connectionState !== ConnectionState.CONNECTED) return;
-      
+      // Double check before firing
+      if (inputText.length > 0) return;
+
       console.log("Silence detected. Nudging agent...");
       // We send a hidden system prompt to the model
       const silenceMsg = "[SYSTEM NOTICE: The user has been silent for a while. Briefly and politely ask if they are encountering a technical issue or if they are still composing their thoughts. Do not terminate the session.]";
@@ -419,7 +450,23 @@ const App: React.FC = () => {
         instruction: agentInstruction, 
         modelConfig 
     });
-    showToast('Settings Saved', 'success');
+    
+    // --- REAL-TIME INJECTION LOGIC ---
+    if (connectionState === ConnectionState.CONNECTED && sessionRef.current) {
+        setSystemStatus('Injecting Updated Instructions...');
+        const updateMsg = `[SYSTEM INSTRUCTION UPDATE]\n\nGLOBAL INSTRUCTIONS:\n${generalInstruction}\n\nAGENT SPECIFIC INSTRUCTIONS:\n${agentInstruction}\n\n[INSTRUCTION END] Please adhere to these updated instructions immediately.`;
+        
+        try {
+            await safeSendClientContent([{ text: updateMsg }]);
+            showToast('Instructions Updated Live', 'success');
+            setSystemStatus('Live Session Updated.');
+        } catch (e) {
+            console.error(e);
+            showToast('Failed to update live session', 'error');
+        }
+    } else {
+        showToast('Settings Saved', 'success');
+    }
   };
 
   const stopAudioPlayback = () => {
@@ -645,16 +692,30 @@ const App: React.FC = () => {
     const recentHistory = logs.slice(-10).map(l => `${l.type === 'user' ? 'User' : 'Agent'}: ${l.text}`).join('\n');
     const historyContext = recentHistory ? `\n\nRECENT CONVERSATION HISTORY (RESUME CONTEXT):\n${recentHistory}` : '';
     
-    const parts = [
-        currentAgent.system_instruction, 
-        LANGUAGE_PROTOCOL,
-        RAG_INSTRUCTION,                 
-        "=== GENERAL USER INSTRUCTIONS ===",
-        generalInstruction,
-        `=== ${currentAgent.handle.toUpperCase()} SPECIFIC INSTRUCTIONS ===`,
-        agentInstruction,
-        historyContext
-    ];
+    // --- NEUTRAL AGENT LOGIC ---
+    let parts: string[] = [];
+    if (selectedAgentId === 'GEMINI_CORE') {
+        // Minimalist Prompt: General Instruction + Agent specific (Identity) + History
+        // Skips Language Protocol & RAG Instructions for pure/neutral behavior
+        parts = [
+            currentAgent.system_instruction,
+            "=== GENERAL SYSTEM INSTRUCTIONS ===",
+            generalInstruction,
+            historyContext
+        ];
+    } else {
+        // Standard Lore-Compliant Prompt
+        parts = [
+            currentAgent.system_instruction, 
+            LANGUAGE_PROTOCOL,
+            RAG_INSTRUCTION,                 
+            "=== GENERAL USER INSTRUCTIONS ===",
+            generalInstruction,
+            `=== ${currentAgent.handle.toUpperCase()} SPECIFIC INSTRUCTIONS ===`,
+            agentInstruction,
+            historyContext
+        ];
+    }
     
     const fullInstruction = parts.filter(p => p.trim()).join('\n\n');
     const voiceName = isCustomVoice && customVoiceName.trim() ? customVoiceName.trim() : selectedVoice;
@@ -680,7 +741,7 @@ const App: React.FC = () => {
           outputAudioTranscription: {}, 
           inputAudioTranscription: {},  
           speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } },
-          tools: [{ googleSearch: {} }, { functionDeclarations: [searchTool, transcriptTool, terminateTool, updateInstructionsTool, saveMemoryTool, translateTool] }],
+          tools: [{ googleSearch: {} }, { functionDeclarations: [searchTool, transcriptTool, terminateTool, updateInstructionsTool, updateConfigTool, saveMemoryTool, translateTool] }],
         },
         callbacks: {
           onopen: async () => {
@@ -805,7 +866,7 @@ const App: React.FC = () => {
                           model: 'text-embedding-004',
                           contents: [{ parts: [{ text: query }] }]
                       });
-                      queryVector = embedResponse.embedding?.values;
+                      queryVector = embedResponse.embeddings?.[0]?.values;
                   } catch (e) {
                       console.warn("Embedding generation failed, falling back to keyword search", e);
                   }
@@ -846,6 +907,21 @@ const App: React.FC = () => {
                       console.error(e);
                       sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "Failed to update instructions." } } }));
                   }
+                } else if (fc.name === 'updateModelConfiguration') {
+                  const { temperature, topP, topK } = fc.args as any;
+                  setModelConfig(prev => ({
+                      temperature: temperature ?? prev.temperature,
+                      topP: topP ?? prev.topP,
+                      topK: topK ?? prev.topK
+                  }));
+                  showToast('Model Parameters Updated via Voice', 'success');
+                  sessionPromise.then(s => s.sendToolResponse({
+                      functionResponses: {
+                          id: fc.id,
+                          name: fc.name,
+                          response: { result: "Configuration updated successfully." }
+                      }
+                  }));
                 } else if (fc.name === 'saveToKnowledgeBase') {
                   const text = (fc.args as any).text;
                   const title = (fc.args as any).title || "Agent Memory";
@@ -970,6 +1046,10 @@ const App: React.FC = () => {
     showToast('Link Terminated', 'info');
   };
 
+  if (viewMode === 'CONFERENCE') {
+      return <MultiAgentConsole onClose={() => setViewMode('UPLINK')} />;
+  }
+
   return (
     <div className="main-container">
       {toast && (
@@ -991,99 +1071,132 @@ const App: React.FC = () => {
         </div>
       </div>
 
-      <div className="section-panel" style={{display:'flex', gap:'1rem', alignItems:'center'}}>
-        <select 
-            value={selectedAgentId} 
-            onChange={e => {
-                setLogsLoaded(false); 
-                setLogs([]); 
-                setSelectedAgentId(e.target.value);
-            }} 
-            disabled={connectionState !== ConnectionState.DISCONNECTED} 
-            className="form-select control-select-agent"
-        >
-          {AGENTS.map(a => <option key={a.id} value={a.id}>{a.handle.toUpperCase()}</option>)}
-        </select>
+      <div className="control-panel">
+        {/* ROW 1: PRIMARY CONFIGURATION */}
+        <div className="control-row">
+            <div className="control-group">
+                <button 
+                    onClick={() => setViewMode('CONFERENCE')}
+                    className="btn btn-secondary"
+                    disabled={connectionState === ConnectionState.CONNECTED}
+                    style={{ borderColor: '#a78bfa', color: '#a78bfa', flex: 'none' }}
+                    title="Switch to Conference Mode"
+                >
+                    CONF
+                </button>
 
-        {isCustomVoice ? (
-          <div style={{display:'flex', gap:'0.25rem', flex:'none'}}>
-            <input 
-              type="text" 
-              value={customVoiceName}
-              onChange={(e) => setCustomVoiceName(e.target.value)}
-              placeholder="Voice ID..."
-              className="form-input"
-              style={{width:'100px', padding:'0.75rem', fontFamily: 'monospace', fontSize: '0.75rem'}}
-              disabled={connectionState !== ConnectionState.DISCONNECTED}
-            />
-            <button 
-              onClick={() => setIsCustomVoice(false)} 
-              className="btn btn-secondary" 
-              style={{padding:'0 0.5rem'}}
-              disabled={connectionState !== ConnectionState.DISCONNECTED}
-            >
-              X
-            </button>
-          </div>
-        ) : (
-          <select 
-              value={selectedVoice} 
-              onChange={(e) => {
-                if (e.target.value === 'CUSTOM_ENTRY') {
-                  setIsCustomVoice(true);
-                  setCustomVoiceName('');
-                } else {
-                  setSelectedVoice(e.target.value);
-                }
-              }} 
-              disabled={connectionState !== ConnectionState.DISCONNECTED} 
-              className="form-select"
-              style={{ width: '130px', flex: 'none' }}
-          >
-              {PREBUILT_VOICES.map(v => <option key={v} value={v}>VOICE: {v.toUpperCase()}</option>)}
-              <option value="CUSTOM_ENTRY" style={{fontStyle:'italic', color: '#a78bfa'}}>MANUAL ENTRY...</option>
-          </select>
-        )}
+                <select 
+                    value={selectedAgentId} 
+                    onChange={e => {
+                        setLogsLoaded(false); 
+                        setLogs([]); 
+                        setSelectedAgentId(e.target.value);
+                    }} 
+                    disabled={connectionState !== ConnectionState.DISCONNECTED} 
+                    className="form-select control-select-agent"
+                >
+                  {AGENTS.map(a => <option key={a.id} value={a.id}>{a.handle.toUpperCase()}</option>)}
+                </select>
 
-        <button 
-            onClick={connectionState === ConnectionState.CONNECTED ? disconnect : connect} 
-            className={`btn ${connectionState === ConnectionState.CONNECTED ? 'btn-abort' : 'btn-primary'} control-btn-link`}
-        >
-          {connectionState === ConnectionState.CONNECTED ? 'TERMINATE' : 'LINK'}
-        </button>
-        
-        <button 
-            onClick={toggleCamera} 
-            className={`btn btn-secondary ${isCameraActive ? 'active' : ''}`} 
-            style={{borderColor: isCameraActive ? '#4ade80' : '', width: 'auto', flex: 'none'}}
-            title="Toggle Camera Stream"
-        >
-          {isCameraActive ? 'CAM ON' : 'CAM OFF'}
-        </button>
+                {isCustomVoice ? (
+                  <div style={{display:'flex', gap:'0.25rem', flex:'1 1 auto', minWidth:'120px'}}>
+                    <input 
+                      type="text" 
+                      value={customVoiceName}
+                      onChange={(e) => setCustomVoiceName(e.target.value)}
+                      placeholder="Voice ID..."
+                      className="form-input"
+                      style={{padding:'0.5rem', fontFamily: 'monospace', fontSize: '0.75rem', height: '2.5rem'}}
+                      disabled={connectionState !== ConnectionState.DISCONNECTED}
+                    />
+                    <button 
+                      onClick={() => setIsCustomVoice(false)} 
+                      className="btn btn-secondary" 
+                      style={{padding:'0 0.5rem', flex:'none'}}
+                      disabled={connectionState !== ConnectionState.DISCONNECTED}
+                    >
+                      X
+                    </button>
+                  </div>
+                ) : (
+                  <select 
+                      value={selectedVoice} 
+                      onChange={(e) => {
+                        if (e.target.value === 'CUSTOM_ENTRY') {
+                          setIsCustomVoice(true);
+                          setCustomVoiceName('');
+                        } else {
+                          setSelectedVoice(e.target.value);
+                        }
+                      }} 
+                      disabled={connectionState !== ConnectionState.DISCONNECTED} 
+                      className="form-select"
+                      style={{ flex: '1 1 auto', minWidth: '120px' }}
+                  >
+                      {PREBUILT_VOICES.map(v => <option key={v} value={v}>VOICE: {v.toUpperCase()}</option>)}
+                      <option value="CUSTOM_ENTRY" style={{fontStyle:'italic', color: '#a78bfa'}}>MANUAL...</option>
+                  </select>
+                )}
+            </div>
+        </div>
 
-        <button 
-            onClick={toggleMic} 
-            className={`btn btn-secondary ${isMicMuted ? 'active' : ''}`} 
-            style={{borderColor: isMicMuted ? '#f87171' : '', width: 'auto', flex: 'none', color: isMicMuted ? '#f87171' : ''}}
-            disabled={connectionState !== ConnectionState.CONNECTED}
-            title="Mute Microphone (Prevent typing noise)"
-        >
-          {isMicMuted ? 'MIC OFF' : 'MIC ON'}
-        </button>
-        
-        <KnowledgeManager currentAgentId={selectedAgentId} onUpdate={handleLoreUpdate} />
-        <ChatHistoryManager currentLogs={logs} onLoadSession={setLogs} currentAgentId={selectedAgentId} onUpdateKnowledge={handleLoreUpdate} />
-        <SettingsManager 
-            modelConfig={modelConfig} 
-            setModelConfig={setModelConfig} 
-            disabled={connectionState !== ConnectionState.DISCONNECTED} 
-            generalInstruction={generalInstruction}
-            setGeneralInstruction={setGeneralInstruction}
-            agentInstruction={agentInstruction}
-            setAgentInstruction={setAgentInstruction}
-            agentName={currentAgent.handle}
-            onSave={handleSaveSettings}
-        />
+        {/* ROW 2: ACTION & TOOLS */}
+        <div className="control-row">
+            <div className="control-group" style={{ flex: 2 }}>
+                <button 
+                    onClick={connectionState === ConnectionState.CONNECTED ? disconnect : connect} 
+                    className={`btn ${connectionState === ConnectionState.CONNECTED ? 'btn-abort' : 'btn-primary'} control-btn-link`}
+                >
+                  {connectionState === ConnectionState.CONNECTED ? 'TERMINATE LINK' : 'ESTABLISH LINK'}
+                </button>
+            </div>
+
+            <div className="control-group tight">
+                <button 
+                    onClick={toggleCamera} 
+                    className={`btn btn-secondary btn-icon ${isCameraActive ? 'active' : ''}`} 
+                    style={{borderColor: isCameraActive ? '#4ade80' : ''}}
+                    title="Toggle Camera Stream"
+                >
+                  {isCameraActive ? (
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
+                  ) : (
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="1" y1="1" x2="23" y2="23"></line><path d="M21 21H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h3m3-3h6l2 3h4a2 2 0 0 1 2 2v9.34m-7.72-2.06a4 4 0 1 1-5.56-5.56"></path></svg>
+                  )}
+                </button>
+
+                <button 
+                    onClick={toggleMic} 
+                    className={`btn btn-secondary btn-icon ${isMicMuted ? 'active' : ''}`} 
+                    style={{borderColor: isMicMuted ? '#f87171' : '', color: isMicMuted ? '#f87171' : ''}}
+                    disabled={connectionState !== ConnectionState.CONNECTED}
+                    title="Mute Microphone"
+                >
+                  {isMicMuted ? (
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="1" y1="1" x2="23" y2="23"></line><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"></path><path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>
+                  ) : (
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>
+                  )}
+                </button>
+            </div>
+
+            <div className="control-group tight" style={{ justifyContent: 'flex-end', marginLeft: 'auto' }}>
+                <KnowledgeManager currentAgentId={selectedAgentId} onUpdate={handleLoreUpdate} />
+                <ChatHistoryManager currentLogs={logs} onLoadSession={setLogs} currentAgentId={selectedAgentId} onUpdateKnowledge={handleLoreUpdate} />
+                <SettingsManager 
+                    modelConfig={modelConfig} 
+                    setModelConfig={setModelConfig} 
+                    disabled={connectionState !== ConnectionState.DISCONNECTED} 
+                    generalInstruction={generalInstruction}
+                    setGeneralInstruction={setGeneralInstruction}
+                    agentInstruction={agentInstruction}
+                    setAgentInstruction={setAgentInstruction}
+                    agentName={currentAgent.handle}
+                    onSave={handleSaveSettings}
+                />
+                <VoiceCommandList /> 
+            </div>
+        </div>
       </div>
 
       <div style={{display: 'grid', gridTemplateColumns: isCameraActive ? '1fr 1fr' : '1fr', gap:'1rem'}}>
@@ -1137,8 +1250,11 @@ const App: React.FC = () => {
               onClick={() => fileInputRef.current?.click()}
               disabled={connectionState !== ConnectionState.CONNECTED}
               title="Attach File (Image, TXT, MD, JSON)"
+              style={{ padding: '0.5rem 0.75rem' }}
           >
-            📎
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+            </svg>
           </button>
           
           <div className="chat-input-wrapper">

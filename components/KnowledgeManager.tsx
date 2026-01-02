@@ -423,10 +423,14 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
     return (
       <button 
         onClick={() => setIsOpen(true)}
-        className="btn btn-secondary"
-        style={{ whiteSpace: 'nowrap' }}
+        className="btn btn-secondary btn-icon"
+        title="Knowledge Database"
       >
-        <span>DATABASE</span>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
+            <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path>
+            <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
+        </svg>
       </button>
     );
   }
@@ -434,6 +438,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
   return (
     <div className="modal-overlay">
       <div className="modal-content animate-slide-in-right">
+        {/* Component content preserved ... */}
         
         <div className="section-header" style={{ padding: '1.5rem', paddingBottom: '0.5rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>

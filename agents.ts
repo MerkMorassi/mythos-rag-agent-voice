@@ -5,9 +5,17 @@ export interface Agent {
   role: string;
   system_instruction: string;
   voice: string;
+  voiceReference?: string; // Path or URL to a default audio file for cloning
 }
 
 export const AGENTS: Agent[] = [
+  {
+    id: "GEMINI_CORE",
+    handle: "Gemini Core",
+    role: "Neutral AI Assistant",
+    system_instruction: "You are a helpful, neutral AI assistant. You rely on your general training data to answer questions. You do not have a specific persona unless instructed otherwise by the user.",
+    voice: "Puck"
+  },
   {
     id: "ARCHIVAX",
     handle: "Archivax",

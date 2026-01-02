@@ -41,9 +41,8 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
     setIsSaving(true);
     try {
         await onSave();
-        alert("Configuration saved.");
+        // Don't use alert, parent handles toast
     } catch (e) {
-        alert("Failed to save configuration.");
         console.error(e);
     } finally {
         setIsSaving(false);
@@ -54,11 +53,13 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
     return (
       <button 
         onClick={() => setIsOpen(true)}
-        className="btn btn-secondary"
-        style={{ whiteSpace: 'nowrap' }}
-        title="Model Generation Settings"
+        className="btn btn-secondary btn-icon"
+        title="Settings & System Configuration"
       >
-        <span>SETTINGS</span>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
       </button>
     );
   }
@@ -66,6 +67,7 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
   return (
     <div className="modal-overlay">
       <div className="modal-content animate-slide-in-right">
+        {/* Modal content preserved... */}
         
         <div className="section-header" style={{ padding: '1.5rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
@@ -78,18 +80,19 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
 
         <div style={{ padding: '1.5rem', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
           
-          <div className="section-panel" style={{ borderColor: disabled ? '#333' : '#4ade80' }}>
+          <div className="section-panel" style={{ borderColor: disabled ? '#4ade80' : '#4ade80' }}>
             <div className="section-header" style={{ borderBottom: 'none', padding: 0, marginBottom: '0.5rem' }}>
-                 <span className="section-header-title" style={{color: disabled ? '#666' : '#4ade80'}}>STATUS</span>
+                 <span className="section-header-title" style={{color: '#4ade80'}}>STATUS</span>
             </div>
-            <p style={{ fontSize: '0.75rem', color: disabled ? '#666' : '#eee' }}>
+            <p style={{ fontSize: '0.75rem', color: '#eee' }}>
                 {disabled 
-                    ? "Settings are locked while the link is active. Terminate connection to modify." 
+                    ? "LIVE LINK ACTIVE. Saving updates will inject new instructions into the active session." 
                     : "Ready to apply to next connection."}
             </p>
           </div>
           
           <form onSubmit={handleSave} className="flex-col" style={{gap: '1.5rem'}}>
+            {/* Form content ... */}
             
             {/* General Instructions */}
             <div className="flex-col">
@@ -100,7 +103,8 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
                 onChange={(e) => setGeneralInstruction(e.target.value)}
                 className="form-input"
                 style={{ height: '6rem', resize: 'vertical' }}
-                disabled={disabled}
+                // Enabled for real-time updates
+                disabled={false} 
               />
             </div>
 
@@ -113,7 +117,8 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
                 onChange={(e) => setAgentInstruction(e.target.value)}
                 className="form-input"
                 style={{ height: '6rem', resize: 'vertical' }}
-                disabled={disabled}
+                // Enabled for real-time updates
+                disabled={false}
               />
             </div>
 
@@ -140,6 +145,8 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
                       step="0.1" 
                       value={modelConfig.temperature} 
                       onChange={(e) => handleChange('temperature', parseFloat(e.target.value))}
+                      // Params can be updated, but standard approach is to lock these during session. 
+                      // For now we lock model params but allow instruction updates.
                       disabled={disabled}
                   />
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.6rem', color: '#666' }}>
@@ -198,11 +205,11 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
                   </button>
                   <button 
                     type="submit" 
-                    disabled={disabled || isSaving}
+                    disabled={isSaving}
                     className="btn btn-ingest"
                     style={{ flex: 2 }}
                   >
-                    {isSaving ? 'SAVING...' : 'SAVE ALL CONFIGURATION'}
+                    {isSaving ? 'SAVING...' : (disabled ? 'UPDATE LIVE SESSION' : 'SAVE CONFIGURATION')}
                   </button>
               </div>
             </div>
