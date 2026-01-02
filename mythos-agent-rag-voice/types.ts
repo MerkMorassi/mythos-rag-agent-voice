@@ -1,0 +1,55 @@
+
+export interface KnowledgeDoc {
+  id: string;
+  agentId?: string; // Links document to a specific agent
+  title: string;
+  content: string;
+  embedding?: number[];
+  timestamp: number;
+}
+
+export enum ConnectionState {
+  DISCONNECTED = 'DISCONNECTED',
+  CONNECTING = 'CONNECTING',
+  CONNECTED = 'CONNECTED',
+  ERROR = 'ERROR',
+}
+
+export interface LogMessage {
+  id: string;
+  type: 'user' | 'model' | 'system' | 'tool';
+  text: string;
+  timestamp: number;
+  feedback?: 'up' | 'down';
+}
+
+export interface ChatSession {
+  id: string;
+  title: string;
+  timestamp: number;
+  logs: LogMessage[];
+}
+
+export interface ModelConfig {
+  temperature: number;
+  topP: number;
+  topK: number;
+  liveModelName: string;
+  gatingModelName: string;
+  embeddingModelName: string;
+}
+
+export const DEFAULT_MODEL_CONFIG: ModelConfig = {
+  temperature: 0.7,
+  topP: 0.95,
+  topK: 40,
+  liveModelName: 'gemini-2.5-flash-native-audio-preview-09-2025',
+  gatingModelName: 'gemini-3-pro-preview',
+  embeddingModelName: 'text-embedding-004',
+};
+
+export interface AgentConfig {
+  agentId: string;
+  systemInstruction: string;
+  modelConfig: ModelConfig;
+}
