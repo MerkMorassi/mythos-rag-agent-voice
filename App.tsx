@@ -15,7 +15,8 @@ import {
   getGeneralInstructions,
   saveGeneralInstructions,
   getAgentConfig,
-  saveAgentConfig
+  saveAgentConfig,
+  addDocument
 } from './services/db';
 import { createPcmBlob, base64ToUint8Array, decodeAudioData } from './services/audioUtils';
 import Visualizer from './components/Visualizer';
@@ -44,8 +45,15 @@ const RAG_INSTRUCTION = `
 You have access to a local Knowledge Base ('searchKnowledgeBase') and the broad web ('googleSearch').
 If the user asks about private docs or indexed lore, check the local DB first.
 If the conversation is a continuation, your memory of previous exchanges is provided in the system context.
+Use 'saveToKnowledgeBase' to persist new facts, memories, or user details to the long-term vector store.
+Use 'updateSystemInstructions' to permanently adjust your own behavioral guidelines or persona settings based on user feedback.
 Use 'terminateConnection' to end the link gracefully when the user is done.
 Use 'downloadTranscript' if the user wants a hard copy of the session.
+
+CRITICAL INTERACTION PROTOCOL:
+1. If the user is silent, they may be typing a complex message or thinking. Do not assume they have left.
+2. If text is being entered, the session is active. Do not terminate.
+3. If silence persists for an extended period, you may politely ask if there is a technical challenge or if the user is still composing their thoughts, but prioritize patience.
 `;
 
 const searchTool: FunctionDeclaration = {
@@ -68,6 +76,31 @@ const transcriptTool: FunctionDeclaration = {
 const terminateTool: FunctionDeclaration = {
   name: 'terminateConnection',
   description: 'Terminates the live link.',
+};
+
+const updateInstructionsTool: FunctionDeclaration = {
+  name: 'updateSystemInstructions',
+  description: 'Updates your own system instructions to persist user preferences, behaviors, or facts for future sessions.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      addition: { type: Type.STRING, description: 'The instruction to append (e.g., "User prefers concise answers").' },
+    },
+    required: ['addition'],
+  },
+};
+
+const saveMemoryTool: FunctionDeclaration = {
+  name: 'saveToKnowledgeBase',
+  description: 'Saves a text snippet (fact, memory, note) to the local vector database for future retrieval.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      text: { type: Type.STRING, description: 'The content to save.' },
+      title: { type: Type.STRING, description: 'A short title for this memory.' },
+    },
+    required: ['text'],
+  },
 };
 
 interface Attachment {
@@ -108,6 +141,12 @@ const App: React.FC = () => {
   const [customVoiceName, setCustomVoiceName] = useState('');
 
   const [isCameraActive, setIsCameraActive] = useState(false);
+  
+  // Audio Input State
+  const [isMicMuted, setIsMicMuted] = useState(false);
+  const isMicMutedRef = useRef(false); // Ref for audio processor access
+  const isTypingRef = useRef(false);   // Ref to auto-mute when typing
+
   const [logsLoaded, setLogsLoaded] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
   
@@ -158,22 +197,17 @@ const App: React.FC = () => {
   useEffect(() => {
     let isMounted = true;
     const loadData = async () => {
-      // Note: We intentionally DO NOT set logsLoaded(false) here because
-      // we handle it in the onChange handler to prevent race conditions during render.
-      // However, we set it here again just in case.
       setLogsLoaded(false);
       
       try {
-        // Load Chat
         const savedLogs = await loadActiveChat(selectedAgentId);
-        // Load Config
         const savedConfig = await getAgentConfig(selectedAgentId);
 
         if (isMounted) {
           setLogs(savedLogs);
           setAgentInstruction(savedConfig.instruction);
           setModelConfig(savedConfig.modelConfig);
-          setLogsLoaded(true); // Enable saving only after data is fully loaded
+          setLogsLoaded(true); 
         }
       } catch (e) {
         console.error("Error loading agent data", e);
@@ -216,7 +250,6 @@ const App: React.FC = () => {
     return logId;
   };
 
-  // Helper to safely send client content (text)
   const safeSendClientContent = async (parts: any[]) => {
       if (!sessionRef.current) return;
       
@@ -241,7 +274,7 @@ const App: React.FC = () => {
             throw new Error("Text injection not supported in this Live Session version.");
         }
       } catch(e) {
-          throw e; // Propagate up for UI handling
+          throw e; 
       }
   };
 
@@ -250,13 +283,10 @@ const App: React.FC = () => {
       setSystemStatus('Knowledge Base Updated');
       showToast('Knowledge Base Updated', 'success');
       
-      // Visual log for user
       addLog('system', "SYSTEM: Knowledge Base Updated. Alerting Agent...");
       
-      // Alert the agent if connected
       if (connectionState === ConnectionState.CONNECTED && sessionRef.current) {
           try {
-              // Inject a system message as a user turn
               await safeSendClientContent([{ text: msg }]);
           } catch (e) {
               console.error("Failed to notify agent of update", e);
@@ -281,6 +311,12 @@ const App: React.FC = () => {
     activeModelMessageRef.current = '';
     activeUserMessageRef.current = '';
     activeTurnIdRef.current = null;
+  };
+
+  const toggleMic = () => {
+      const newState = !isMicMuted;
+      setIsMicMuted(newState);
+      isMicMutedRef.current = newState;
   };
 
   const toggleCamera = async () => {
@@ -317,7 +353,6 @@ const App: React.FC = () => {
         const result = event.target?.result as string;
         
         if (isImage) {
-            // result is "data:image/png;base64,....."
             const base64 = result.split(',')[1];
             setAttachment({
                 file,
@@ -327,7 +362,6 @@ const App: React.FC = () => {
                 mimeType: file.type
             });
         } else {
-            // Text content
             setAttachment({
                 file,
                 type: 'text',
@@ -344,7 +378,6 @@ const App: React.FC = () => {
         reader.readAsText(file);
       }
     }
-    // Reset input so same file can be selected again
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -352,7 +385,6 @@ const App: React.FC = () => {
     setAttachment(null);
   };
 
-  // Gating / Analysis Logic
   const performDeepAnalysis = async (att: Attachment, userPrompt: string): Promise<string> => {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     
@@ -371,7 +403,6 @@ const App: React.FC = () => {
             }
         ];
     } else {
-        // Text
         parts = [
             {
                 text: `Analyze the following file content (${att.file.name}) and provide a detailed summary and insight for the voice agent.\n\nFILE CONTENT:\n${att.content}\n\nUSER CONTEXT: ${userPrompt}`
@@ -393,12 +424,10 @@ const App: React.FC = () => {
     const currentAttachment = attachment;
     const isGated = useDeepAnalysis && currentAttachment;
     
-    // Clear Input
     setInputText('');
     setAttachment(null);
-    setUseDeepAnalysis(false); // Reset toggle after send
+    setUseDeepAnalysis(false); 
     
-    // Add visual log
     const logText = currentAttachment 
         ? (text ? `[Sent ${currentAttachment.type === 'image' ? 'Image' : 'File'}] ${text}` : `[Sent ${currentAttachment.type === 'image' ? 'Image' : 'File'}]`)
         : text;
@@ -407,50 +436,37 @@ const App: React.FC = () => {
     try {
         if(sessionRef.current) {
             
-            // PATH A: DEEP ANALYSIS GATING
             if (isGated) {
                 setSystemStatus(`Orchestrator: Offloading task to ${gatingModel}...`);
                 
                 try {
                     const analysisResult = await performDeepAnalysis(currentAttachment, text);
-                    
                     setSystemStatus('Orchestrator: Analysis Complete. Injecting context...');
-                    
-                    // Inject the analysis as a system/context turn
                     const contextMessage = `[SYSTEM: The user uploaded '${currentAttachment.file.name}'. It was analyzed by the Orchestrator (${gatingModel}).]\n\nANALYSIS RESULT:\n${analysisResult}\n\nUSER COMMENT: ${text}`;
-                    
                     await safeSendClientContent([{ text: contextMessage }]);
-                    
                 } catch (analysisErr) {
                     console.error("Deep analysis failed", analysisErr);
                     setSystemStatus('Orchestrator: Analysis Failed. Falling back to direct stream.');
-                    // Fallback to direct send if analysis fails
                 }
             } 
             
-            // PATH B: DIRECT STREAM (Default or Fallback)
             if (!isGated) {
-                // 1. Handle Image: Use sendRealtimeInput (Native Multimodal)
                 if (currentAttachment && currentAttachment.type === 'image') {
-                    // Fix: sendRealtimeInput expects { media: { ... } } object, not an array
                     await sessionRef.current.sendRealtimeInput({
                         media: {
                             mimeType: currentAttachment.mimeType,
                             data: currentAttachment.content
                         }
                     });
-                    // Brief delay to ensure image processes before text triggers turn
                     await new Promise(r => setTimeout(r, 150));
                 }
 
-                // 2. Handle Text Content
                 let textParts = [];
                 if (currentAttachment && currentAttachment.type === 'text') {
                     textParts.push(`[System: User uploaded file '${currentAttachment.file.name}']\n\nCONTENT:\n${currentAttachment.content}\n\n`);
                 }
                 if (text) textParts.push(text);
 
-                // If only image was sent (no text), we still need to trigger a turn for the model to "see" it and respond.
                 if (textParts.length === 0 && currentAttachment && currentAttachment.type === 'image') {
                     textParts.push("I have uploaded an image.");
                 }
@@ -472,14 +488,12 @@ const App: React.FC = () => {
     setConnectionState(ConnectionState.CONNECTING);
     setSystemStatus(`Initializing Link to ${currentAgent.handle}...`);
     
-    // Context Injection
     const recentHistory = logs.slice(-10).map(l => `${l.type === 'user' ? 'User' : 'Agent'}: ${l.text}`).join('\n');
     const historyContext = recentHistory ? `\n\nRECENT CONVERSATION HISTORY (RESUME CONTEXT):\n${recentHistory}` : '';
     
-    // Prompt Construction
     const parts = [
-        currentAgent.system_instruction, // Hardcoded Role
-        RAG_INSTRUCTION,                 // Tool Rules
+        currentAgent.system_instruction, 
+        RAG_INSTRUCTION,                 
         "=== GENERAL USER INSTRUCTIONS ===",
         generalInstruction,
         `=== ${currentAgent.handle.toUpperCase()} SPECIFIC INSTRUCTIONS ===`,
@@ -488,8 +502,6 @@ const App: React.FC = () => {
     ];
     
     const fullInstruction = parts.filter(p => p.trim()).join('\n\n');
-
-    // Determine final voice name
     const voiceName = isCustomVoice && customVoiceName.trim() ? customVoiceName.trim() : selectedVoice;
 
     try {
@@ -507,14 +519,13 @@ const App: React.FC = () => {
         config: {
           systemInstruction: fullInstruction,
           responseModalities: [Modality.AUDIO],
-          // Apply model config settings
           temperature: modelConfig.temperature,
           topP: modelConfig.topP,
           topK: modelConfig.topK,
-          outputAudioTranscription: {}, // Live text stream
-          inputAudioTranscription: {},  // User live text stream
+          outputAudioTranscription: {}, 
+          inputAudioTranscription: {},  
           speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } },
-          tools: [{ googleSearch: {} }, { functionDeclarations: [searchTool, transcriptTool, terminateTool] }],
+          tools: [{ googleSearch: {} }, { functionDeclarations: [searchTool, transcriptTool, terminateTool, updateInstructionsTool, saveMemoryTool] }],
         },
         callbacks: {
           onopen: async () => {
@@ -528,6 +539,14 @@ const App: React.FC = () => {
             
             processor.onaudioprocess = (e) => {
               const inputData = e.inputBuffer.getChannelData(0);
+              
+              // AUTO-MUTE / TYPING PROTECTION
+              // If user is typing or manually muted, silence the input
+              // to prevent keyboard noise from interrupting the model.
+              if (isMicMutedRef.current || isTypingRef.current) {
+                  inputData.fill(0); 
+              }
+              
               sessionPromise.then(s => s.sendRealtimeInput({ media: createPcmBlob(inputData) }));
             };
             source.connect(processor);
@@ -599,11 +618,55 @@ const App: React.FC = () => {
                   sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "Transcript downloaded." } } }));
                 } else if (fc.name === 'terminateConnection') {
                   disconnect();
+                } else if (fc.name === 'updateSystemInstructions') {
+                  const addition = (fc.args as any).addition;
+                  try {
+                      const currentConfig = await getAgentConfig(selectedAgentId);
+                      const newInstruction = (currentConfig.instruction || "") + "\n\n[USER PREFERENCE]: " + addition;
+                      await saveAgentConfig(selectedAgentId, {
+                          instruction: newInstruction,
+                          modelConfig: currentConfig.modelConfig
+                      });
+                      setAgentInstruction(newInstruction);
+                      
+                      setSystemStatus('Agent Updated Instructions.');
+                      showToast('Agent learned a new preference', 'success');
+                      
+                      sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "Instructions updated." } } }));
+                  } catch(e) {
+                      console.error(e);
+                      sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "Failed to update instructions." } } }));
+                  }
+                } else if (fc.name === 'saveToKnowledgeBase') {
+                  const text = (fc.args as any).text;
+                  const title = (fc.args as any).title || "Agent Memory";
+                  try {
+                       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+                       const embedResult = await ai.models.embedContent({
+                            model: 'text-embedding-004',
+                            contents: [{ parts: [{ text }] }],
+                            config: { taskType: 'RETRIEVAL_DOCUMENT', title }
+                        });
+                       
+                       await addDocument({
+                            id: crypto.randomUUID(),
+                            agentId: selectedAgentId,
+                            title,
+                            content: text,
+                            embedding: embedResult.embeddings[0].values,
+                            timestamp: Date.now()
+                       });
+                       
+                       handleLoreUpdate();
+                       sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "Memory saved." } } }));
+                  } catch(e) {
+                       console.error(e);
+                       sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "Failed to save memory." } } }));
+                  }
                 }
               }
             }
 
-            // Play Audio Chunks
             const modelTurn = msg.serverContent?.modelTurn;
             if (modelTurn?.parts && audioContextRef.current) {
                 const ctx = audioContextRef.current;
@@ -640,7 +703,6 @@ const App: React.FC = () => {
 
   const disconnect = async () => {
     if (logs.length > 0) {
-      // Create a precise timestamp for the archive filename
       const now = new Date();
       const timestampStr = now.toISOString().replace(/T/, ' ').replace(/\..+/, '');
       const archiveTitle = `[ARCHIVE] ${currentAgent.handle} - ${timestampStr}`;
@@ -662,7 +724,6 @@ const App: React.FC = () => {
 
   return (
     <div className="main-container">
-      {/* Toast Notification */}
       {toast && (
           <div className="toast-container">
               <div className="toast" style={{borderColor: toast.type === 'error' ? '#f87171' : toast.type === 'success' ? '#4ade80' : '#333'}}>
@@ -686,8 +747,6 @@ const App: React.FC = () => {
         <select 
             value={selectedAgentId} 
             onChange={e => {
-                // Critical: Reset state immediately to prevent race conditions in auto-save logic
-                // when switching agents.
                 setLogsLoaded(false); 
                 setLogs([]); 
                 setSelectedAgentId(e.target.value);
@@ -749,8 +808,19 @@ const App: React.FC = () => {
             onClick={toggleCamera} 
             className={`btn btn-secondary ${isCameraActive ? 'active' : ''}`} 
             style={{borderColor: isCameraActive ? '#4ade80' : '', width: 'auto', flex: 'none'}}
+            title="Toggle Camera Stream"
         >
           {isCameraActive ? 'CAM ON' : 'CAM OFF'}
+        </button>
+
+        <button 
+            onClick={toggleMic} 
+            className={`btn btn-secondary ${isMicMuted ? 'active' : ''}`} 
+            style={{borderColor: isMicMuted ? '#f87171' : '', width: 'auto', flex: 'none', color: isMicMuted ? '#f87171' : ''}}
+            disabled={connectionState !== ConnectionState.CONNECTED}
+            title="Mute Microphone (Prevent typing noise)"
+        >
+          {isMicMuted ? 'MIC OFF' : 'MIC ON'}
         </button>
         
         <KnowledgeManager currentAgentId={selectedAgentId} onUpdate={handleLoreUpdate} />
@@ -786,7 +856,6 @@ const App: React.FC = () => {
 
       <div className="chat-history-container" style={{backgroundColor: '#050505', backgroundImage: 'radial-gradient(#111 1px, transparent 0)', backgroundSize: '20px 20px'}}>
         {logs.map(log => {
-          // Now rendering system messages in chat
           if (log.type === 'system') {
               return (
                 <div key={log.id} className="chat-message-system animate-pulse">
@@ -834,7 +903,6 @@ const App: React.FC = () => {
                               <span style={{ fontSize: '0.75rem', color: '#a3a3a3' }}>{attachment.preview}</span>
                           )}
                           
-                          {/* GATING CONTROLS */}
                           <div className="gating-controls">
                               <label className="gating-toggle" title="Perform Deep Reasoning before sending to Voice Agent">
                                   <input 
@@ -867,11 +935,15 @@ const App: React.FC = () => {
               <input 
                   type="text" 
                   className="chat-input" 
-                  placeholder={connectionState === ConnectionState.CONNECTED ? "Type a message..." : "Connect to chat..."}
+                  placeholder={connectionState === ConnectionState.CONNECTED ? (isMicMuted ? "Type message (Mic Muted)..." : "Type a message...") : "Connect to chat..."}
                   value={inputText}
                   onChange={(e) => setInputText(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && handleSendText()}
                   disabled={connectionState !== ConnectionState.CONNECTED}
+                  onFocus={() => { isTypingRef.current = true; }}
+                  onBlur={() => { 
+                      setTimeout(() => { isTypingRef.current = false; }, 200); 
+                  }}
               />
           </div>
           
