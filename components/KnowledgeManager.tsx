@@ -12,6 +12,7 @@ import {
 import { uploadCloudFile, listCloudFiles, deleteCloudFile } from '../services/googleFiles';
 import { IngestionService, IngestionResult } from '../services/ingestion';
 import { NumMarkX_GenerateSigil } from '../patterns/NumMarkX';
+import { SyncBridge } from '../services/syncBridge'; // NEW
 
 interface KnowledgeManagerProps {
   onUpdate: () => void;
@@ -124,6 +125,9 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
   const [isProcessing, setIsProcessing] = useState(false);
   const [statusMsg, setStatusMsg] = useState<{ text: string, type: 'success' | 'error' | 'info' } | null>(null);
 
+  // SYNC State
+  const [serverOnline, setServerOnline] = useState(false);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cloudFileInputRef = useRef<HTMLInputElement>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
@@ -155,6 +159,8 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
       if (activeTab === 'local') {
           setDocs([]); 
           fetchDocs();
+          // Check Vault Link
+          SyncBridge.checkHeartbeat().then(s => setServerOnline(s.online));
       } else {
           fetchCloudFiles();
       }
@@ -170,6 +176,28 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
       setStatusMsg({ text, type });
       if (type !== 'error') {
           setTimeout(() => setStatusMsg(null), 3000);
+      }
+  };
+
+  // --- SYNC LOGIC ---
+  const handleVaultSync = async () => {
+      if (!serverOnline) return;
+      if (!window.confirm(`Push ${docs.length} nodes to Z: Drive Vault (Orchestrator)? This overwrites the Agent's file on the server.`)) return;
+      
+      setIsProcessing(true);
+      showStatus("Syncing with Vault...", 'info');
+      
+      try {
+          const res = await SyncBridge.pushLorePack(currentAgentId, docs);
+          if (res.success) {
+              showStatus(`Vault Sync Complete. Saved to: ${res.path}`, 'success');
+          } else {
+              showStatus(`Sync Failed: ${res.error}`, 'error');
+          }
+      } catch(e) {
+          showStatus("Network Error during Sync", 'error');
+      } finally {
+          setIsProcessing(false);
       }
   };
 
@@ -538,6 +566,18 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                         <span className="section-header-title">STORED ({filteredDocs.length})</span>
                         <div style={{ display: 'flex', gap: '0.5rem' }}>
+                            {serverOnline ? (
+                                <button 
+                                    onClick={handleVaultSync} 
+                                    className="btn btn-secondary" 
+                                    style={{ padding: '0.4rem', fontSize: '0.6rem', borderColor: '#4ade80', color: '#4ade80' }}
+                                    title="Backup Sovereign Data to Z: Drive Vault"
+                                >
+                                    SYNC VAULT (Z:)
+                                </button>
+                            ) : (
+                                <span style={{ fontSize: '0.6rem', color: '#666', alignSelf: 'center', border: '1px solid #333', padding: '0.4rem' }}>VAULT OFFLINE</span>
+                            )}
                             <label className="btn btn-secondary" style={{ padding: '0.4rem', fontSize: '0.6rem', cursor: 'pointer' }}>
                                 IMPORT LOREPACK
                                 <input type="file" accept=".json" onChange={handleSelectLorePack} ref={importInputRef} className="hidden" />

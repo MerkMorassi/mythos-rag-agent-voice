@@ -21,6 +21,7 @@ import {
   getDocumentCountByAgentId
 } from './services/db';
 import { RetrievalGate } from './services/retrievalGate'; // New: Gate
+import { ModelGate } from './services/modelGate'; // New: MGP
 import { NumMarkX_GenerateSigil, NumMarkX_TimeStamp } from './patterns/NumMarkX'; // New: Sigil Gen
 import { createPcmBlob, base64ToUint8Array, decodeAudioData } from './services/audioUtils';
 import { listCloudFiles } from './services/googleFiles';
@@ -255,6 +256,19 @@ const App: React.FC = () => {
       saveActiveChat(selectedAgentId, logs).catch(console.error);
     }
   }, [logs, selectedAgentId, logsLoaded]);
+
+  // MODEL GATE: Auto-detect complexity
+  useEffect(() => {
+      if (inputText.length > 10) {
+          if (ModelGate.shouldActivateDeepAnalysis(inputText)) {
+              if (!useDeepAnalysis) {
+                  setUseDeepAnalysis(true);
+                  // We also switch to Pro model automatically
+                  setGatingModel('gemini-3-pro-preview');
+              }
+          }
+      }
+  }, [inputText]);
 
   const updateCloudFileList = async () => {
       try {
