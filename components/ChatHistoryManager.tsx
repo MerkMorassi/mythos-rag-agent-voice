@@ -1,16 +1,26 @@
+
 import React, { useState, useEffect } from 'react';
+import { GoogleGenAI } from '@google/genai';
 import { LogMessage, ChatSession } from '../types';
-import { saveChatSession, getAllChatSessions, deleteChatSession } from '../services/db';
+import { saveChatSession, getAllChatSessions, deleteChatSession, addDocument } from '../services/db';
 
 interface ChatHistoryManagerProps {
   currentLogs: LogMessage[];
   onLoadSession: (logs: LogMessage[]) => void;
+  currentAgentId: string;
+  onUpdateKnowledge: () => void;
 }
 
-const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({ currentLogs, onLoadSession }) => {
+const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({ 
+    currentLogs, 
+    onLoadSession,
+    currentAgentId,
+    onUpdateKnowledge
+}) => {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [isOpen, setIsOpen] = useState(false);
   const [sessionName, setSessionName] = useState('');
+  const [ingestingId, setIngestingId] = useState<string | null>(null);
 
   const loadSessions = async () => {
     try {
@@ -35,9 +45,13 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({ currentLogs, on
       return;
     }
 
+    const now = new Date();
+    const formattedDate = now.toISOString().split('T')[0];
+    const finalTitle = `[SAVED] ${sessionName.trim()} - ${formattedDate}`;
+
     const newSession: ChatSession = {
       id: crypto.randomUUID(),
-      title: sessionName.trim(),
+      title: finalTitle,
       timestamp: Date.now(),
       logs: currentLogs
     };
@@ -79,6 +93,96 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({ currentLogs, on
           setIsOpen(false);
       }
   }
+
+  const handleExportJson = (session: ChatSession) => {
+      const dataStr = JSON.stringify(session, null, 2);
+      const blob = new Blob([dataStr], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `Session_${session.title.replace(/[^a-z0-9]/gi, '_')}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+  };
+
+  const handleIngestToLore = async (session: ChatSession) => {
+      if(!window.confirm(`This will convert the transcript of "${session.title}" into a Knowledge Base document with vector embeddings for ${currentAgentId}. Continue?`)) return;
+      
+      setIngestingId(session.id);
+      
+      try {
+          // 1. Format the Transcript
+          const header = `TRANSCRIPT RECORD: ${session.title}\nID: ${session.id}\nDATE: ${new Date(session.timestamp).toLocaleString()}\n\n`;
+          const body = session.logs.map(l => {
+              const speaker = l.type === 'user' ? 'USER' : 'AGENT';
+              return `[${new Date(l.timestamp).toLocaleTimeString()}] ${speaker}: ${l.text}`;
+          }).join('\n');
+          
+          const fullText = header + body;
+          
+          // 2. Chunking Logic (Replicated simple chunker)
+          const CHUNK_SIZE = 1500;
+          const chunks: string[] = [];
+          const cleanText = fullText.replace(/\r\n/g, '\n');
+          
+          let startIndex = 0;
+          while (startIndex < cleanText.length) {
+              let endIndex = startIndex + CHUNK_SIZE;
+              if (endIndex >= cleanText.length) {
+                  endIndex = cleanText.length;
+              } else {
+                  const lastNewline = cleanText.lastIndexOf('\n', endIndex);
+                  if (lastNewline > startIndex && lastNewline > endIndex - 200) {
+                      endIndex = lastNewline;
+                  } else {
+                       const lastSpace = cleanText.lastIndexOf(' ', endIndex);
+                       if (lastSpace > startIndex) endIndex = lastSpace;
+                  }
+              }
+              chunks.push(cleanText.substring(startIndex, endIndex).trim());
+              startIndex = endIndex;
+          }
+
+          // 3. Generate Embeddings and Save
+          const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+          
+          // Process in batches
+          const BATCH_SIZE = 50; 
+          for(let i=0; i<chunks.length; i+=BATCH_SIZE) {
+               const batch = chunks.slice(i, i+BATCH_SIZE);
+               const batchResult = await ai.models.embedContent({
+                    model: 'text-embedding-004',
+                    contents: batch.map(c => ({ parts: [{ text: c }] })),
+                    config: {
+                        taskType: 'RETRIEVAL_DOCUMENT',
+                        title: session.title
+                    }
+                });
+
+                const embeddings = batchResult.embeddings;
+                
+                for(let k=0; k<batch.length; k++) {
+                     await addDocument({
+                        id: crypto.randomUUID(),
+                        agentId: currentAgentId,
+                        title: `${session.title} (Part ${i + k + 1})`,
+                        content: batch[k],
+                        embedding: embeddings?.[k]?.values,
+                        timestamp: Date.now()
+                    });
+                }
+          }
+          
+          onUpdateKnowledge(); // Trigger visual update in main app
+          alert(`Successfully ingested transcript into ${currentAgentId}'s knowledge base.`);
+
+      } catch(e) {
+          console.error("Ingestion failed", e);
+          alert("Failed to ingest transcript.");
+      } finally {
+          setIngestingId(null);
+      }
+  };
 
   if (!isOpen) {
     return (
@@ -161,8 +265,26 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({ currentLogs, on
                             onClick={() => handleLoad(session)}
                             className="btn btn-secondary"
                             style={{ flex: 1, fontSize: '0.7rem', padding: '0.4rem' }}
+                            title="Restore this session into active view"
                         >
-                            LOAD SESSION
+                            LOAD
+                        </button>
+                        <button 
+                            onClick={() => handleExportJson(session)}
+                            className="btn btn-secondary"
+                            style={{ flex: 1, fontSize: '0.7rem', padding: '0.4rem' }}
+                            title="Download JSON"
+                        >
+                            JSON
+                        </button>
+                        <button 
+                            onClick={() => handleIngestToLore(session)}
+                            className="btn btn-ingest"
+                            style={{ flex: 1.5, fontSize: '0.7rem', padding: '0.4rem' }}
+                            title={`Embed into ${currentAgentId}'s RAG Database`}
+                            disabled={!!ingestingId}
+                        >
+                            {ingestingId === session.id ? 'EMBEDDING...' : 'INGEST TO LORE'}
                         </button>
                         <button 
                             onClick={() => handleDelete(session.id)}

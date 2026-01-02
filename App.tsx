@@ -1,5 +1,4 @@
 
-
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   GoogleGenAI, 
@@ -616,7 +615,17 @@ const App: React.FC = () => {
 
   const disconnect = async () => {
     if (logs.length > 0) {
-      await saveChatSession({ id: crypto.randomUUID(), title: `Auto-Archive ${currentAgent.handle}`, timestamp: Date.now(), logs });
+      // Create a precise timestamp for the archive filename
+      const now = new Date();
+      const timestampStr = now.toISOString().replace(/T/, ' ').replace(/\..+/, '');
+      const archiveTitle = `[ARCHIVE] ${currentAgent.handle} - ${timestampStr}`;
+      
+      await saveChatSession({ 
+          id: crypto.randomUUID(), 
+          title: archiveTitle, 
+          timestamp: Date.now(), 
+          logs 
+      });
     }
     stopAudioPlayback();
     if (frameIntervalRef.current) clearInterval(frameIntervalRef.current);
@@ -708,7 +717,7 @@ const App: React.FC = () => {
         </button>
         
         <KnowledgeManager currentAgentId={selectedAgentId} onUpdate={handleLoreUpdate} />
-        <ChatHistoryManager currentLogs={logs} onLoadSession={setLogs} />
+        <ChatHistoryManager currentLogs={logs} onLoadSession={setLogs} currentAgentId={selectedAgentId} onUpdateKnowledge={handleLoreUpdate} />
         <SettingsManager 
             modelConfig={modelConfig} 
             setModelConfig={setModelConfig} 
