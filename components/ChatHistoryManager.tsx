@@ -124,9 +124,9 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
           };
       });
 
-      const dataStr = IngestionService.exportLorePack(header, docs);
+      // Now returns a Blob directly
+      const blob = IngestionService.exportLorePack(header, docs);
       
-      const blob = new Blob([dataStr], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;

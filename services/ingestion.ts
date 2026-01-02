@@ -122,13 +122,26 @@ export class IngestionService {
     }
 
     /**
-     * Create a downloadable JSON string from docs.
+     * Create a downloadable JSON Blob from docs.
+     * Uses manual chunking to avoid "Invalid string length" errors on large datasets (V8 limit).
      */
-    static exportLorePack(header: LorePackHeader, docs: KnowledgeDoc[]): string {
-        const pack: LorePack = {
-            header,
-            sacred_archive: docs
-        };
-        return JSON.stringify(pack, null, 2);
+    static exportLorePack(header: LorePackHeader, docs: KnowledgeDoc[]): Blob {
+        const parts: BlobPart[] = [];
+        
+        // Header
+        parts.push(`{\n  "header": ${JSON.stringify(header, null, 2)},\n  "sacred_archive": [\n`);
+        
+        // Docs - Stream the array elements to avoid creating one massive string
+        for (let i = 0; i < docs.length; i++) {
+            const docStr = JSON.stringify(docs[i], null, 2);
+            // Indent the JSON object string for pretty printing (rough approximation)
+            const indentedDoc = docStr.split('\n').map((line, idx) => idx === 0 ? line : '    ' + line).join('\n');
+            parts.push(i === 0 ? "    " + indentedDoc : ",\n    " + indentedDoc);
+        }
+        
+        // Footer
+        parts.push("\n  ]\n}");
+        
+        return new Blob(parts, { type: 'application/json' });
     }
 }
