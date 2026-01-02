@@ -61,6 +61,15 @@ export interface CloudFile {
   uri: string;
 }
 
+export interface Agent {
+  id: string;
+  handle: string;
+  role: string;
+  system_instruction: string;
+  voice: string;
+  voiceReference?: string; // Path or URL to a default audio file for cloning
+}
+
 // --- LOREPACK SCHEMA (MYTHOS.LOREPACK.v1) ---
 export interface LorePackHeader {
   schema: "MYTHOS.LOREPACK.v1";

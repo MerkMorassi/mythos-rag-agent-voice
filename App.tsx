@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   GoogleGenAI, 
@@ -196,7 +197,7 @@ const App: React.FC = () => {
   const scheduledSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const logsEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const silenceTimerRef = useRef<number | null>(null);
 
   // Refs for streaming transcription
   const activeUserMessageRef = useRef<string>('');
@@ -307,7 +308,7 @@ const App: React.FC = () => {
       stopSilenceTimer(); // Ensure no duplicates
       if (connectionState !== ConnectionState.CONNECTED) return;
 
-      silenceTimerRef.current = setTimeout(() => {
+      silenceTimerRef.current = window.setTimeout(() => {
           triggerSilenceNudge();
       }, SILENCE_TIMEOUT_MS);
   };
@@ -866,8 +867,6 @@ const App: React.FC = () => {
                   const { text, target } = fc.args as any;
                   try {
                       // Attempt translation via OpenL.io
-                      // Note: This relies on OPENL_API_KEY environment variable. 
-                      // If missing, it fails gracefully to internal translation simulation.
                       const res = await fetch('https://api.openl.io/translate', {
                           method: 'POST',
                           headers: { 

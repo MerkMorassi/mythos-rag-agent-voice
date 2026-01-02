@@ -119,13 +119,16 @@ export const deleteDocumentsByAgentId = async (agentId: string): Promise<void> =
     const transaction = db.transaction([STORE_NAME], 'readwrite');
     const store = transaction.objectStore(STORE_NAME);
     const index = store.index('agentId');
-    const request = index.getAllKeys(agentId);
+    
+    // Use Cursor for robust bulk deletion
+    const request = index.openCursor(IDBKeyRange.only(agentId));
 
-    request.onsuccess = () => {
-      const keys = request.result;
-      keys.forEach((key) => {
-        store.delete(key);
-      });
+    request.onsuccess = (event) => {
+      const cursor = (event.target as IDBRequest).result;
+      if (cursor) {
+        cursor.delete();
+        cursor.continue();
+      }
     };
 
     transaction.oncomplete = () => resolve();

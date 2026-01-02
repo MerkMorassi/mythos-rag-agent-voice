@@ -11,7 +11,7 @@ import {
 } from '../services/db';
 import { uploadCloudFile, listCloudFiles, deleteCloudFile } from '../services/googleFiles';
 import { IngestionService, IngestionResult } from '../services/ingestion';
-import { NumMarkX_GenerateSigil } from '../patterns/NumMarkX';
+import { NumMarkX_GenerateSigil, NumMarkX_GenerateHeader } from '../patterns/NumMarkX';
 import { SyncBridge } from '../services/syncBridge';
 
 interface KnowledgeManagerProps {
@@ -193,6 +193,43 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
       }
   };
 
+  const handleExportLorePack = async () => {
+      if (docs.length === 0) {
+          showStatus("No documents to export.", 'error');
+          return;
+      }
+      
+      try {
+          // Ensure all docs have NumMark-X Sigils
+          const exportDocs = docs.map(d => ({
+              ...d,
+              // Regenerate NumMark if missing to ensure portability
+              numMarkId: d.numMarkId || NumMarkX_GenerateSigil(d.content)
+          }));
+
+          const header = NumMarkX_GenerateHeader(
+              currentAgentId, 
+              currentAgentId,
+              "Exported via Knowledge Manager"
+          );
+
+          const json = IngestionService.exportLorePack(header, exportDocs);
+          
+          const blob = new Blob([json], { type: 'application/json' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `${currentAgentId}_LOREPACK_${new Date().toISOString().slice(0,10)}.json`;
+          a.click();
+          URL.revokeObjectURL(url);
+          
+          showStatus(`Exported ${exportDocs.length} nodes to LorePack.`, 'success');
+      } catch (e: any) {
+          console.error("Export failed", e);
+          showStatus(`Export Failed: ${e.message}`, 'error');
+      }
+  };
+
   const chunkText = (text: string): string[] => {
     const CHUNK_SIZE = 1500;
     const chunks: string[] = [];
@@ -358,10 +395,12 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
       setIsProcessing(true);
       try {
           await deleteDocumentsByAgentId(currentAgentId);
-          await fetchDocs();
+          setDocs([]); // Instant clear visual feedback
+          await fetchDocs(); // Verify clear
           onUpdate();
           showStatus("Database purged.", 'success');
       } catch (e) {
+          console.error(e);
           showStatus("Failed to purge database.", 'error');
       } finally { setIsProcessing(false); }
   };
@@ -556,9 +595,23 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
                         </div>
 
                         <div className="flex-col">
-                            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
                                 <span className="section-header-title">STORED ({filteredDocs.length})</span>
-                                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                    <button 
+                                        onClick={handleExportLorePack} 
+                                        className="btn btn-secondary" 
+                                        style={{ padding: '0.4rem', fontSize: '0.6rem', color: '#a78bfa', borderColor: '#a78bfa' }}
+                                        title="Download valid LorePack JSON with NumMark-X Sigils"
+                                    >
+                                        EXPORT LOREPACK
+                                    </button>
+                                    
+                                    <label className="btn btn-secondary" style={{ padding: '0.4rem', fontSize: '0.6rem', cursor: 'pointer' }}>
+                                        IMPORT LOREPACK
+                                        <input type="file" accept=".json" onChange={handleSelectLorePack} ref={importInputRef} className="hidden" />
+                                    </label>
+
                                     {serverOnline ? (
                                         <button 
                                             onClick={handleVaultSync} 
@@ -571,10 +624,6 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
                                     ) : (
                                         <span style={{ fontSize: '0.6rem', color: '#666', alignSelf: 'center', border: '1px solid #333', padding: '0.4rem' }}>VAULT OFFLINE</span>
                                     )}
-                                    <label className="btn btn-secondary" style={{ padding: '0.4rem', fontSize: '0.6rem', cursor: 'pointer' }}>
-                                        IMPORT LOREPACK
-                                        <input type="file" accept=".json" onChange={handleSelectLorePack} ref={importInputRef} className="hidden" />
-                                    </label>
                                     <button onClick={handlePurgeAll} className="btn btn-danger" style={{ padding: '0.4rem', fontSize: '0.6rem' }}>PURGE ALL</button>
                                 </div>
                             </div>
@@ -588,7 +637,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
                                                 <FileIcon typeStr={doc.title} />
                                                 <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
                                                     <span style={{ fontWeight: 'bold', fontSize: '0.75rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{doc.title}</span>
-                                                    {doc.numMarkId && <span style={{ fontSize: '0.6rem', color: '#666' }}>{doc.numMarkId}</span>}
+                                                    {doc.numMarkId && <span style={{ fontSize: '0.6rem', color: '#a78bfa' }}>{doc.numMarkId}</span>}
                                                 </div>
                                             </div>
                                             <button onClick={() => handleDelete(doc.id)} style={{ background: 'none', border: 'none', color: '#666', marginLeft: '0.5rem' }}>[X]</button>
