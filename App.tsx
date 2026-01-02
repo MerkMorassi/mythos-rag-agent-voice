@@ -9,6 +9,7 @@ import {
 } from '@google/genai';
 import { 
   searchDocuments, 
+  findDocumentBySigil, // New: Teleport
   saveActiveChat, 
   loadActiveChat,
   saveChatSession,
@@ -16,8 +17,11 @@ import {
   saveGeneralInstructions,
   getAgentConfig,
   saveAgentConfig,
-  addDocument
+  addDocument,
+  getDocumentCountByAgentId
 } from './services/db';
+import { RetrievalGate } from './services/retrievalGate'; // New: Gate
+import { NumMarkX_GenerateSigil, NumMarkX_TimeStamp } from './patterns/NumMarkX'; // New: Sigil Gen
 import { createPcmBlob, base64ToUint8Array, decodeAudioData } from './services/audioUtils';
 import { listCloudFiles } from './services/googleFiles';
 import Visualizer from './components/Visualizer';
@@ -121,7 +125,7 @@ interface Toast {
 const App: React.FC = () => {
   const [connectionState, setConnectionState] = useState<ConnectionState>(ConnectionState.DISCONNECTED);
   const [logs, setLogs] = useState<LogMessage[]>([]);
-  const [systemStatus, setSystemStatus] = useState<string>("System Initialized. Awaiting Link Authorization.");
+  const [systemStatus, setSystemStatus] = useState<string>("System Initialized.");
   
   const [selectedAgentId, setSelectedAgentId] = useState<string>(AGENTS[0].id);
   const [inputText, setInputText] = useState('');
@@ -201,6 +205,16 @@ const App: React.FC = () => {
     updateCloudFileList();
   }, []);
 
+  // Update Status Bar dynamically when Disconnected
+  useEffect(() => {
+      if (connectionState === ConnectionState.DISCONNECTED) {
+          const voice = isCustomVoice ? (customVoiceName || 'CUSTOM') : selectedVoice;
+          const mic = isMicMuted ? 'OFF' : 'ON';
+          const cam = isCameraActive ? 'ON' : 'OFF';
+          setSystemStatus(`READY :: ${currentAgent.handle.toUpperCase()} | VOICE: ${voice.toUpperCase()} | MIC: ${mic} | CAM: ${cam}`);
+      }
+  }, [connectionState, selectedAgentId, selectedVoice, isCustomVoice, customVoiceName, isMicMuted, isCameraActive]);
+
   // Load Agent Config & Chat History when agent changes
   useEffect(() => {
     let isMounted = true;
@@ -210,12 +224,18 @@ const App: React.FC = () => {
       try {
         const savedLogs = await loadActiveChat(selectedAgentId);
         const savedConfig = await getAgentConfig(selectedAgentId);
+        // Check for persisted knowledge
+        const docCount = await getDocumentCountByAgentId(selectedAgentId);
 
         if (isMounted) {
           setLogs(savedLogs);
           setAgentInstruction(savedConfig.instruction);
           setModelConfig(savedConfig.modelConfig);
           setLogsLoaded(true); 
+          
+          if (docCount > 0) {
+              showToast(`Memory Active: ${docCount} nodes online`, 'success');
+          }
         }
       } catch (e) {
         console.error("Error loading agent data", e);
@@ -298,10 +318,15 @@ const App: React.FC = () => {
   const handleLoreUpdate = async () => {
       updateCloudFileList(); // Refresh cloud files if knowledge manager changed something
       const msg = "[SYSTEM ALERT: New knowledge has been ingested into the local database or cloud context. You can now search for this new information using your tools. Inform the user you are aware of the update.]";
-      setSystemStatus('Knowledge Base Updated');
-      showToast('Knowledge Base Updated', 'success');
       
-      addLog('system', "SYSTEM: Knowledge Base Updated. Alerting Agent...");
+      if (connectionState === ConnectionState.CONNECTED) {
+          setSystemStatus('Knowledge Base Updated');
+          addLog('system', "SYSTEM: Knowledge Base Updated. Alerting Agent...");
+      } else {
+          // If disconnected, just show toast, standard status bar handles the rest
+          // docCount check on connect will confirm it
+      }
+      showToast('Knowledge Base Updated', 'success');
       
       if (connectionState === ConnectionState.CONNECTED && sessionRef.current) {
           try {
@@ -654,9 +679,31 @@ const App: React.FC = () => {
               for (const fc of msg.toolCall.functionCalls) {
                 if (fc.name === 'searchKnowledgeBase') {
                   const query = (fc.args as any).query;
+                  
+                  // --- RETRIEVAL GATE & TELEPORT LOGIC ---
+                  
+                  // 1. GATE: Should we search?
+                  const gateDecision = RetrievalGate.evaluate(query, selectedAgentId);
+                  if (!gateDecision.shouldRetrieve) {
+                      sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "Memory retrieval skipped (Not required for this query)." } } }));
+                      continue;
+                  }
+
+                  // 2. TELEPORT: Try Exact Sigil Match
+                  const sigil = NumMarkX_GenerateSigil(query);
+                  const directHit = await findDocumentBySigil(sigil);
+                  
+                  if (directHit) {
+                      setSystemStatus("Teleport: Instant Sigil Lock");
+                      sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: JSON.stringify([directHit]) } } }));
+                      continue;
+                  }
+
+                  // 3. VECTOR SEARCH: Fallback
                   const docs = await searchDocuments(query, undefined, selectedAgentId);
                   const result = docs.length ? JSON.stringify(docs) : "No local documents found.";
                   sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result } } }));
+                  
                 } else if (fc.name === 'downloadTranscript') {
                   const history = await loadActiveChat(selectedAgentId);
                   const text = history.map(l => `[${new Date(l.timestamp).toLocaleTimeString()}] ${l.type.toUpperCase()}: ${l.text}`).join('\n');
@@ -700,13 +747,17 @@ const App: React.FC = () => {
                             config: { taskType: 'RETRIEVAL_DOCUMENT', title }
                         });
                        
+                       // STAMP WITH NUMMARK ON SAVE
+                       const sigil = NumMarkX_GenerateSigil(text);
+
                        await addDocument({
                             id: crypto.randomUUID(),
                             agentId: selectedAgentId,
                             title,
                             content: text,
                             embedding: embedResult.embeddings[0].values,
-                            timestamp: Date.now()
+                            timestamp: Date.now(),
+                            numMarkId: sigil
                        });
                        
                        handleLoreUpdate();

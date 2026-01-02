@@ -6,7 +6,7 @@ const STORE_NAME = 'documents';
 const CHAT_STORE_NAME = 'chat_sessions';
 const ACTIVE_CHAT_STORE_NAME = 'active_chats'; 
 const CONFIG_STORE_NAME = 'config';
-const DB_VERSION = 5; // Increment for agentId index
+const DB_VERSION = 6; // Increment for numMarkId index if needed, effectively 6 now
 
 // Request persistent storage if available
 if (navigator.storage && navigator.storage.persist) {
@@ -44,6 +44,11 @@ export const initDB = (): Promise<IDBDatabase> => {
       // Add agentId index if it doesn't exist
       if (!store.indexNames.contains('agentId')) {
         store.createIndex('agentId', 'agentId', { unique: false });
+      }
+      
+      // Add numMarkId index for Teleportation
+      if (!store.indexNames.contains('numMarkId')) {
+        store.createIndex('numMarkId', 'numMarkId', { unique: false });
       }
 
       // Chat Sessions Store (Saved Snapshots)
@@ -148,7 +153,6 @@ export const getAllDocuments = async (): Promise<KnowledgeDoc[]> => {
     const request = store.getAll();
 
     request.onsuccess = () => {
-      // Sort by timestamp desc
       const results = request.result as KnowledgeDoc[];
       results.sort((a, b) => b.timestamp - a.timestamp);
       resolve(results);
@@ -174,16 +178,35 @@ export const getDocumentsByAgentId = async (agentId: string): Promise<KnowledgeD
   });
 };
 
-export const getDocumentsByTitlePrefix = async (prefix: string): Promise<KnowledgeDoc[]> => {
+export const getDocumentCountByAgentId = async (agentId: string): Promise<number> => {
   const db = await initDB();
   return new Promise((resolve, reject) => {
     const transaction = db.transaction([STORE_NAME], 'readonly');
     const store = transaction.objectStore(STORE_NAME);
-    const index = store.index('title');
-    const range = IDBKeyRange.bound(prefix, prefix + '\uffff');
-    const request = index.getAll(range);
+    const index = store.index('agentId');
+    const request = index.count(agentId);
 
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      resolve(request.result || 0);
+    };
+    request.onerror = () => reject(request.error);
+  });
+};
+
+// TELEPORT: Direct NumMark Lookup
+export const findDocumentBySigil = async (sigil: string): Promise<KnowledgeDoc | null> => {
+  const db = await initDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction([STORE_NAME], 'readonly');
+    const store = transaction.objectStore(STORE_NAME);
+    
+    // We try to match against the 'numMarkId' index
+    const index = store.index('numMarkId');
+    const request = index.get(sigil);
+
+    request.onsuccess = () => {
+      resolve(request.result || null);
+    };
     request.onerror = () => reject(request.error);
   });
 };
@@ -315,8 +338,7 @@ export const getAgentConfig = async (agentId: string): Promise<{ instruction: st
   });
 };
 
-// Legacy support: We can remove getSystemInstructions and saveSystemInstructions as we are migrating to General/Agent specific
-// but I'll keep them aliased to General for now to prevent breaking immediate reload if data exists
+// Legacy support
 export const saveSystemInstructions = saveGeneralInstructions;
 export const getSystemInstructions = getGeneralInstructions;
 
@@ -335,8 +357,6 @@ function cosineSimilarity(vecA: number[], vecB: number[]): number {
 }
 
 export const searchDocuments = async (query: string, queryEmbedding?: number[], agentId?: string): Promise<KnowledgeDoc[]> => {
-  // If agentId is provided, retrieve only that agent's documents.
-  // Otherwise, if no agentId is passed (unlikely in this app), search all.
   const docsToSearch = agentId ? await getDocumentsByAgentId(agentId) : await getAllDocuments();
   
   if (queryEmbedding && docsToSearch.some(d => d.embedding)) {

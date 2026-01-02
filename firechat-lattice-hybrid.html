@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>MYTHOS :: HYBRID LATTICE [v4.7 MODULAR]</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<header>
+    <div><strong>MYTHOS</strong> // HYBRID LATTICE [v4.7]</div>
+    <div id="connection-status" style="color: #666;">[ BOOTING ]</div>
+</header>
+
+<main>
+    <aside>
+        <div class="tabs">
+            <button id="tab-comms" class="tab active">COMMS</button>
+            <button id="tab-forge" class="tab">FORGE</button>
+        </div>
+
+        <div id="panel-comms" class="sidebar-content">
+            <label>API KEY</label>
+            <input type="password" id="api-key" placeholder="AIza...">
+            
+            <label style="margin-top:15px; color: #ffcc00; display:block;">NEURAL ENGINE</label>
+            <select id="model-select">
+                <optgroup label="CLOUD (Google)">
+                    <option value="gemini-2.0-flash-exp" selected>Gemini 2.0 Flash (Exp)</option>
+                    <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
+                    <option value="gemini-3-pro">Gemini 3.0 Pro (Preview)</option>
+                </optgroup>
+                <optgroup label="LOCAL (WebGPU)">
+                    <option value="onnx-community/Llama-3.2-1B-Instruct">Llama 3.2 (1B)</option>
+                    <option value="onnx-community/Qwen2.5-1.5B-Instruct">Qwen 2.5 (1.5B)</option>
+                </optgroup>
+            </select>
+
+            <label style="margin-top:15px; display:block;">ACTIVE LOCUS</label>
+            <select id="agent-select"><option>Loading...</option></select>
+            
+            <div style="margin-top: auto;">
+                <button id="btn-purge" class="danger">/PURGE_MEMORY</button>
+            </div>
+        </div>
+
+        <div id="panel-forge" class="sidebar-content d-none">
+            <label style="color:#ff3300">TARGET IDENTITY</label>
+            <input id="forgeAgentId" value="MERKOS" style="font-weight:bold; color:#ff3300">
+            
+            <label style="margin-top:10px; display:block;">SOURCE FILES</label>
+            <input type="file" id="forgeFileInput" multiple>
+            <div id="forgeQueue" style="font-size:0.7em; color:#666">0 files</div>
+            
+            <label style="margin-top:10px; display:block;">THREADS</label>
+            <input type="number" id="concurrency" value="5" min="1">
+            
+            <button id="btnIngest" class="primary" style="margin-top:10px">IGNITE FORGE</button>
+            
+            <hr style="border:0; border-top:1px solid #333; margin: 15px 0;">
+            
+            <label style="color:#00ffaa">DATABASE I/O</label>
+            <input type="file" id="importInput" style="display:none" accept=".json">
+            <button id="btnImport" style="background:#002233; border:1px solid #005577; color:#00aaff; width:100%; padding:5px; margin-bottom:5px;">RESTORE COREPACK</button>
+            <button id="btnExport" style="background:#222; border:1px solid #444; color:#fff; width:100%; padding:5px;">EXPORT COREPACK</button>
+            
+            <div id="forgeProgress" class="d-none" style="margin-top:10px;">
+                <progress id="ingestBar" value="0" max="100" style="width:100%"></progress>
+                <div id="ingestStats" style="text-align:center; font-size:0.7em">0/0</div>
+            </div>
+        </div>
+    </aside>
+
+    <section>
+        <div id="messages-container"></div>
+        <div class="input-area">
+            <textarea id="message-input" rows="2" placeholder="Signal the Lattice..."></textarea>
+            <button id="send-button">SEND</button>
+        </div>
+        <div id="status-bar">
+            <span id="focus-status">FOCUS: DIRECT</span>
+            <span id="vector-count">VECTORS: 0</span>
+        </div>
+    </section>
+</main>
+
+<script type="module">
+    // --- ENTRY POINT ---
+    import { boot } from './js/ui/terminal-controller.js';
+    
+    // Ignite the System
+    document.addEventListener('DOMContentLoaded', () => {
+        boot();
+    });
+</script>
+</body>
+</html>

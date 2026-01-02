@@ -1,8 +1,10 @@
 
 import React, { useState, useEffect } from 'react';
 import { GoogleGenAI } from '@google/genai';
-import { LogMessage, ChatSession } from '../types';
+import { LogMessage, ChatSession, KnowledgeDoc } from '../types';
 import { saveChatSession, getAllChatSessions, deleteChatSession, addDocument } from '../services/db';
+import { IngestionService } from '../services/ingestion';
+import { NumMarkX_GenerateHeader, NumMarkX_GenerateID, NumMarkX_GenerateSigil } from '../patterns/NumMarkX';
 
 interface ChatHistoryManagerProps {
   currentLogs: LogMessage[];
@@ -102,18 +104,33 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
       const confirmClear = window.confirm("Are you sure you want to clear the current chat?");
       if(confirmClear) {
           onLoadSession([]);
-          // Note: The App component's useEffect will catch the empty logs and update the persistent store automatically.
           setIsOpen(false);
       }
   }
 
   const handleExportJson = (session: ChatSession) => {
-      const dataStr = JSON.stringify(session, null, 2);
+      // CONVERT CHAT SESSION TO LOREPACK v1
+      const header = NumMarkX_GenerateHeader(currentAgentId, "Exported Chat", session.title);
+      
+      const docs: KnowledgeDoc[] = session.logs.map((l, i) => {
+          const content = `[${new Date(l.timestamp).toLocaleTimeString()}] ${l.type.toUpperCase()}: ${l.text}`;
+          return {
+              id: l.id,
+              agentId: currentAgentId,
+              title: `Chat Log ${i}: ${session.title}`,
+              content: content,
+              timestamp: l.timestamp,
+              numMarkId: NumMarkX_GenerateSigil(content) // Correct Sigil for Teleportation
+          };
+      });
+
+      const dataStr = IngestionService.exportLorePack(header, docs);
+      
       const blob = new Blob([dataStr], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = `Session_${session.title.replace(/[^a-z0-9]/gi, '_')}.json`;
+      link.download = `MythOS_LorePack_${session.title.replace(/[^a-z0-9]/gi, '_')}.json`;
       link.click();
       URL.revokeObjectURL(url);
   };
@@ -176,13 +193,15 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
                 const embeddings = batchResult.embeddings;
                 
                 for(let k=0; k<batch.length; k++) {
+                     const chunkContent = batch[k];
                      await addDocument({
-                        id: crypto.randomUUID(),
+                        id: NumMarkX_GenerateID('LORE'),
                         agentId: currentAgentId,
                         title: `${session.title} (Part ${i + k + 1})`,
-                        content: batch[k],
+                        content: chunkContent,
                         embedding: embeddings?.[k]?.values,
-                        timestamp: Date.now()
+                        timestamp: Date.now(),
+                        numMarkId: NumMarkX_GenerateSigil(chunkContent) // Correct Sigil
                     });
                 }
           }
@@ -293,9 +312,9 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
                             onClick={() => handleExportJson(session)}
                             className="btn btn-secondary"
                             style={{ flex: 1, fontSize: '0.7rem', padding: '0.4rem' }}
-                            title="Download JSON"
+                            title="Download LorePack JSON"
                         >
-                            JSON
+                            EXPORT LP
                         </button>
                         <button 
                             onClick={() => handleIngestToLore(session)}

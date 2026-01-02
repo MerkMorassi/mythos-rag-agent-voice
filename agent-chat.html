@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>MYTHOS :: Agent Chat (v1)</title>
+
+<style>
+body {
+  background:#0a0a0a;
+  color:#e0e0e0;
+  font-family:monospace;
+  margin:0;
+  padding:20px;
+}
+
+#chat {
+  height:70vh;
+  overflow:auto;
+  border:1px solid #333;
+  padding:10px;
+  margin-bottom:10px;
+}
+
+textarea,input,button {
+  background:#111;
+  color:#fff;
+  border:1px solid #333;
+  padding:6px;
+  font-family:inherit;
+}
+
+button { cursor:pointer }
+
+.msg.sys   { color:#4aa3ff }
+.msg.user  { color:#00ff88 }
+.msg.agent { color:#ffaa00 }
+</style>
+</head>
+
+<body>
+
+<h2>MYTHOS :: Single-Agent Chat</h2>
+
+<input id="agentId" value="THALIA" /><br><br>
+
+<input type="file" id="loreInput" accept=".json" /><br><br>
+
+<div id="chat"></div>
+
+<textarea id="userInput" rows="3" placeholder="Say something..."></textarea><br>
+<button id="sendBtn">SEND</button>
+
+<script type="module">
+
+let lore = null;
+let cursor = 0;
+
+const chat = document.getElementById('chat');
+const loreInput = document.getElementById('loreInput');
+const sendBtn = document.getElementById('sendBtn');
+const userInput = document.getElementById('userInput');
+
+function log(text, cls='sys') {
+  const d = document.createElement('div');
+  d.className = 'msg ' + cls;
+  d.textContent = text;
+  chat.appendChild(d);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+/* ---------- LOAD LOREPACK ---------- */
+loreInput.onchange = async () => {
+  const file = loreInput.files[0];
+  if (!file) return;
+
+  try {
+    const text = await file.text();
+    if (!text.trim()) throw new Error('Empty file');
+
+    const parsed = JSON.parse(text);
+
+    if (
+      parsed.schema !== 'MYTHOS.LOREPACK.v1' ||
+      !Array.isArray(parsed.sacred_archive)
+    ) {
+      throw new Error('Invalid LorePack schema');
+    }
+
+    lore = parsed;
+    cursor = 0;
+
+    log(
+      `Lore loaded (${parsed.sacred_archive.length} nodes).`,
+      'sys'
+    );
+
+  } catch (e) {
+    log(`Lore load failed: ${e.message}`, 'sys');
+  } finally {
+    loreInput.value = '';
+  }
+};
+
+/* ---------- SEND MESSAGE ---------- */
+sendBtn.onclick = () => {
+  const text = userInput.value.trim();
+  if (!text) return;
+
+  log(text, 'user');
+  userInput.value = '';
+
+  if (!lore) {
+    log('No LorePack loaded.', 'sys');
+    return;
+  }
+
+  // 🔑 DETERMINISTIC REPLY (v1 proof-of-life)
+  const node = lore.sacred_archive[cursor % lore.sacred_archive.length];
+  cursor++;
+
+  log(node.text, 'agent');
+};
+
+</script>
+
+</body>
+</html>

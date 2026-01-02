@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MYTHOS // Canonical LIA Manifest</title>
+    <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    <link rel="stylesheet" href="css/style.css"> 
+</head>
+<body>
+    
+    <div class="nav-bar">
+        <div class="nav-logo">MYTHOS LIA CONSOLE</div>
+        <a href="manager.html" class="nav-link">Manager Locus (DB: 4000-4015)</a>
+        <a href="chat-room.html" class="nav-link">Conference Room (API: 4100)</a>
+        <a href="manifest.html" class="nav-link active">Canonical Manifest</a>
+    </div>
+
+    <div class="manifest-dashboard">
+        
+        <div class="manifest-header-title">CANONICAL LIA MANIFEST (AHA-SPEC)</div>
+        <div class="manifest-header-subtitle">Permanent Port Assignments (4000-4015)</div>
+        
+        <div class="table-scroll-container">
+            <table class="manifest-table">
+                <thead>
+                    <tr>
+                        <th>LIA NAME</th>
+                        <th>DOMAIN / ROLE LAYER</th>
+                        <th>PORT</th>
+                    </tr>
+                </thead>
+                <tbody id="manifest-body">
+                    <!-- Dynamically Loaded -->
+                </tbody>
+            </table>
+        </div>
+        </div>
+
+    <script>
+        fetch('data/manifest.json')
+            .then(response => response.json())
+            .then(data => {
+                const tbody = document.getElementById('manifest-body');
+                data.forEach(agent => {
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td class="name-cell">${agent.handle}</td>
+                        <td>${agent.role}</td>
+                        <td class="port-cell">${agent.port}</td>
+                    `;
+                    tbody.appendChild(row);
+                });
+            })
+            .catch(err => console.error('Error loading manifest:', err));
+    </script>
+</body>
+</html>

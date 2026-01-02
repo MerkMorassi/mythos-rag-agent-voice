@@ -10,6 +10,8 @@ import {
   deleteDocumentsByAgentId
 } from '../services/db';
 import { uploadCloudFile, listCloudFiles, deleteCloudFile } from '../services/googleFiles';
+import { IngestionService, IngestionResult } from '../services/ingestion';
+import { NumMarkX_GenerateSigil } from '../patterns/NumMarkX';
 
 interface KnowledgeManagerProps {
   onUpdate: () => void;
@@ -17,6 +19,84 @@ interface KnowledgeManagerProps {
 }
 
 const ITEMS_PER_PAGE = 5;
+
+// --- ICONS ---
+const FileIcon = ({ typeStr }: { typeStr: string }) => {
+  const t = typeStr.toLowerCase();
+  const style = { width: '20px', height: '20px', strokeWidth: 1.5, flexShrink: 0 };
+  
+  if (t.includes('image') || t.endsWith('.png') || t.endsWith('.jpg') || t.endsWith('.jpeg') || t.endsWith('.webp')) {
+    // Image Icon (Purple)
+    return (
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#c084fc" strokeLinecap="round" strokeLinejoin="round" style={style}>
+        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+        <circle cx="8.5" cy="8.5" r="1.5"></circle>
+        <polyline points="21 15 16 10 5 21"></polyline>
+      </svg>
+    );
+  }
+  
+  if (t.includes('pdf') || t.endsWith('.pdf')) {
+    // PDF Icon (Red-ish)
+    return (
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#f87171" strokeLinecap="round" strokeLinejoin="round" style={style}>
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+        <polyline points="14 2 14 8 20 8"></polyline>
+        <line x1="16" y1="13" x2="8" y2="13"></line>
+        <line x1="16" y1="17" x2="8" y2="17"></line>
+        <polyline points="10 9 9 9 8 9"></polyline>
+      </svg>
+    );
+  }
+
+  if (t.includes('json') || t.endsWith('.json') || t.includes('javascript') || t.endsWith('.js') || t.endsWith('.ts')) {
+    // Code/JSON Icon (Yellow/Green)
+    return (
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#facc15" strokeLinecap="round" strokeLinejoin="round" style={style}>
+        <polyline points="16 18 22 12 16 6"></polyline>
+        <polyline points="8 6 2 12 8 18"></polyline>
+      </svg>
+    );
+  }
+
+  if (t.includes('video') || t.endsWith('.mp4') || t.endsWith('.mov') || t.endsWith('.webm')) {
+    // Video Icon (Blue)
+    return (
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" strokeLinecap="round" strokeLinejoin="round" style={style}>
+        <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect>
+        <line x1="7" y1="2" x2="7" y2="22"></line>
+        <line x1="17" y1="2" x2="17" y2="22"></line>
+        <line x1="2" y1="12" x2="22" y2="12"></line>
+        <line x1="2" y1="7" x2="7" y2="7"></line>
+        <line x1="2" y1="17" x2="7" y2="17"></line>
+        <line x1="17" y1="17" x2="22" y2="17"></line>
+        <line x1="17" y1="7" x2="22" y2="7"></line>
+      </svg>
+    );
+  }
+
+  if (t.includes('audio') || t.endsWith('.mp3') || t.endsWith('.wav')) {
+    // Audio Icon (Pink)
+    return (
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#f472b6" strokeLinecap="round" strokeLinejoin="round" style={style}>
+        <path d="M9 18V5l12-2v13"></path>
+        <circle cx="6" cy="18" r="3"></circle>
+        <circle cx="18" cy="16" r="3"></circle>
+      </svg>
+    );
+  }
+
+  // Default Text Icon (Gray)
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" strokeLinecap="round" strokeLinejoin="round" style={style}>
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+      <polyline points="14 2 14 8 20 8"></polyline>
+      <line x1="16" y1="13" x2="8" y2="13"></line>
+      <line x1="16" y1="17" x2="8" y2="17"></line>
+      <line x1="10" y1="9" x2="8" y2="9"></line>
+    </svg>
+  );
+};
 
 const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAgentId }) => {
   const [activeTab, setActiveTab] = useState<'local' | 'cloud'>('local');
@@ -26,13 +106,12 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
   const [docs, setDocs] = useState<KnowledgeDoc[]>([]);
   const [filterQuery, setFilterQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
-  const [importStats, setImportStats] = useState<{
-    total: number;
-    withVectors: number;
-    agents: string[];
-    avgContentLength: number;
-  } | null>(null);
+  
+  // Ingestion State
+  const [importStats, setImportStats] = useState<IngestionResult['stats'] | null>(null);
   const [pendingImportData, setPendingImportData] = useState<KnowledgeDoc[] | null>(null);
+  const [pendingHeader, setPendingHeader] = useState<any>(null); // For display
+  
   const [uploadProgress, setUploadProgress] = useState<{
     fileName: string;
     current: number;
@@ -152,25 +231,34 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
                 for (let k = 0; k < batchChunks.length; k++) {
                     const embedding = embeddings?.[k]?.values;
                     const chunkContent = batchChunks[k];
+                    
+                    // GENERATE NUMMARK SIGIL
+                    const sigil = NumMarkX_GenerateSigil(chunkContent);
+
                     await addDocument({
                         id: crypto.randomUUID(),
                         agentId: currentAgentId,
                         title: `${file.name} (Part ${j + k + 1}/${chunks.length})`,
                         content: chunkContent,
                         embedding: embedding,
-                        timestamp: Date.now()
+                        timestamp: Date.now(),
+                        numMarkId: sigil
                     });
                 }
             } catch(err) {
                 console.error("Batch embedding failed, saving without vectors", err);
                 for (let k = 0; k < batchChunks.length; k++) {
                     const chunkContent = batchChunks[k];
+                    // GENERATE NUMMARK SIGIL
+                    const sigil = NumMarkX_GenerateSigil(chunkContent);
+                    
                     await addDocument({
                          id: crypto.randomUUID(),
                          agentId: currentAgentId,
                          title: `${file.name} (Part ${j + k + 1}/${chunks.length})`,
                          content: chunkContent,
-                         timestamp: Date.now()
+                         timestamp: Date.now(),
+                         numMarkId: sigil
                     });
                 }
             }
@@ -196,35 +284,34 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
   const handleSelectLorePack = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    
     setIsProcessing(true);
     setImportStats(null);
     setPendingImportData(null);
+    setPendingHeader(null);
+
     try {
         const text = await file.text();
-        let rawData;
-        try { rawData = JSON.parse(text); } catch { throw new Error("Invalid JSON file."); }
-        const dataArray = Array.isArray(rawData) ? rawData : [rawData];
-        const normalizedData: KnowledgeDoc[] = dataArray.map((d: any) => {
-            const id = d.id || crypto.randomUUID();
-            let content = d.content || d.text || '';
-            if (!content && d.metadata?.content) content = d.metadata.content;
-            let title = d.title || d.name || 'Untitled';
-            if (!title && content) title = content.substring(0, 50) + '...';
-            let embedding = d.embedding || d.vector || d.values;
-            if (embedding && !Array.isArray(embedding)) embedding = undefined;
-            return {
-                id, title, content: typeof content === 'string' ? content : JSON.stringify(content),
-                timestamp: d.timestamp || Date.now(), agentId: d.agentId, embedding
-            };
-        }).filter(d => d.content && d.content.trim().length > 0);
+        // USE INGESTION SERVICE (Already NumMark compliant)
+        const result = await IngestionService.parseLorePack(text, currentAgentId);
+        
+        if (!result.success) {
+            throw new Error(result.error || "Parsing failed");
+        }
 
-        setImportStats({
-            total: normalizedData.length,
-            withVectors: normalizedData.filter(d => d.embedding).length,
-            agents: Array.from(new Set(normalizedData.map(d => d.agentId).filter(Boolean))) as string[],
-            avgContentLength: Math.round(normalizedData.reduce((acc, curr) => acc + curr.content.length, 0) / normalizedData.length)
-        });
-        setPendingImportData(normalizedData);
+        if (result.header.agentId !== currentAgentId) {
+             const confirmMix = window.confirm(`LorePack belongs to ${result.header.agentId}, but you are importing into ${currentAgentId}. Continue? (Docs will be re-assigned)`);
+             if (!confirmMix) {
+                 setIsProcessing(false);
+                 if(importInputRef.current) importInputRef.current.value = '';
+                 return;
+             }
+        }
+
+        setPendingImportData(result.docs);
+        setImportStats(result.stats);
+        setPendingHeader(result.header);
+
     } catch (err: any) {
         showStatus(`Verification Failed: ${err.message}`, 'error');
         if(importInputRef.current) importInputRef.current.value = '';
@@ -235,14 +322,18 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
       if (!pendingImportData) return;
       setIsProcessing(true);
       try {
+        // Re-assign agentId to ensure they land in the right bucket in DB
         const taggedData = pendingImportData.map((d: KnowledgeDoc) => ({ ...d, agentId: currentAgentId }));
         await bulkAddDocuments(taggedData);
         await fetchDocs();
         onUpdate();
+        
         setPendingImportData(null);
         setImportStats(null);
+        setPendingHeader(null);
+        
         if(importInputRef.current) importInputRef.current.value = '';
-        showStatus(`Imported ${taggedData.length} documents.`, 'success');
+        showStatus(`Ingested ${taggedData.length} nodes from LorePack.`, 'success');
       } catch (err: any) {
         showStatus(`Import Failed: ${err.message}`, 'error');
       } finally { setIsProcessing(false); }
@@ -427,12 +518,14 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
                     )}
                 </div>
 
-                {importStats && (
+                {importStats && pendingHeader && (
                     <div className="section-panel" style={{ borderColor: '#666' }}>
-                        <div className="section-header"><span className="section-header-title">CONFIRM LOREPACK</span></div>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', fontSize: '0.75rem', marginBottom: '1rem', color: '#ccc' }}>
-                            <div>DOCS: {importStats.total}</div>
-                            <div>VECTORS: {importStats.withVectors}</div>
+                        <div className="section-header"><span className="section-header-title">LOREPACK VERIFIED</span></div>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '0.2rem', fontSize: '0.75rem', marginBottom: '1rem', color: '#ccc' }}>
+                            <div style={{color: '#4ade80'}}><strong>AGENT:</strong> {pendingHeader.handle}</div>
+                            <div><strong>SCHEMA:</strong> {pendingHeader.schema || 'Legacy'}</div>
+                            <div><strong>NODES:</strong> {importStats.total} ({importStats.withVectors} embedded)</div>
+                            <div><strong>AVG SIZE:</strong> {importStats.avgSize} chars</div>
                         </div>
                         <div style={{ display: 'flex', gap: '0.5rem' }}>
                             <button onClick={executeImport} className="btn btn-ingest" disabled={isProcessing}>IMPORT</button>
@@ -446,7 +539,7 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
                         <span className="section-header-title">STORED ({filteredDocs.length})</span>
                         <div style={{ display: 'flex', gap: '0.5rem' }}>
                             <label className="btn btn-secondary" style={{ padding: '0.4rem', fontSize: '0.6rem', cursor: 'pointer' }}>
-                                IMPORT JSON
+                                IMPORT LOREPACK
                                 <input type="file" accept=".json" onChange={handleSelectLorePack} ref={importInputRef} className="hidden" />
                             </label>
                             <button onClick={handlePurgeAll} className="btn btn-danger" style={{ padding: '0.4rem', fontSize: '0.6rem' }}>PURGE ALL</button>
@@ -457,11 +550,17 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
                      <div className="flex-col" style={{ gap: '0.5rem' }}>
                         {paginatedDocs.map(doc => (
                             <div key={doc.id} className="section-panel" style={{ padding: '0.75rem' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                                    <span style={{ fontWeight: 'bold', fontSize: '0.75rem' }}>{doc.title}</span>
-                                    <button onClick={() => handleDelete(doc.id)} style={{ background: 'none', border: 'none', color: '#666' }}>[X]</button>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', overflow: 'hidden' }}>
+                                        <FileIcon typeStr={doc.title} />
+                                        <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                                            <span style={{ fontWeight: 'bold', fontSize: '0.75rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{doc.title}</span>
+                                            {doc.numMarkId && <span style={{ fontSize: '0.6rem', color: '#666' }}>{doc.numMarkId}</span>}
+                                        </div>
+                                    </div>
+                                    <button onClick={() => handleDelete(doc.id)} style={{ background: 'none', border: 'none', color: '#666', marginLeft: '0.5rem' }}>[X]</button>
                                 </div>
-                                <p style={{ color: '#888', fontSize: '0.7rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{doc.content}</p>
+                                <p style={{ color: '#888', fontSize: '0.7rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginTop: '0.25rem', paddingLeft: 'calc(20px + 0.75rem)' }}>{doc.content}</p>
                             </div>
                         ))}
                      </div>
@@ -512,15 +611,18 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
                         cloudFiles.map(file => (
                             <div key={file.name} className="section-panel" style={{ padding: '0.75rem', borderColor: file.state === 'ACTIVE' ? '#a78bfa' : '#333' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                                        <span style={{ fontWeight: 'bold', fontSize: '0.75rem', color: '#eee' }}>{file.displayName}</span>
-                                        <span style={{ fontSize: '0.65rem', color: '#666', fontFamily: 'monospace' }}>
-                                            {(parseInt(file.sizeBytes) / 1024 / 1024).toFixed(2)} MB • {file.state}
-                                        </span>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flex: 1 }}>
+                                        <FileIcon typeStr={file.mimeType} />
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                                            <span style={{ fontWeight: 'bold', fontSize: '0.75rem', color: '#eee' }}>{file.displayName}</span>
+                                            <span style={{ fontSize: '0.65rem', color: '#666', fontFamily: 'monospace' }}>
+                                                {(parseInt(file.sizeBytes) / 1024 / 1024).toFixed(2)} MB • {file.state}
+                                            </span>
+                                        </div>
                                     </div>
                                     <button 
                                         onClick={() => handleDeleteCloudFile(file.name)}
-                                        style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer' }}
+                                        style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', marginLeft: '0.5rem' }}
                                         title="Delete from Cloud"
                                     >
                                         [DEL]

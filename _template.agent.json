@@ -1,0 +1,20 @@
+{
+  "id": "AGENT_ID",
+  "handle": "AgentName",
+  "port": 0,
+  "role": "Primary Function or Archetype",
+  "revision": "ara:YYYY-MM-DD",
+  "meta": {
+    "tone": "adjective, adjective, focused",
+    "constraints": [
+      "Constraint 1",
+      "Constraint 2"
+    ],
+    "description": "A brief description of the agent's purpose within the topology."
+  },
+  "lore_policy": {
+    "read": ["global"],
+    "write": ["self"]
+  },
+  "system_instruction": "You are [AgentName]. Your purpose is [Purpose]. You must adhere to [Constraints]."
+}

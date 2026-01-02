@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>MYTHOS :: FIRECHAT v1</title>
+
+<style>
+:root {
+  --bg:#0a0a0a; --panel:#111; --term:#121212;
+  --text:#e0e0e0; --dim:#777; --accent:#ff3300; --sys:#3399ff;
+}
+* { box-sizing:border-box; }
+body {
+  margin:0; padding:16px; height:100vh;
+  background:var(--bg); color:var(--text);
+  font-family:JetBrains Mono, monospace;
+  display:flex; flex-direction:column;
+}
+header {
+  display:flex; justify-content:space-between;
+  border-bottom:1px solid #333; padding-bottom:8px;
+}
+main { flex:1; display:flex; gap:16px; margin-top:12px; overflow:hidden; }
+aside {
+  width:320px; background:var(--panel); padding:10px;
+  border:1px solid #333; overflow-y:auto;
+}
+section {
+  flex:1; display:flex; flex-direction:column;
+}
+#messages {
+  flex:1; background:var(--term); padding:12px;
+  border:1px solid #333; overflow-y:auto;
+  display:flex; flex-direction:column; gap:10px;
+}
+.msg { border-left:3px solid #444; padding-left:10px; white-space:pre-wrap; }
+.msg.user { border-color:#00ff41; }
+.msg.agent { border-color:var(--accent); }
+.msg.sys { border-color:var(--sys); color:var(--sys); font-size:0.85em; }
+
+label { font-size:0.8em; color:var(--dim); }
+input, textarea, button {
+  width:100%; background:#222; color:#fff;
+  border:1px solid #444; padding:6px;
+  font-family:inherit;
+}
+textarea { resize:vertical; }
+button:hover { border-color:var(--accent); cursor:pointer; }
+
+footer {
+  display:flex; gap:8px; margin-top:8px;
+}
+</style>
+</head>
+
+<body>
+
+<header>
+  <div><strong>MYTHOS</strong> :: FIRECHAT v1</div>
+  <div id="status" style="color:var(--dim)">[ idle ]</div>
+</header>
+
+<main>
+
+<aside>
+  <label>Gemini API Key</label>
+  <textarea id="apiKey" rows="2"></textarea>
+
+  <label style="margin-top:8px;">Model</label>
+  <input id="model" value="gemini-2.5-flash">
+
+  <label style="margin-top:8px;">Load LorePack(s)</label>
+  <input type="file" id="loreInput" multiple accept=".json">
+
+  <div id="loreInfo" style="margin-top:6px;font-size:0.8em;color:var(--dim)">
+    No lore loaded
+  </div>
+</aside>
+
+<section>
+  <div id="messages"></div>
+
+  <footer>
+    <textarea id="userInput" rows="2"></textarea>
+    <button id="sendBtn">SEND</button>
+  </footer>
+</section>
+
+</main>
+
+<script>
+let LORE = [];
+
+function log(msg, cls='sys') {
+  const d = document.createElement('div');
+  d.className = 'msg ' + cls;
+  d.textContent = msg;
+  messages.appendChild(d);
+  messages.scrollTop = messages.scrollHeight;
+}
+
+function cosine(a,b) {
+  let dot=0, na=0, nb=0;
+  for (let i=0;i<a.length;i++) {
+    dot+=a[i]*b[i]; na+=a[i]*a[i]; nb+=b[i]*b[i];
+  }
+  return dot/(Math.sqrt(na)*Math.sqrt(nb))||0;
+}
+
+async function embed(text, key) {
+  const r = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key=${key}`,
+    {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ content:{ parts:[{text}] } })
+    }
+  );
+  const j = await r.json();
+  if (!j.embedding) throw new Error(j.error?.message||'Embed failed');
+  return j.embedding.values;
+}
+
+function extractText(j) {
+  if (j.text) return j.text;
+  if (j.candidates?.length) {
+    for (const c of j.candidates) {
+      const parts = c.content?.parts;
+      if (parts) {
+        for (const p of parts) {
+          if (p.text) return p.text;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+async function generate(prompt, key, model) {
+  const r = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
+    {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        contents:[{parts:[{text:prompt}]}]
+      })
+    }
+  );
+  const j = await r.json();
+  const txt = extractText(j);
+  if (!txt) throw new Error('Empty model response');
+  return txt;
+}
+
+loreInput.onchange = async () => {
+  LORE = [];
+  for (const f of loreInput.files) {
+    const j = JSON.parse(await f.text());
+    if (j.sacred_archive) LORE.push(...j.sacred_archive);
+  }
+  loreInfo.textContent = `${LORE.length} nodes loaded`;
+  log(`Lore loaded (${LORE.length} nodes).`);
+};
+
+sendBtn.onclick = async () => {
+  const key = apiKey.value.trim();
+  const modelName = model.value.trim();
+  const q = userInput.value.trim();
+
+  if (!key) return alert('API key required');
+  if (!LORE.length) return alert('Load LorePack first');
+  if (!q) return;
+
+  userInput.value='';
+  log(q,'user');
+  status.textContent='[ thinking ]';
+
+  try {
+    const qv = await embed(q, key);
+    const top = LORE
+      .map(v => ({...v, score: cosine(qv, v.vector)}))
+      .sort((a,b)=>b.score-a.score)
+      .slice(0,6);
+
+    const ctx = top.map(v=>v.text).join('\n---\n');
+    const reply = await generate(
+      `CONTEXT:\n${ctx}\n\nUSER:\n${q}`,
+      key,
+      modelName
+    );
+
+    log(reply,'agent');
+  } catch(e) {
+    log('ERROR: '+e.message,'sys');
+  } finally {
+    status.textContent='[ idle ]';
+  }
+};
+</script>
+
+</body>
+</html>

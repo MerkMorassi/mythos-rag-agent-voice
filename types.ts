@@ -6,6 +6,9 @@ export interface KnowledgeDoc {
   content: string;
   embedding?: number[];
   timestamp: number;
+  // Optional NumMark metadata
+  numMarkId?: string;
+  tags?: string[];
 }
 
 export enum ConnectionState {
@@ -56,4 +59,20 @@ export interface CloudFile {
   createTime: string;
   state: 'STATE_UNSPECIFIED' | 'PROCESSING' | 'ACTIVE' | 'FAILED';
   uri: string;
+}
+
+// --- LOREPACK SCHEMA (MYTHOS.LOREPACK.v1) ---
+export interface LorePackHeader {
+  schema: "MYTHOS.LOREPACK.v1";
+  id: string;
+  agentId: string;
+  handle: string;
+  version: number;
+  timestamp: number;
+  description?: string;
+}
+
+export interface LorePack {
+  header: LorePackHeader;
+  sacred_archive: KnowledgeDoc[];
 }

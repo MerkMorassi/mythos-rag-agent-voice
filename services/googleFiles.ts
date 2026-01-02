@@ -16,7 +16,8 @@ export const uploadCloudFile = async (file: File): Promise<CloudFile> => {
     }
   });
 
-  return uploadResult.file as unknown as CloudFile;
+  // The SDK returns the File object directly
+  return uploadResult as unknown as CloudFile;
 };
 
 export const listCloudFiles = async (): Promise<CloudFile[]> => {
@@ -26,16 +27,21 @@ export const listCloudFiles = async (): Promise<CloudFile[]> => {
   
   try {
     const response = await ai.files.list();
-    // Map response to our CloudFile type
-    return (response.files || []).map((f: any) => ({
-      name: f.name,
-      displayName: f.displayName || 'Untitled',
-      mimeType: f.mimeType,
-      sizeBytes: f.sizeBytes,
-      createTime: f.createTime,
-      state: f.state,
-      uri: f.uri
-    }));
+    const files: CloudFile[] = [];
+    
+    // The list method returns a Pager which is an async iterable
+    for await (const f of response) {
+      files.push({
+        name: f.name,
+        displayName: f.displayName || 'Untitled',
+        mimeType: f.mimeType,
+        sizeBytes: f.sizeBytes,
+        createTime: f.createTime,
+        state: f.state as any,
+        uri: f.uri
+      });
+    }
+    return files;
   } catch (e) {
     console.error("Failed to list cloud files", e);
     return [];
