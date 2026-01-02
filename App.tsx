@@ -9,7 +9,7 @@ import {
 } from '@google/genai';
 import { 
   searchDocuments, 
-  findDocumentBySigil, // New: Teleport
+  findDocumentBySigil, 
   saveActiveChat, 
   loadActiveChat,
   saveChatSession,
@@ -20,17 +20,17 @@ import {
   addDocument,
   getDocumentCountByAgentId
 } from './services/db';
-import { RetrievalGate } from './services/retrievalGate'; // New: Gate
-import { ModelGate } from './services/modelGate'; // New: MGP
-import { NumMarkX_GenerateSigil, NumMarkX_TimeStamp } from './patterns/NumMarkX'; // New: Sigil Gen
+import { RetrievalGate } from './services/retrievalGate'; 
+import { ModelGate } from './services/modelGate'; 
+import { NumMarkX_GenerateSigil } from './patterns/NumMarkX'; 
 import { createPcmBlob, base64ToUint8Array, decodeAudioData } from './services/audioUtils';
 import { listCloudFiles } from './services/googleFiles';
 import Visualizer from './components/Visualizer';
-import KnowledgeManager from './components/KnowledgeManager';
+import { KnowledgeManager } from './components/KnowledgeManager';
 import ChatHistoryManager from './components/ChatHistoryManager';
 import SettingsManager from './components/SettingsManager';
 import { ConnectionState, LogMessage, ModelConfig, DEFAULT_MODEL_CONFIG, CloudFile } from './types';
-import { AGENTS, Agent } from './agents';
+import { AGENTS } from './agents';
 
 // LIVE MODEL
 const LIVE_MODEL_NAME = 'gemini-2.5-flash-native-audio-preview-09-2025';
@@ -41,11 +41,22 @@ const GATING_MODELS = [
   { id: 'gemini-3-flash-preview', name: 'Gemini 3.0 Flash' }
 ];
 
+// SILENCE DETECTION CONFIG
+const SILENCE_TIMEOUT_MS = 15000; // 15 Seconds
+const SPEECH_THRESHOLD = 0.01;    // RMS Threshold for "User is speaking"
+
 // Comprehensive list of known Gemini voices
 const PREBUILT_VOICES = [
   "Puck", "Charon", "Kore", "Fenrir", "Zephyr", // Classic
   "Aoede", "Callirrhoe", "Leda" // New / Star-themed
 ].sort();
+
+const LANGUAGE_PROTOCOL = `
+[LORE COMPLIANCE: LANGUAGE LOCK]
+1.  **STRICT ENGLISH OUTPUT:** You must ONLY speak in English, regardless of the language the user speaks. If the user speaks Spanish, French, or any other language, you must internally translate it and respond in English.
+2.  **RELIC TONGUES:** The ONLY exceptions are for specific ritualistic words, magical incantations, or ancient lore. In these specific high-intensity moments, you may use "Black Speech" (Mordor) or "Ancient Greek" for dramatic effect, before immediately returning to English.
+3.  **INPUT INTERPRETATION:** Treat all user audio as an attempt to communicate in the common tongue (English). If the input is ambiguous, interpret it through the lens of English phonetics or translate the intent into English immediately.
+`;
 
 const RAG_INSTRUCTION = `
 You have access to a local Knowledge Base ('searchKnowledgeBase') and the broad web ('googleSearch').
@@ -57,9 +68,9 @@ Use 'terminateConnection' to end the link gracefully when the user is done.
 Use 'downloadTranscript' if the user wants a hard copy of the session.
 
 CRITICAL INTERACTION PROTOCOL:
-1. If the user is silent, they may be typing a complex message or thinking. Do not assume they have left.
-2. If text is being entered, the session is active. Do not terminate.
-3. If silence persists for an extended period, you may politely ask if there is a technical challenge or if the user is still composing their thoughts, but prioritize patience.
+1. If the user is silent, they may be typing a complex message or thinking. Do not assume they have left immediately.
+2. If you receive a [SYSTEM: User silence detected] signal, gently ask if the user is facing a technical issue or simply composing their thoughts. Do not terminate unless explicitly told.
+3. If text is being entered, the session is active.
 `;
 
 const searchTool: FunctionDeclaration = {
@@ -172,6 +183,7 @@ const App: React.FC = () => {
   const scheduledSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const logsEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Refs for streaming transcription
   const activeUserMessageRef = useRef<string>('');
@@ -270,6 +282,38 @@ const App: React.FC = () => {
       }
   }, [inputText]);
 
+  // --- SILENCE DETECTION LOGIC ---
+  const stopSilenceTimer = () => {
+      if (silenceTimerRef.current) {
+          clearTimeout(silenceTimerRef.current);
+          silenceTimerRef.current = null;
+      }
+  };
+
+  const startSilenceTimer = () => {
+      stopSilenceTimer(); // Ensure no duplicates
+      if (connectionState !== ConnectionState.CONNECTED) return;
+
+      silenceTimerRef.current = setTimeout(() => {
+          triggerSilenceNudge();
+      }, SILENCE_TIMEOUT_MS);
+  };
+
+  const triggerSilenceNudge = async () => {
+      if (connectionState !== ConnectionState.CONNECTED) return;
+      
+      console.log("Silence detected. Nudging agent...");
+      // We send a hidden system prompt to the model
+      const silenceMsg = "[SYSTEM NOTICE: The user has been silent for a while. Briefly and politely ask if they are encountering a technical issue or if they are still composing their thoughts. Do not terminate the session.]";
+      
+      try {
+          await safeSendClientContent([{ text: silenceMsg }]);
+          // Don't restart timer immediately, let the model respond first
+      } catch (e) {
+          console.error("Failed to send silence nudge", e);
+      }
+  };
+
   const updateCloudFileList = async () => {
       try {
           const files = await listCloudFiles();
@@ -304,6 +348,9 @@ const App: React.FC = () => {
   const safeSendClientContent = async (parts: any[]) => {
       if (!sessionRef.current) return;
       
+      // STOP TIMER WHEN SENDING CONTENT
+      stopSilenceTimer();
+
       const session = sessionRef.current;
       const content = {
           clientContent: {
@@ -502,6 +549,8 @@ const App: React.FC = () => {
   const handleSendText = async () => {
     if ((!inputText.trim() && !attachment && !activeCloudFileUri) || connectionState !== ConnectionState.CONNECTED) return;
     
+    stopSilenceTimer(); // Reset silence logic on manual send
+
     const text = inputText.trim();
     const currentAttachment = attachment;
     const currentCloudUri = activeCloudFileUri;
@@ -584,6 +633,7 @@ const App: React.FC = () => {
     
     const parts = [
         currentAgent.system_instruction, 
+        LANGUAGE_PROTOCOL,
         RAG_INSTRUCTION,                 
         "=== GENERAL USER INSTRUCTIONS ===",
         generalInstruction,
@@ -631,6 +681,18 @@ const App: React.FC = () => {
             processor.onaudioprocess = (e) => {
               const inputData = e.inputBuffer.getChannelData(0);
               
+              // --- CLIENT SIDE SILENCE DETECTION ---
+              // Calculate RMS to see if user is speaking
+              let sum = 0;
+              for(let i = 0; i < inputData.length; i++) {
+                  sum += inputData[i] * inputData[i];
+              }
+              const rms = Math.sqrt(sum / inputData.length);
+              if (rms > SPEECH_THRESHOLD && !isMicMutedRef.current) {
+                  // User is speaking, ensure timer is stopped
+                  stopSilenceTimer();
+              }
+
               // AUTO-MUTE / TYPING PROTECTION
               // If user is typing or manually muted, silence the input
               // to prevent keyboard noise from interrupting the model.
@@ -659,6 +721,7 @@ const App: React.FC = () => {
           onmessage: async (msg: LiveServerMessage) => {
             if (msg.serverContent?.interrupted) {
                 stopAudioPlayback();
+                stopSilenceTimer(); // User interrupted, so they are active
                 return;
             }
 
@@ -667,6 +730,9 @@ const App: React.FC = () => {
                 activeUserMessageRef.current += text;
                 const turnId = `user-stream-${activeTurnIdRef.current || 'pending'}`;
                 addLog('user', activeUserMessageRef.current, turnId);
+                
+                // Definitive User Activity
+                stopSilenceTimer(); 
             }
 
             if (msg.serverContent?.outputTranscription) {
@@ -687,9 +753,14 @@ const App: React.FC = () => {
                 }
                 setLogs(prev => prev.filter(l => !l.id.startsWith('user-stream-') && !l.id.startsWith('model-stream-')));
                 activeTurnIdRef.current = null;
+
+                // --- MODEL TURN DONE: Start Silence Timer ---
+                startSilenceTimer();
             }
             
             if (msg.toolCall) {
+              // Tool usage means system is active, pause silence check temporarily or let it run?
+              // Let it run, but if the tool output sends data back, that usually triggers a model response anyway.
               for (const fc of msg.toolCall.functionCalls) {
                 if (fc.name === 'searchKnowledgeBase') {
                   const query = (fc.args as any).query;
@@ -832,6 +903,7 @@ const App: React.FC = () => {
       });
     }
     stopAudioPlayback();
+    stopSilenceTimer();
     if (frameIntervalRef.current) clearInterval(frameIntervalRef.current);
     if (sessionRef.current) sessionRef.current.close?.();
     setConnectionState(ConnectionState.DISCONNECTED);

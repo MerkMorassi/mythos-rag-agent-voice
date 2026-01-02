@@ -12,7 +12,7 @@ import {
 import { uploadCloudFile, listCloudFiles, deleteCloudFile } from '../services/googleFiles';
 import { IngestionService, IngestionResult } from '../services/ingestion';
 import { NumMarkX_GenerateSigil } from '../patterns/NumMarkX';
-import { SyncBridge } from '../services/syncBridge'; // NEW
+import { SyncBridge } from '../services/syncBridge';
 
 interface KnowledgeManagerProps {
   onUpdate: () => void;
@@ -27,7 +27,6 @@ const FileIcon = ({ typeStr }: { typeStr: string }) => {
   const style = { width: '20px', height: '20px', strokeWidth: 1.5, flexShrink: 0 };
   
   if (t.includes('image') || t.endsWith('.png') || t.endsWith('.jpg') || t.endsWith('.jpeg') || t.endsWith('.webp')) {
-    // Image Icon (Purple)
     return (
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#c084fc" strokeLinecap="round" strokeLinejoin="round" style={style}>
         <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
@@ -38,7 +37,6 @@ const FileIcon = ({ typeStr }: { typeStr: string }) => {
   }
   
   if (t.includes('pdf') || t.endsWith('.pdf')) {
-    // PDF Icon (Red-ish)
     return (
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#f87171" strokeLinecap="round" strokeLinejoin="round" style={style}>
         <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
@@ -51,7 +49,6 @@ const FileIcon = ({ typeStr }: { typeStr: string }) => {
   }
 
   if (t.includes('json') || t.endsWith('.json') || t.includes('javascript') || t.endsWith('.js') || t.endsWith('.ts')) {
-    // Code/JSON Icon (Yellow/Green)
     return (
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#facc15" strokeLinecap="round" strokeLinejoin="round" style={style}>
         <polyline points="16 18 22 12 16 6"></polyline>
@@ -61,7 +58,6 @@ const FileIcon = ({ typeStr }: { typeStr: string }) => {
   }
 
   if (t.includes('video') || t.endsWith('.mp4') || t.endsWith('.mov') || t.endsWith('.webm')) {
-    // Video Icon (Blue)
     return (
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" strokeLinecap="round" strokeLinejoin="round" style={style}>
         <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect>
@@ -77,7 +73,6 @@ const FileIcon = ({ typeStr }: { typeStr: string }) => {
   }
 
   if (t.includes('audio') || t.endsWith('.mp3') || t.endsWith('.wav')) {
-    // Audio Icon (Pink)
     return (
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#f472b6" strokeLinecap="round" strokeLinejoin="round" style={style}>
         <path d="M9 18V5l12-2v13"></path>
@@ -87,7 +82,6 @@ const FileIcon = ({ typeStr }: { typeStr: string }) => {
     );
   }
 
-  // Default Text Icon (Gray)
   return (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" strokeLinecap="round" strokeLinejoin="round" style={style}>
       <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
@@ -99,7 +93,7 @@ const FileIcon = ({ typeStr }: { typeStr: string }) => {
   );
 };
 
-const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAgentId }) => {
+export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAgentId }) => {
   const [activeTab, setActiveTab] = useState<'local' | 'cloud'>('local');
   const [isOpen, setIsOpen] = useState(false);
   
@@ -111,7 +105,7 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
   // Ingestion State
   const [importStats, setImportStats] = useState<IngestionResult['stats'] | null>(null);
   const [pendingImportData, setPendingImportData] = useState<KnowledgeDoc[] | null>(null);
-  const [pendingHeader, setPendingHeader] = useState<any>(null); // For display
+  const [pendingHeader, setPendingHeader] = useState<any>(null); 
   
   const [uploadProgress, setUploadProgress] = useState<{
     fileName: string;
@@ -159,7 +153,6 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
       if (activeTab === 'local') {
           setDocs([]); 
           fetchDocs();
-          // Check Vault Link
           SyncBridge.checkHeartbeat().then(s => setServerOnline(s.online));
       } else {
           fetchCloudFiles();
@@ -179,7 +172,6 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
       }
   };
 
-  // --- SYNC LOGIC ---
   const handleVaultSync = async () => {
       if (!serverOnline) return;
       if (!window.confirm(`Push ${docs.length} nodes to Z: Drive Vault (Orchestrator)? This overwrites the Agent's file on the server.`)) return;
@@ -200,8 +192,6 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
           setIsProcessing(false);
       }
   };
-
-  // --- LOCAL VECTOR LOGIC ---
 
   const chunkText = (text: string): string[] => {
     const CHUNK_SIZE = 1500;
@@ -259,8 +249,6 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
                 for (let k = 0; k < batchChunks.length; k++) {
                     const embedding = embeddings?.[k]?.values;
                     const chunkContent = batchChunks[k];
-                    
-                    // GENERATE NUMMARK SIGIL
                     const sigil = NumMarkX_GenerateSigil(chunkContent);
 
                     await addDocument({
@@ -277,7 +265,6 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
                 console.error("Batch embedding failed, saving without vectors", err);
                 for (let k = 0; k < batchChunks.length; k++) {
                     const chunkContent = batchChunks[k];
-                    // GENERATE NUMMARK SIGIL
                     const sigil = NumMarkX_GenerateSigil(chunkContent);
                     
                     await addDocument({
@@ -320,13 +307,13 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
 
     try {
         const text = await file.text();
-        // USE INGESTION SERVICE (Already NumMark compliant)
         const result = await IngestionService.parseLorePack(text, currentAgentId);
         
         if (!result.success) {
             throw new Error(result.error || "Parsing failed");
         }
 
+        // Logic check: Mixing agents?
         if (result.header.agentId !== currentAgentId) {
              const confirmMix = window.confirm(`LorePack belongs to ${result.header.agentId}, but you are importing into ${currentAgentId}. Continue? (Docs will be re-assigned)`);
              if (!confirmMix) {
@@ -350,7 +337,6 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
       if (!pendingImportData) return;
       setIsProcessing(true);
       try {
-        // Re-assign agentId to ensure they land in the right bucket in DB
         const taggedData = pendingImportData.map((d: KnowledgeDoc) => ({ ...d, agentId: currentAgentId }));
         await bulkAddDocuments(taggedData);
         await fetchDocs();
@@ -386,8 +372,6 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
     onUpdate();
   };
 
-  // --- CLOUD FILE LOGIC ---
-
   const handleCloudUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
@@ -399,7 +383,6 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
       }
       await fetchCloudFiles();
       showStatus("Files uploaded to Cloud.", 'success');
-      // Trigger parent update to refresh available files in main app
       onUpdate();
     } catch (err: any) {
       console.error(err);
@@ -424,8 +407,6 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
       setIsProcessing(false);
     }
   };
-
-  // --- RENDER HELPERS ---
 
   const calculateETA = () => {
       if (!uploadProgress || uploadProgress.current === 0) return 'Calculating...';
@@ -467,218 +448,228 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
           </button>
         </div>
 
-        {/* TABS */}
-        <div style={{ display: 'flex', borderBottom: '1px solid #333', padding: '0 1.5rem' }}>
-            <button 
-                onClick={() => setActiveTab('local')}
-                style={{ 
-                    padding: '0.75rem 1rem', 
-                    background: 'none', 
-                    border: 'none', 
-                    borderBottom: activeTab === 'local' ? '2px solid #4ade80' : 'none',
-                    color: activeTab === 'local' ? '#eee' : '#666',
-                    cursor: 'pointer',
-                    fontWeight: 'bold',
-                    fontSize: '0.75rem'
-                }}
-            >
-                LOCAL VECTORS (RAG)
-            </button>
-            <button 
-                onClick={() => setActiveTab('cloud')}
-                style={{ 
-                    padding: '0.75rem 1rem', 
-                    background: 'none', 
-                    border: 'none', 
-                    borderBottom: activeTab === 'cloud' ? '2px solid #a78bfa' : 'none',
-                    color: activeTab === 'cloud' ? '#eee' : '#666',
-                    cursor: 'pointer',
-                    fontWeight: 'bold',
-                    fontSize: '0.75rem'
-                }}
-            >
-                CLOUD FILES (CONTEXT)
-            </button>
-        </div>
-
-        <div style={{ padding: '1.5rem', overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: '2rem' }}>
-          
-          {statusMsg && (
-              <div className={`status-banner status-${statusMsg.type}`}>
-                  {statusMsg.text}
-              </div>
-          )}
-
-          {activeTab === 'local' ? (
-              <>
-                {/* LOCAL VECTORS VIEW */}
-                <div className="flex-col">
-                    <span className="section-header-title">INGEST ({currentAgentId})</span>
-                    <label className="btn-file-input">
-                    <input 
-                        type="file" 
-                        accept=".txt,.md,.json" 
-                        onChange={handleFileUpload} 
-                        ref={fileInputRef}
-                        className="hidden" 
-                        disabled={isProcessing}
-                        multiple
-                    />
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem' }}>
-                        <span style={{ fontSize: '0.875rem', fontWeight: 'bold', color: '#a3a3a3' }}>
-                        {isProcessing && uploadProgress ? 'PROCESSING...' : 'DROP .TXT / .MD / .JSON'}
-                        </span>
-                        <span style={{ fontSize: '0.75rem', color: '#666' }}>Auto-chunking & Vector Embedding</span>
+        {/* IMPORT CONFIRMATION SCREEN (Replaces Tabs when active) */}
+        {pendingImportData && importStats && pendingHeader ? (
+            <div style={{ padding: '2rem', flex: 1, display: 'flex', flexDirection: 'column', gap: '1.5rem', justifyContent: 'center', animation: 'fadeIn 0.3s' }}>
+                <div style={{ textAlign: 'center' }}>
+                    <h3 style={{ color: '#4ade80', marginBottom: '0.5rem' }}>IMPORT LOREPACK</h3>
+                    <p style={{ color: '#ccc', fontSize: '0.8rem' }}>Verify content before ingestion.</p>
+                </div>
+                
+                <div className="section-panel" style={{ borderColor: '#4ade80' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '0.5rem', fontSize: '0.85rem' }}>
+                        <div style={{borderBottom: '1px solid #333', paddingBottom:'0.5rem', marginBottom:'0.5rem', fontWeight:'bold', color: '#fff'}}>{pendingHeader.handle}</div>
+                        <div><span style={{color:'#666'}}>NODES:</span> {importStats.total}</div>
+                        <div><span style={{color:'#666'}}>EMBEDDED:</span> <span style={{color: importStats.withVectors > 0 ? '#4ade80' : '#f87171'}}>{importStats.withVectors} / {importStats.total}</span></div>
+                        <div><span style={{color:'#666'}}>SIGILS:</span> <span style={{color: importStats.existingSigils > 0 ? '#4ade80' : '#ccc'}}>{importStats.existingSigils} Existing</span></div>
+                        <div><span style={{color:'#666'}}>AVG SIZE:</span> {importStats.avgSize} chars</div>
                     </div>
-                    </label>
-
-                    {uploadProgress && (
-                        <div className="flex-col" style={{ gap: '0.25rem' }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', color: '#a3a3a3' }}>
-                                <span>{uploadProgress.fileName}</span>
-                                <span>{uploadProgress.current}/{uploadProgress.total}</span>
-                            </div>
-                            <div style={{ width: '100%', height: '4px', background: '#333' }}>
-                                <div style={{ width: `${(uploadProgress.current / uploadProgress.total) * 100}%`, height: '100%', background: '#fff' }} />
-                            </div>
-                            <div style={{ textAlign: 'right', fontSize: '0.7rem', color: '#666' }}>ETA: {calculateETA()}</div>
-                        </div>
-                    )}
                 </div>
 
-                {importStats && pendingHeader && (
-                    <div className="section-panel" style={{ borderColor: '#666' }}>
-                        <div className="section-header"><span className="section-header-title">LOREPACK VERIFIED</span></div>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '0.2rem', fontSize: '0.75rem', marginBottom: '1rem', color: '#ccc' }}>
-                            <div style={{color: '#4ade80'}}><strong>AGENT:</strong> {pendingHeader.handle}</div>
-                            <div><strong>SCHEMA:</strong> {pendingHeader.schema || 'Legacy'}</div>
-                            <div><strong>NODES:</strong> {importStats.total} ({importStats.withVectors} embedded)</div>
-                            <div><strong>AVG SIZE:</strong> {importStats.avgSize} chars</div>
-                        </div>
-                        <div style={{ display: 'flex', gap: '0.5rem' }}>
-                            <button onClick={executeImport} className="btn btn-ingest" disabled={isProcessing}>IMPORT</button>
-                            <button onClick={() => { setPendingImportData(null); setImportStats(null); }} className="btn btn-secondary">CANCEL</button>
-                        </div>
+                <div className="flex-col" style={{ gap: '1rem' }}>
+                    <button onClick={executeImport} className="btn btn-ingest" disabled={isProcessing} style={{ padding: '1rem', fontSize: '1rem' }}>
+                        CONFIRM IMPORT
+                    </button>
+                    <button onClick={() => { setPendingImportData(null); setImportStats(null); }} className="btn btn-secondary">
+                        CANCEL
+                    </button>
+                </div>
+            </div>
+        ) : (
+            <>
+                {/* TABS */}
+                <div style={{ display: 'flex', borderBottom: '1px solid #333', padding: '0 1.5rem' }}>
+                    <button 
+                        onClick={() => setActiveTab('local')}
+                        style={{ 
+                            padding: '0.75rem 1rem', 
+                            background: 'none', 
+                            border: 'none', 
+                            borderBottom: activeTab === 'local' ? '2px solid #4ade80' : 'none',
+                            color: activeTab === 'local' ? '#eee' : '#666',
+                            cursor: 'pointer',
+                            fontWeight: 'bold',
+                            fontSize: '0.75rem'
+                        }}
+                    >
+                        LOCAL VECTORS (RAG)
+                    </button>
+                    <button 
+                        onClick={() => setActiveTab('cloud')}
+                        style={{ 
+                            padding: '0.75rem 1rem', 
+                            background: 'none', 
+                            border: 'none', 
+                            borderBottom: activeTab === 'cloud' ? '2px solid #a78bfa' : 'none',
+                            color: activeTab === 'cloud' ? '#eee' : '#666',
+                            cursor: 'pointer',
+                            fontWeight: 'bold',
+                            fontSize: '0.75rem'
+                        }}
+                    >
+                        CLOUD FILES (CONTEXT)
+                    </button>
+                </div>
+
+                <div style={{ padding: '1.5rem', overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: '2rem' }}>
+                
+                {statusMsg && (
+                    <div className={`status-banner status-${statusMsg.type}`}>
+                        {statusMsg.text}
                     </div>
                 )}
 
-                <div className="flex-col">
-                     <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <span className="section-header-title">STORED ({filteredDocs.length})</span>
-                        <div style={{ display: 'flex', gap: '0.5rem' }}>
-                            {serverOnline ? (
-                                <button 
-                                    onClick={handleVaultSync} 
-                                    className="btn btn-secondary" 
-                                    style={{ padding: '0.4rem', fontSize: '0.6rem', borderColor: '#4ade80', color: '#4ade80' }}
-                                    title="Backup Sovereign Data to Z: Drive Vault"
-                                >
-                                    SYNC VAULT (Z:)
-                                </button>
-                            ) : (
-                                <span style={{ fontSize: '0.6rem', color: '#666', alignSelf: 'center', border: '1px solid #333', padding: '0.4rem' }}>VAULT OFFLINE</span>
-                            )}
-                            <label className="btn btn-secondary" style={{ padding: '0.4rem', fontSize: '0.6rem', cursor: 'pointer' }}>
-                                IMPORT LOREPACK
-                                <input type="file" accept=".json" onChange={handleSelectLorePack} ref={importInputRef} className="hidden" />
+                {activeTab === 'local' ? (
+                    <>
+                        <div className="flex-col">
+                            <span className="section-header-title">INGEST ({currentAgentId})</span>
+                            <label className="btn-file-input">
+                            <input 
+                                type="file" 
+                                accept=".txt,.md,.json" 
+                                onChange={handleFileUpload} 
+                                ref={fileInputRef}
+                                className="hidden" 
+                                disabled={isProcessing}
+                                multiple
+                            />
+                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem' }}>
+                                <span style={{ fontSize: '0.875rem', fontWeight: 'bold', color: '#a3a3a3' }}>
+                                {isProcessing && uploadProgress ? 'PROCESSING...' : 'DROP .TXT / .MD / .JSON'}
+                                </span>
+                                <span style={{ fontSize: '0.75rem', color: '#666' }}>Auto-chunking & Vector Embedding</span>
+                            </div>
                             </label>
-                            <button onClick={handlePurgeAll} className="btn btn-danger" style={{ padding: '0.4rem', fontSize: '0.6rem' }}>PURGE ALL</button>
-                        </div>
-                     </div>
-                     <input type="text" placeholder="Filter..." value={filterQuery} onChange={(e) => setFilterQuery(e.target.value)} className="form-input" />
-                     
-                     <div className="flex-col" style={{ gap: '0.5rem' }}>
-                        {paginatedDocs.map(doc => (
-                            <div key={doc.id} className="section-panel" style={{ padding: '0.75rem' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', overflow: 'hidden' }}>
-                                        <FileIcon typeStr={doc.title} />
-                                        <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                                            <span style={{ fontWeight: 'bold', fontSize: '0.75rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{doc.title}</span>
-                                            {doc.numMarkId && <span style={{ fontSize: '0.6rem', color: '#666' }}>{doc.numMarkId}</span>}
-                                        </div>
-                                    </div>
-                                    <button onClick={() => handleDelete(doc.id)} style={{ background: 'none', border: 'none', color: '#666', marginLeft: '0.5rem' }}>[X]</button>
-                                </div>
-                                <p style={{ color: '#888', fontSize: '0.7rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginTop: '0.25rem', paddingLeft: 'calc(20px + 0.75rem)' }}>{doc.content}</p>
-                            </div>
-                        ))}
-                     </div>
-                     
-                     {totalPages > 1 && (
-                        <div style={{ display: 'flex', justifyContent: 'center', gap: '0.5rem' }}>
-                            <button onClick={() => setCurrentPage(p => Math.max(1, p-1))} className="btn btn-secondary" disabled={currentPage === 1}>&lt;</button>
-                            <span style={{ fontSize: '0.75rem', alignSelf: 'center' }}>{currentPage} / {totalPages}</span>
-                            <button onClick={() => setCurrentPage(p => Math.min(totalPages, p+1))} className="btn btn-secondary" disabled={currentPage === totalPages}>&gt;</button>
-                        </div>
-                     )}
-                </div>
-              </>
-          ) : (
-              <>
-                {/* CLOUD FILES VIEW */}
-                <div className="flex-col">
-                    <span className="section-header-title">UPLOAD TO GOOGLE CLOUD</span>
-                    <label className="btn-file-input" style={{ borderColor: '#a78bfa', color: '#a78bfa' }}>
-                        <input 
-                            type="file" 
-                            onChange={handleCloudUpload} 
-                            ref={cloudFileInputRef}
-                            className="hidden" 
-                            disabled={isProcessing}
-                            multiple
-                        />
-                         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem' }}>
-                            <span style={{ fontSize: '0.875rem', fontWeight: 'bold' }}>
-                                {isProcessing ? 'UPLOADING...' : 'DROP LARGE FILES (PDF/CSV/TXT/VIDEO)'}
-                            </span>
-                            <span style={{ fontSize: '0.75rem', color: '#a78bfa' }}>Supports 2M+ Context Window via Gating Model</span>
-                        </div>
-                    </label>
-                </div>
 
-                <div className="flex-col">
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                         <span className="section-header-title">CLOUD FILES ({cloudFiles.length})</span>
-                         <button onClick={fetchCloudFiles} className="btn btn-secondary" style={{ padding: '0.25rem 0.5rem', fontSize: '0.7rem' }}>REFRESH</button>
-                    </div>
-                    
-                    {cloudFiles.length === 0 ? (
-                        <div className="section-panel" style={{ textAlign: 'center', padding: '2rem' }}>
-                            <p style={{ color: '#666', fontSize: '0.75rem' }}>NO CLOUD FILES FOUND</p>
-                        </div>
-                    ) : (
-                        cloudFiles.map(file => (
-                            <div key={file.name} className="section-panel" style={{ padding: '0.75rem', borderColor: file.state === 'ACTIVE' ? '#a78bfa' : '#333' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flex: 1 }}>
-                                        <FileIcon typeStr={file.mimeType} />
-                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                                            <span style={{ fontWeight: 'bold', fontSize: '0.75rem', color: '#eee' }}>{file.displayName}</span>
-                                            <span style={{ fontSize: '0.65rem', color: '#666', fontFamily: 'monospace' }}>
-                                                {(parseInt(file.sizeBytes) / 1024 / 1024).toFixed(2)} MB • {file.state}
-                                            </span>
-                                        </div>
+                            {uploadProgress && (
+                                <div className="flex-col" style={{ gap: '0.25rem' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', color: '#a3a3a3' }}>
+                                        <span>{uploadProgress.fileName}</span>
+                                        <span>{uploadProgress.current}/{uploadProgress.total}</span>
                                     </div>
-                                    <button 
-                                        onClick={() => handleDeleteCloudFile(file.name)}
-                                        style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', marginLeft: '0.5rem' }}
-                                        title="Delete from Cloud"
-                                    >
-                                        [DEL]
-                                    </button>
+                                    <div style={{ width: '100%', height: '4px', background: '#333' }}>
+                                        <div style={{ width: `${(uploadProgress.current / uploadProgress.total) * 100}%`, height: '100%', background: '#fff' }} />
+                                    </div>
+                                    <div style={{ textAlign: 'right', fontSize: '0.7rem', color: '#666' }}>ETA: {calculateETA()}</div>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="flex-col">
+                            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                <span className="section-header-title">STORED ({filteredDocs.length})</span>
+                                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                    {serverOnline ? (
+                                        <button 
+                                            onClick={handleVaultSync} 
+                                            className="btn btn-secondary" 
+                                            style={{ padding: '0.4rem', fontSize: '0.6rem', borderColor: '#4ade80', color: '#4ade80' }}
+                                            title="Backup Sovereign Data to Z: Drive Vault"
+                                        >
+                                            SYNC VAULT (Z:)
+                                        </button>
+                                    ) : (
+                                        <span style={{ fontSize: '0.6rem', color: '#666', alignSelf: 'center', border: '1px solid #333', padding: '0.4rem' }}>VAULT OFFLINE</span>
+                                    )}
+                                    <label className="btn btn-secondary" style={{ padding: '0.4rem', fontSize: '0.6rem', cursor: 'pointer' }}>
+                                        IMPORT LOREPACK
+                                        <input type="file" accept=".json" onChange={handleSelectLorePack} ref={importInputRef} className="hidden" />
+                                    </label>
+                                    <button onClick={handlePurgeAll} className="btn btn-danger" style={{ padding: '0.4rem', fontSize: '0.6rem' }}>PURGE ALL</button>
                                 </div>
                             </div>
-                        ))
-                    )}
-                </div>
-              </>
-          )}
+                            <input type="text" placeholder="Filter..." value={filterQuery} onChange={(e) => setFilterQuery(e.target.value)} className="form-input" />
+                            
+                            <div className="flex-col" style={{ gap: '0.5rem' }}>
+                                {paginatedDocs.map(doc => (
+                                    <div key={doc.id} className="section-panel" style={{ padding: '0.75rem' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', overflow: 'hidden' }}>
+                                                <FileIcon typeStr={doc.title} />
+                                                <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                                                    <span style={{ fontWeight: 'bold', fontSize: '0.75rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{doc.title}</span>
+                                                    {doc.numMarkId && <span style={{ fontSize: '0.6rem', color: '#666' }}>{doc.numMarkId}</span>}
+                                                </div>
+                                            </div>
+                                            <button onClick={() => handleDelete(doc.id)} style={{ background: 'none', border: 'none', color: '#666', marginLeft: '0.5rem' }}>[X]</button>
+                                        </div>
+                                        <p style={{ color: '#888', fontSize: '0.7rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginTop: '0.25rem', paddingLeft: 'calc(20px + 0.75rem)' }}>{doc.content}</p>
+                                    </div>
+                                ))}
+                            </div>
+                            
+                            {totalPages > 1 && (
+                                <div style={{ display: 'flex', justifyContent: 'center', gap: '0.5rem' }}>
+                                    <button onClick={() => setCurrentPage(p => Math.max(1, p-1))} className="btn btn-secondary" disabled={currentPage === 1}>&lt;</button>
+                                    <span style={{ fontSize: '0.75rem', alignSelf: 'center' }}>{currentPage} / {totalPages}</span>
+                                    <button onClick={() => setCurrentPage(p => Math.min(totalPages, p+1))} className="btn btn-secondary" disabled={currentPage === totalPages}>&gt;</button>
+                                </div>
+                            )}
+                        </div>
+                    </>
+                ) : (
+                    <>
+                        <div className="flex-col">
+                            <span className="section-header-title">UPLOAD TO GOOGLE CLOUD</span>
+                            <label className="btn-file-input" style={{ borderColor: '#a78bfa', color: '#a78bfa' }}>
+                                <input 
+                                    type="file" 
+                                    onChange={handleCloudUpload} 
+                                    ref={cloudFileInputRef}
+                                    className="hidden" 
+                                    disabled={isProcessing}
+                                    multiple
+                                />
+                                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem' }}>
+                                    <span style={{ fontSize: '0.875rem', fontWeight: 'bold' }}>
+                                        {isProcessing ? 'UPLOADING...' : 'DROP LARGE FILES (PDF/CSV/TXT/VIDEO)'}
+                                    </span>
+                                    <span style={{ fontSize: '0.75rem', color: '#a78bfa' }}>Supports 2M+ Context Window via Gating Model</span>
+                                </div>
+                            </label>
+                        </div>
 
-        </div>
+                        <div className="flex-col">
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <span className="section-header-title">CLOUD FILES ({cloudFiles.length})</span>
+                                <button onClick={fetchCloudFiles} className="btn btn-secondary" style={{ padding: '0.25rem 0.5rem', fontSize: '0.7rem' }}>REFRESH</button>
+                            </div>
+                            
+                            {cloudFiles.length === 0 ? (
+                                <div className="section-panel" style={{ textAlign: 'center', padding: '2rem' }}>
+                                    <p style={{ color: '#666', fontSize: '0.75rem' }}>NO CLOUD FILES FOUND</p>
+                                </div>
+                            ) : (
+                                cloudFiles.map(file => (
+                                    <div key={file.name} className="section-panel" style={{ padding: '0.75rem', borderColor: file.state === 'ACTIVE' ? '#a78bfa' : '#333' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flex: 1 }}>
+                                                <FileIcon typeStr={file.mimeType} />
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                                                    <span style={{ fontWeight: 'bold', fontSize: '0.75rem', color: '#eee' }}>{file.displayName}</span>
+                                                    <span style={{ fontSize: '0.65rem', color: '#666', fontFamily: 'monospace' }}>
+                                                        {(parseInt(file.sizeBytes) / 1024 / 1024).toFixed(2)} MB • {file.state}
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            <button 
+                                                onClick={() => handleDeleteCloudFile(file.name)}
+                                                style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', marginLeft: '0.5rem' }}
+                                                title="Delete from Cloud"
+                                            >
+                                                [DEL]
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    </>
+                )}
+                </div>
+            </>
+        )}
       </div>
     </div>
   );
 };
-
-export default KnowledgeManager;

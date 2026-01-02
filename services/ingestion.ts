@@ -1,6 +1,6 @@
 
 import { KnowledgeDoc, LorePack, LorePackHeader } from '../types';
-import { NumMarkX_GenerateHeader, NumMarkX_GenerateID, NumMarkX_TimeStamp, NumMarkX_GenerateSigil } from '../patterns/NumMarkX';
+import { NumMarkX_GenerateHeader, NumMarkX_GenerateID, NumMarkX_GenerateSigil } from '../patterns/NumMarkX';
 
 export interface IngestionResult {
     success: boolean;
@@ -11,6 +11,7 @@ export interface IngestionResult {
         total: number;
         withVectors: number;
         avgSize: number;
+        existingSigils: number;
     };
 }
 
@@ -19,7 +20,6 @@ export class IngestionService {
     /**
      * The "Forge" Logic.
      * Parses raw file content (JSON string) and normalizes it into a MYTHOS.LOREPACK.v1 structure.
-     * Harvested from single-chat.html and orchestrator.js
      */
     static async parseLorePack(fileContent: string, defaultAgentId: string = 'UNKNOWN'): Promise<IngestionResult> {
         try {
@@ -35,21 +35,21 @@ export class IngestionService {
             } 
             // 2. HEURISTIC: Check for Standard Object Format (MYTHOS.LOREPACK.v1)
             else if (typeof raw === 'object' && raw !== null) {
-                // Check if it matches orchestrator.js schema or single-chat.html schema
-                if (raw.schema === 'MYTHOS.LOREPACK.v1') {
-                     // Orchestrator format
+                if (raw.schema === 'MYTHOS.LOREPACK.v1' || raw.header) {
+                     // Orchestrator format or Standard export
+                     const rawHeader = raw.header || raw;
                      header = {
                          schema: 'MYTHOS.LOREPACK.v1',
-                         id: raw.id || crypto.randomUUID(),
-                         agentId: raw.agentId || defaultAgentId,
-                         handle: raw.handle || raw.agentId || defaultAgentId,
-                         version: raw.version || 1,
-                         timestamp: raw.timestamp || Date.now(),
-                         description: raw.description
+                         id: rawHeader.id || crypto.randomUUID(),
+                         agentId: rawHeader.agentId || defaultAgentId,
+                         handle: rawHeader.handle || rawHeader.agentId || defaultAgentId,
+                         version: rawHeader.version || 1,
+                         timestamp: rawHeader.timestamp || Date.now(),
+                         description: rawHeader.description
                      };
-                     nodes = raw.sacred_archive || [];
+                     nodes = raw.sacred_archive || raw.nodes || [];
                 } else {
-                    // Generic Object (maybe just { nodes: [...] })
+                    // Generic Object fallback
                     console.log("[Forge] Detected Generic Object Format");
                     const extractedNodes = raw.sacred_archive || raw.nodes || raw.data || [];
                     const agentInfo = raw.header || raw.agent || {};
@@ -65,25 +65,34 @@ export class IngestionService {
                 throw new Error("Unknown JSON structure.");
             }
 
+            let existingSigilsCount = 0;
+
             // 3. NORMALIZE NODES
             // Ensure every node conforms to KnowledgeDoc interface
             const normalizedDocs: KnowledgeDoc[] = nodes.map((n: any, index: number) => {
                 const content = n.content || n.text || n.value || '';
                 
-                // Harvest vector from various possible fields (vector, embedding, values)
+                // Harvest vector from various possible fields
                 const embedding = n.embedding || n.vector || n.values;
 
-                // NUMMARK INTEGRATION: Generate Sigil if missing
-                const sigil = n.numMarkId || NumMarkX_GenerateSigil(typeof content === 'string' ? content : 'nodata');
+                // NUMMARK INTEGRATION: 
+                // Check if Sigil already exists to avoid re-calculation ("Auto-ingest twice" prevention)
+                let sigil = n.numMarkId;
+                if (sigil) {
+                    existingSigilsCount++;
+                } else {
+                    // Legacy LorePack: Generate Sigil now
+                    sigil = NumMarkX_GenerateSigil(typeof content === 'string' ? content : 'nodata');
+                }
 
                 return {
                     id: n.id || NumMarkX_GenerateID('LORE'),
-                    agentId: header.agentId, // Force bind to Pack Agent
+                    agentId: header.agentId, // Bind to Pack Header's Agent ID
                     title: n.title || n.name || `Lore Node ${index + 1}`,
                     content: typeof content === 'string' ? content : JSON.stringify(content),
                     embedding: Array.isArray(embedding) ? embedding : undefined,
                     timestamp: n.timestamp || Date.now(),
-                    numMarkId: sigil, // Stamp with NumMark Sigil
+                    numMarkId: sigil, 
                     tags: n.tags || []
                 };
             }).filter(d => d.content && d.content.trim().length > 0);
@@ -95,7 +104,8 @@ export class IngestionService {
                 stats: {
                     total: normalizedDocs.length,
                     withVectors: normalizedDocs.filter(d => d.embedding).length,
-                    avgSize: Math.round(normalizedDocs.reduce((acc, c) => acc + c.content.length, 0) / (normalizedDocs.length || 1))
+                    avgSize: Math.round(normalizedDocs.reduce((acc, c) => acc + c.content.length, 0) / (normalizedDocs.length || 1)),
+                    existingSigils: existingSigilsCount
                 }
             };
 
@@ -106,7 +116,7 @@ export class IngestionService {
                 header: NumMarkX_GenerateHeader('ERROR', 'ERROR'),
                 docs: [],
                 error: e.message,
-                stats: { total: 0, withVectors: 0, avgSize: 0 }
+                stats: { total: 0, withVectors: 0, avgSize: 0, existingSigils: 0 }
             };
         }
     }
