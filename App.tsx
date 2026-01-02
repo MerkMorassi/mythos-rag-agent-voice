@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   GoogleGenAI, 
@@ -56,6 +55,7 @@ const LANGUAGE_PROTOCOL = `
 1.  **STRICT ENGLISH OUTPUT:** You must ONLY speak in English, regardless of the language the user speaks. If the user speaks Spanish, French, or any other language, you must internally translate it and respond in English.
 2.  **RELIC TONGUES:** The ONLY exceptions are for specific ritualistic words, magical incantations, or ancient lore. In these specific high-intensity moments, you may use "Black Speech" (Mordor) or "Ancient Greek" for dramatic effect, before immediately returning to English.
 3.  **INPUT INTERPRETATION:** Treat all user audio as an attempt to communicate in the common tongue (English). If the input is ambiguous, interpret it through the lens of English phonetics or translate the intent into English immediately.
+4.  **ANCIENT TRANSLATION:** For high-fidelity Ancient Greek ("Musiki Dialog"), utilize the 'translateAncientGreek' tool to leverage the OpenL API for philological accuracy.
 `;
 
 const RAG_INSTRUCTION = `
@@ -117,6 +117,19 @@ const saveMemoryTool: FunctionDeclaration = {
       title: { type: Type.STRING, description: 'A short title for this memory.' },
     },
     required: ['text'],
+  },
+};
+
+const translateTool: FunctionDeclaration = {
+  name: 'translateAncientGreek',
+  description: 'Translates text between English and Ancient Greek (Musiki Dialog) using the OpenL.io API.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      text: { type: Type.STRING, description: 'The text to translate.' },
+      target: { type: Type.STRING, description: 'Target language code ("en" for English, "grc" for Ancient Greek).' },
+    },
+    required: ['text', 'target'],
   },
 };
 
@@ -666,7 +679,7 @@ const App: React.FC = () => {
           outputAudioTranscription: {}, 
           inputAudioTranscription: {},  
           speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } },
-          tools: [{ googleSearch: {} }, { functionDeclarations: [searchTool, transcriptTool, terminateTool, updateInstructionsTool, saveMemoryTool] }],
+          tools: [{ googleSearch: {} }, { functionDeclarations: [searchTool, transcriptTool, terminateTool, updateInstructionsTool, saveMemoryTool, translateTool] }],
         },
         callbacks: {
           onopen: async () => {
@@ -759,8 +772,6 @@ const App: React.FC = () => {
             }
             
             if (msg.toolCall) {
-              // Tool usage means system is active, pause silence check temporarily or let it run?
-              // Let it run, but if the tool output sends data back, that usually triggers a model response anyway.
               for (const fc of msg.toolCall.functionCalls) {
                 if (fc.name === 'searchKnowledgeBase') {
                   const query = (fc.args as any).query;
@@ -850,6 +861,43 @@ const App: React.FC = () => {
                   } catch(e) {
                        console.error(e);
                        sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "Failed to save memory." } } }));
+                  }
+                } else if (fc.name === 'translateAncientGreek') {
+                  const { text, target } = fc.args as any;
+                  try {
+                      // Attempt translation via OpenL.io
+                      // Note: This relies on OPENL_API_KEY environment variable. 
+                      // If missing, it fails gracefully to internal translation simulation.
+                      const res = await fetch('https://api.openl.io/translate', {
+                          method: 'POST',
+                          headers: { 
+                              'Content-Type': 'application/json',
+                              'Authorization': `Bearer ${process.env.OPENL_API_KEY || ''}` 
+                          },
+                          body: JSON.stringify({ 
+                              text, 
+                              target_lang: target,
+                              source_lang: target === 'grc' ? 'en' : 'grc'
+                          })
+                      });
+                      
+                      if (res.ok) {
+                          const data = await res.json();
+                          const translated = data.translated_text || data.translation || JSON.stringify(data);
+                          sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: translated } } }));
+                      } else {
+                          throw new Error("OpenL API Unavailable");
+                      }
+                  } catch (e) {
+                      console.warn("Translation API failed, falling back to internal logic", e);
+                      // Fallback: Inform model to use internal knowledge
+                      sessionPromise.then(s => s.sendToolResponse({ 
+                          functionResponses: { 
+                              id: fc.id, 
+                              name: fc.name, 
+                              response: { result: "[API OFFLINE] Please perform the translation using your internal knowledge of Ancient Greek dialects." } 
+                          } 
+                      }));
                   }
                 }
               }

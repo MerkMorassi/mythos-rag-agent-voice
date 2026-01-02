@@ -11,7 +11,8 @@ export default defineConfig(({ mode }) => {
       open: true        // Auto-open browser
     },
     define: {
-      'process.env.API_KEY': JSON.stringify(env.API_KEY)
+      'process.env.API_KEY': JSON.stringify(env.API_KEY),
+      'process.env.OPENL_API_KEY': JSON.stringify(env.OPENL_API_KEY)
     }
   };
 });
