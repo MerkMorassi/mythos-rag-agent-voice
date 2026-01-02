@@ -1,6 +1,7 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ModelConfig, DEFAULT_MODEL_CONFIG } from '../types';
+import { getSavedPromptsByAgentId, SavedPrompt, deleteSavedPrompt } from '../services/db';
 
 interface SettingsManagerProps {
   modelConfig: ModelConfig;
@@ -14,6 +15,7 @@ interface SettingsManagerProps {
   setAgentInstruction: (val: string) => void;
   
   agentName: string;
+  agentId: string; // Needed for loading saved prompts
   
   onSave: () => Promise<void>;
 }
@@ -27,10 +29,37 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
   agentInstruction,
   setAgentInstruction,
   agentName,
+  agentId,
   onSave
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [savedPrompts, setSavedPrompts] = useState<SavedPrompt[]>([]);
+
+  useEffect(() => {
+      if (isOpen && agentId) {
+          loadPrompts();
+      }
+  }, [isOpen, agentId]);
+
+  const loadPrompts = async () => {
+      const prompts = await getSavedPromptsByAgentId(agentId);
+      setSavedPrompts(prompts);
+  };
+
+  const handleDeletePrompt = async (id: string) => {
+      if (window.confirm("Delete this saved prompt?")) {
+          await deleteSavedPrompt(id);
+          loadPrompts();
+      }
+  };
+
+  const handleLoadPrompt = (content: string) => {
+      if (agentInstruction && agentInstruction.trim() !== "") {
+          if (!window.confirm("Replace current instructions with this saved prompt?")) return;
+      }
+      setAgentInstruction(content);
+  };
 
   const handleChange = (key: keyof ModelConfig, value: number) => {
     setModelConfig({ ...modelConfig, [key]: value });
@@ -41,7 +70,6 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
     setIsSaving(true);
     try {
         await onSave();
-        // Don't use alert, parent handles toast
     } catch (e) {
         console.error(e);
     } finally {
@@ -67,7 +95,6 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
   return (
     <div className="modal-overlay">
       <div className="modal-content animate-slide-in-right">
-        {/* Modal content preserved... */}
         
         <div className="section-header" style={{ padding: '1.5rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
@@ -92,9 +119,7 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
           </div>
           
           <form onSubmit={handleSave} className="flex-col" style={{gap: '1.5rem'}}>
-            {/* Form content ... */}
             
-            {/* General Instructions */}
             <div className="flex-col">
               <span className="section-header-title" style={{color: '#a3a3a3'}}>GENERAL SYSTEM INSTRUCTIONS (GLOBAL)</span>
               <textarea
@@ -103,28 +128,49 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
                 onChange={(e) => setGeneralInstruction(e.target.value)}
                 className="form-input"
                 style={{ height: '6rem', resize: 'vertical' }}
-                // Enabled for real-time updates
                 disabled={false} 
               />
             </div>
 
-            {/* Agent Specific Instructions */}
             <div className="flex-col">
               <span className="section-header-title" style={{color: '#a78bfa'}}>AGENT FINE-TUNING: {agentName.toUpperCase()}</span>
+              
+              {/* SAVED PROMPTS LOADER */}
+              {savedPrompts.length > 0 && (
+                  <div style={{ display: 'flex', gap: '0.5rem', overflowX: 'auto', paddingBottom: '0.5rem' }}>
+                      {savedPrompts.map(p => (
+                          <div key={p.id} className="section-panel" style={{ padding: '0.25rem 0.5rem', display: 'flex', gap: '0.5rem', alignItems: 'center', flexShrink: 0 }}>
+                              <span 
+                                onClick={() => handleLoadPrompt(p.content)}
+                                style={{ fontSize: '0.65rem', cursor: 'pointer', color: '#a78bfa', fontWeight: 'bold' }}
+                                title="Click to Load"
+                              >
+                                  {p.name}
+                              </span>
+                              <button 
+                                type="button" 
+                                onClick={() => handleDeletePrompt(p.id)}
+                                style={{ background: 'none', border: 'none', color: '#f87171', fontSize: '0.6rem', cursor: 'pointer' }}
+                              >
+                                  ×
+                              </button>
+                          </div>
+                      ))}
+                  </div>
+              )}
+
               <textarea
                 placeholder={`Specific instructions for ${agentName}...`}
                 value={agentInstruction}
                 onChange={(e) => setAgentInstruction(e.target.value)}
                 className="form-input"
                 style={{ height: '6rem', resize: 'vertical' }}
-                // Enabled for real-time updates
                 disabled={false}
               />
             </div>
 
             <hr style={{ borderColor: '#333', margin: 0 }} />
 
-            {/* Model Configuration Section */}
             <div className="flex-col">
                <div className="section-header" style={{ borderBottom: 'none', padding: 0 }}>
                    <span className="section-header-title">MODEL PARAMETERS ({agentName.toUpperCase()})</span>
@@ -133,64 +179,43 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
               <div className="flex-col">
                   <div className="flex-group" style={{ justifyContent: 'space-between' }}>
                       <span className="section-header-title">TEMPERATURE: {modelConfig.temperature}</span>
-                      <span className="tooltip-container">
-                          <span className="tooltip-trigger" style={{fontSize:'0.7rem', color:'#666'}}>[?]</span>
-                          <span className="tooltip-text">Controls randomness. Higher values (e.g., 1.5) make output more creative/random. Lower values (e.g., 0.2) make it more focused/deterministic.</span>
-                      </span>
+                      <input 
+                          type="range" 
+                          min="0" 
+                          max="2" 
+                          step="0.1" 
+                          value={modelConfig.temperature} 
+                          onChange={(e) => handleChange('temperature', parseFloat(e.target.value))}
+                          disabled={disabled}
+                          style={{ width: '50%' }}
+                      />
                   </div>
-                  <input 
-                      type="range" 
-                      min="0" 
-                      max="2" 
-                      step="0.1" 
-                      value={modelConfig.temperature} 
-                      onChange={(e) => handleChange('temperature', parseFloat(e.target.value))}
-                      // Params can be updated, but standard approach is to lock these during session. 
-                      // For now we lock model params but allow instruction updates.
-                      disabled={disabled}
-                  />
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.6rem', color: '#666' }}>
-                      <span>Precise (0.0)</span>
-                      <span>Creative (2.0)</span>
-                  </div>
-              </div>
-
-              <div className="flex-col">
                   <div className="flex-group" style={{ justifyContent: 'space-between' }}>
                       <span className="section-header-title">TOP P: {modelConfig.topP}</span>
-                      <span className="tooltip-container">
-                          <span className="tooltip-trigger" style={{fontSize:'0.7rem', color:'#666'}}>[?]</span>
-                          <span className="tooltip-text">Nucleus sampling. The model considers the results of the tokens with top_p probability mass.</span>
-                      </span>
+                      <input 
+                          type="range" 
+                          min="0" 
+                          max="1" 
+                          step="0.05" 
+                          value={modelConfig.topP} 
+                          onChange={(e) => handleChange('topP', parseFloat(e.target.value))}
+                          disabled={disabled}
+                          style={{ width: '50%' }}
+                      />
                   </div>
-                  <input 
-                      type="range" 
-                      min="0" 
-                      max="1" 
-                      step="0.05" 
-                      value={modelConfig.topP} 
-                      onChange={(e) => handleChange('topP', parseFloat(e.target.value))}
-                      disabled={disabled}
-                  />
-              </div>
-
-              <div className="flex-col">
                   <div className="flex-group" style={{ justifyContent: 'space-between' }}>
                       <span className="section-header-title">TOP K: {modelConfig.topK}</span>
-                      <span className="tooltip-container">
-                          <span className="tooltip-trigger" style={{fontSize:'0.7rem', color:'#666'}}>[?]</span>
-                          <span className="tooltip-text">Limits the pool of tokens to the top K most likely tokens. Lower values reduce probability of random/nonsensical words.</span>
-                      </span>
+                      <input 
+                          type="range" 
+                          min="1" 
+                          max="100" 
+                          step="1" 
+                          value={modelConfig.topK} 
+                          onChange={(e) => handleChange('topK', parseInt(e.target.value))}
+                          disabled={disabled}
+                          style={{ width: '50%' }}
+                      />
                   </div>
-                  <input 
-                      type="range" 
-                      min="1" 
-                      max="100" 
-                      step="1" 
-                      value={modelConfig.topK} 
-                      onChange={(e) => handleChange('topK', parseInt(e.target.value))}
-                      disabled={disabled}
-                  />
               </div>
 
               <div className="flex-group" style={{ marginTop: '1rem' }}>

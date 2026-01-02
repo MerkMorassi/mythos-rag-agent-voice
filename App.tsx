@@ -18,10 +18,12 @@ import {
   getAgentConfig,
   saveAgentConfig,
   addDocument,
-  getDocumentCountByAgentId
+  getDocumentCountByAgentId,
+  saveSavedPrompt
 } from './services/db';
 import { RetrievalGate } from './services/retrievalGate'; 
 import { ModelGate } from './services/modelGate'; 
+import { ExternalRouter } from './services/externalRouter';
 import { NumMarkX_GenerateSigil } from './patterns/NumMarkX'; 
 import { createPcmBlob, base64ToUint8Array, decodeAudioData } from './services/audioUtils';
 import { listCloudFiles } from './services/googleFiles';
@@ -67,6 +69,9 @@ If the user asks about private docs or indexed lore, check the local DB first.
 If the conversation is a continuation, your memory of previous exchanges is provided in the system context.
 Use 'saveToKnowledgeBase' to persist new facts, memories, or user details to the long-term vector store.
 Use 'updateSystemInstructions' to permanently adjust your own behavioral guidelines or persona settings based on user feedback.
+Use 'savePrompt' to save your CURRENT System Instructions (or a specific persona) to a named slot in the library.
+Use 'optimizePrompt' when the user asks to refine an instruction or make it "AI-friendly". You will act as a Prompt Engineer.
+Use 'routeRequest' if the user asks for Image Generation (FLUX_IMAGE) or specialized/uncensored text generation (EXTERNAL_LLM). This allows you to offload policy-sensitive tasks.
 Use 'updateModelConfiguration' when the user explicitly asks to change your creativity, speed, randomness, or precision (Temperature, TopK, TopP).
 Use 'terminateConnection' to end the link gracefully when the user is done.
 Use 'downloadTranscript' if the user wants a hard copy of the session.
@@ -108,6 +113,46 @@ const updateInstructionsTool: FunctionDeclaration = {
       addition: { type: Type.STRING, description: 'The instruction to append (e.g., "User prefers concise answers").' },
     },
     required: ['addition'],
+  },
+};
+
+const savePromptTool: FunctionDeclaration = {
+  name: 'savePrompt',
+  description: 'Saves the current Agent System Instructions (or a specific text provided) as a named reusable prompt.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      name: { type: Type.STRING, description: 'A short name for this prompt (e.g., "Python Coder", "Storyteller").' },
+      content: { type: Type.STRING, description: 'Optional. The specific prompt text to save. If omitted, saves the CURRENT active instructions.' }
+    },
+    required: ['name'],
+  },
+};
+
+const optimizePromptTool: FunctionDeclaration = {
+  name: 'optimizePrompt',
+  description: 'Acts as a Prompt Engineer to rewrite/optimize instructions for better AI performance. Updates the current session with the optimized version.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      text: { type: Type.STRING, description: 'The raw instruction or text to optimize. If omitted, optimizes the current agent instructions.' }
+    },
+  },
+};
+
+const routeRequestTool: FunctionDeclaration = {
+  name: 'routeRequest',
+  description: 'Routes a request to a specialized external AI model. Use for Image Generation (Flux) or when standard policy restrictions prevent you from fulfilling a safe user request (Offloading).',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      target: { 
+          type: Type.STRING, 
+          description: 'The target model service. Options: "FLUX_IMAGE" (High quality images), "EXTERNAL_LLM" (Uncensored/Specialized text).' 
+      },
+      prompt: { type: Type.STRING, description: 'The prompt to send to the external model.' }
+    },
+    required: ['target', 'prompt'],
   },
 };
 
@@ -376,16 +421,16 @@ const App: React.FC = () => {
     }, 3000);
   };
 
-  const addLog = (type: LogMessage['type'], text: string, id?: string) => {
+  const addLog = (type: LogMessage['type'], text: string, id?: string, attachment?: string) => {
     const logId = id || crypto.randomUUID();
     setLogs(prev => {
         const index = prev.findIndex(l => l.id === logId);
         if (index !== -1) {
             const updated = [...prev];
-            updated[index] = { ...updated[index], text, timestamp: Date.now() };
+            updated[index] = { ...updated[index], text, attachment, timestamp: Date.now() };
             return updated;
         }
-        return [...prev, { id: logId, type, text, timestamp: Date.now() }];
+        return [...prev, { id: logId, type, text, attachment, timestamp: Date.now() }];
     });
     return logId;
   };
@@ -741,7 +786,7 @@ const App: React.FC = () => {
           outputAudioTranscription: {}, 
           inputAudioTranscription: {},  
           speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } },
-          tools: [{ googleSearch: {} }, { functionDeclarations: [searchTool, transcriptTool, terminateTool, updateInstructionsTool, updateConfigTool, saveMemoryTool, translateTool] }],
+          tools: [{ googleSearch: {} }, { functionDeclarations: [searchTool, transcriptTool, terminateTool, updateInstructionsTool, updateConfigTool, saveMemoryTool, translateTool, savePromptTool, optimizePromptTool, routeRequestTool] }],
         },
         callbacks: {
           onopen: async () => {
@@ -907,6 +952,108 @@ const App: React.FC = () => {
                       console.error(e);
                       sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "Failed to update instructions." } } }));
                   }
+                } else if (fc.name === 'savePrompt') {
+                    const name = (fc.args as any).name;
+                    const content = (fc.args as any).content || agentInstruction; 
+                    
+                    try {
+                        await saveSavedPrompt({
+                            id: crypto.randomUUID(),
+                            agentId: selectedAgentId,
+                            name,
+                            content,
+                            timestamp: Date.now()
+                        });
+                        showToast(`Prompt saved: ${name}`, 'success');
+                        sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: `Saved prompt "${name}" successfully.` } } }));
+                    } catch(e) {
+                        console.error(e);
+                        sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "Failed to save prompt." } } }));
+                    }
+                } else if (fc.name === 'optimizePrompt') {
+                    const text = (fc.args as any).text || agentInstruction;
+                    setSystemStatus('Prompt Engineer: Optimizing instructions...');
+                    try {
+                        const res = await ai.models.generateContent({
+                            model: "gemini-2.0-flash-exp",
+                            contents: [{ parts: [{ text: `
+                                You are an expert Prompt Engineer for Large Language Models.
+                                Your task is to rewrite the following prompt to be more structured, clear, and optimized for AI comprehension (chain of thought, role definition, constraints).
+                                
+                                ORIGINAL PROMPT:
+                                "${text}"
+                                
+                                OUTPUT ONLY THE OPTIMIZED PROMPT TEXT. NO MARKDOWN BLOCK.
+                            ` }] }]
+                        });
+                        
+                        const optimized = res.text?.trim() || text;
+                        setAgentInstruction(optimized);
+                        await saveAgentConfig(selectedAgentId, {
+                            instruction: optimized,
+                            modelConfig
+                        });
+                        await safeSendClientContent([{ text: `[SYSTEM] Instructions optimized and updated. New Instructions:\n${optimized}` }]);
+                        setSystemStatus('Prompt Optimized.');
+                        showToast('Instructions Optimized via AI', 'success');
+                        
+                        sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "Prompt optimized and updated successfully." } } }));
+                    } catch(e) {
+                        console.error(e);
+                        sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "Failed to optimize prompt." } } }));
+                    }
+                } else if (fc.name === 'routeRequest') {
+                    const { target, prompt } = fc.args as any;
+                    setSystemStatus(`ROUTER: Offloading to ${target}...`);
+                    
+                    try {
+                        // Call External Router Service
+                        const routeRes = await ExternalRouter.route(target, prompt);
+                        
+                        if (routeRes.success && routeRes.data) {
+                            if (routeRes.type === 'image') {
+                                // Image Response
+                                setSystemStatus(`ROUTER: Image Generated (${target})`);
+                                showToast('External Image Generated', 'success');
+                                
+                                // Inject into chat log with attachment
+                                addLog('model', `[ROUTER] Generated image via ${target}`, undefined, routeRes.data);
+                                
+                                // Tell Gemini we are done
+                                sessionPromise.then(s => s.sendToolResponse({ 
+                                    functionResponses: { 
+                                        id: fc.id, 
+                                        name: fc.name, 
+                                        response: { result: `[SYSTEM] Image generated successfully and displayed to user. You do not need to describe it.` } 
+                                    } 
+                                }));
+                            } else {
+                                // Text Response (Uncensored LLM, etc)
+                                setSystemStatus(`ROUTER: Text Generated (${target})`);
+                                
+                                // We feed the text back to Gemini so it can "speak" it or summarize it
+                                sessionPromise.then(s => s.sendToolResponse({ 
+                                    functionResponses: { 
+                                        id: fc.id, 
+                                        name: fc.name, 
+                                        response: { result: `[EXTERNAL MODEL RESPONSE]: ${routeRes.data}` } 
+                                    } 
+                                }));
+                            }
+                        } else {
+                            throw new Error(routeRes.error || "Unknown Error");
+                        }
+                    } catch (e: any) {
+                        console.error("Router Error:", e);
+                        setSystemStatus('ROUTER: Failed.');
+                        sessionPromise.then(s => s.sendToolResponse({ 
+                            functionResponses: { 
+                                id: fc.id, 
+                                name: fc.name, 
+                                response: { result: `[SYSTEM ERROR] Routing failed: ${e.message}. Inform the user.` } 
+                            } 
+                        }));
+                    }
                 } else if (fc.name === 'updateModelConfiguration') {
                   const { temperature, topP, topK } = fc.args as any;
                   setModelConfig(prev => ({
@@ -932,7 +1079,6 @@ const App: React.FC = () => {
                             config: { taskType: 'RETRIEVAL_DOCUMENT', title }
                         });
                        
-                       // STAMP WITH NUMMARK ON SAVE
                        const sigil = NumMarkX_GenerateSigil(text);
 
                        await addDocument({
@@ -954,7 +1100,6 @@ const App: React.FC = () => {
                 } else if (fc.name === 'translateAncientGreek') {
                   const { text, target } = fc.args as any;
                   try {
-                      // Attempt translation via OpenL.io
                       const res = await fetch('https://api.openl.io/translate', {
                           method: 'POST',
                           headers: { 
@@ -977,7 +1122,6 @@ const App: React.FC = () => {
                       }
                   } catch (e) {
                       console.warn("Translation API failed, falling back to internal logic", e);
-                      // Fallback: Inform model to use internal knowledge
                       sessionPromise.then(s => s.sendToolResponse({ 
                           functionResponses: { 
                               id: fc.id, 
@@ -1192,6 +1336,7 @@ const App: React.FC = () => {
                     agentInstruction={agentInstruction}
                     setAgentInstruction={setAgentInstruction}
                     agentName={currentAgent.handle}
+                    agentId={selectedAgentId}
                     onSave={handleSaveSettings}
                 />
                 <VoiceCommandList /> 
@@ -1230,6 +1375,12 @@ const App: React.FC = () => {
               <div style={{fontSize: '0.7rem', marginBottom: '0.2rem', opacity: 0.8, fontWeight: 'bold'}}>
                 {name} <span style={{opacity:0.5, marginLeft: '0.2rem', fontWeight: 'normal'}}>[{new Date(log.timestamp).toLocaleTimeString()}]</span>
               </div>
+              {/* RENDER ATTACHMENT IMAGE IF PRESENT */}
+              {log.attachment && (
+                  <div style={{ margin: '0.5rem 0' }}>
+                      <img src={log.attachment} alt="Model Output" style={{ maxWidth: '100%', maxHeight: '300px', borderRadius: '4px', border: '1px solid #4ade80' }} />
+                  </div>
+              )}
               {log.text}
             </div>
           );

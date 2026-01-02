@@ -1,20 +1,14 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
 
-# Run and deploy your AI Studio app
+---
+title: MythOS RAG Voice
+emoji: 🌌
+colorFrom: indigo
+colorTo: purple
+sdk: docker
+pinned: false
+---
 
-This contains everything you need to run your app locally.
+# MythOS RAG Voice
 
-View your app in AI Studio: https://ai.studio/apps/drive/10QPZoYFdcUNoPLTGsmqisuqxSI2NbqrO
-
-## Run Locally
-
-**Prerequisites:**  Node.js
-
-
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+Real-time voice conversation with Gemini 2.0, grounded in your own local knowledge base and visual input.
+Supports model offloading (Router) to Flux.1 and other specialized models.
