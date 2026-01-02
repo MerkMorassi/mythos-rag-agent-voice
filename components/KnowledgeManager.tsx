@@ -220,27 +220,61 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
 
     try {
         const text = await file.text();
-        let data;
+        let rawData;
         try {
-            data = JSON.parse(text);
+            rawData = JSON.parse(text);
         } catch (parseError) {
             throw new Error("Invalid JSON file.");
         }
 
-        if (!Array.isArray(data)) {
-            throw new Error("Invalid LorePack format: Expected an array of documents.");
-        }
+        // Handle single object or array
+        const dataArray = Array.isArray(rawData) ? rawData : [rawData];
 
-        const valid = data.every(d => d.id && d.title && d.content);
-        if(!valid) {
-             throw new Error("Invalid LorePack format: Missing required fields (id, title, content) in some documents.");
+        // Legacy / Backward Compatibility Mapper
+        const normalizedData: KnowledgeDoc[] = dataArray.map((d: any) => {
+            // 1. Resolve ID
+            const id = d.id || d.uuid || d._id || (d.metadata && d.metadata.id) || crypto.randomUUID();
+
+            // 2. Resolve Content (Check: content, text, body, metadata.content)
+            let content = d.content || d.text || d.body || d.data || '';
+            if (!content && d.metadata && typeof d.metadata.content === 'string') content = d.metadata.content;
+            if (!content && d.metadata && typeof d.metadata.text === 'string') content = d.metadata.text;
+            
+            // 3. Resolve Title (Check: title, name, label, metadata.title)
+            let title = d.title || d.name || d.label || '';
+            if (!title && d.metadata && d.metadata.title) title = d.metadata.title;
+            if (!title && d.metadata && d.metadata.name) title = d.metadata.name;
+            if (!title && content) title = (typeof content === 'string' ? content : JSON.stringify(content)).substring(0, 50).replace(/\n/g, ' ') + '...';
+            if (!title) title = "Untitled Fragment";
+
+            // 4. Resolve Vectors (Check: embedding, vector, vectors, NumMark-X)
+            let embedding = d.embedding || d.vector || d.vectors || d.values;
+            if (!embedding && d['NumMark-X']) embedding = d['NumMark-X']; // Specific legacy support
+            
+            // Ensure embedding is array of numbers if present
+            if (embedding && (!Array.isArray(embedding) || embedding.length === 0)) {
+                embedding = undefined;
+            }
+
+            return {
+                id,
+                title,
+                content: typeof content === 'string' ? content : JSON.stringify(content),
+                timestamp: d.timestamp || Date.now(),
+                agentId: d.agentId || undefined,
+                embedding: embedding
+            };
+        }).filter(d => d.content && d.content.trim().length > 0);
+
+        if (normalizedData.length === 0) {
+             throw new Error("No valid documents found. Checked fields: content, text, body, metadata.");
         }
 
         // Stats
-        const total = data.length;
-        const withVectors = data.filter((d: any) => d.embedding && Array.isArray(d.embedding)).length;
-        const agents = Array.from(new Set(data.map((d: any) => d.agentId).filter(Boolean))) as string[];
-        const avgContentLength = Math.round(data.reduce((acc, curr) => acc + (curr.content?.length || 0), 0) / total);
+        const total = normalizedData.length;
+        const withVectors = normalizedData.filter(d => d.embedding && Array.isArray(d.embedding)).length;
+        const agents = Array.from(new Set(normalizedData.map(d => d.agentId).filter(Boolean))) as string[];
+        const avgContentLength = Math.round(normalizedData.reduce((acc, curr) => acc + curr.content.length, 0) / total);
 
         setImportStats({
             total,
@@ -248,7 +282,7 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
             agents,
             avgContentLength
         });
-        setPendingImportData(data);
+        setPendingImportData(normalizedData);
 
     } catch (err: any) {
         console.error("LorePack verification failed", err);
@@ -395,7 +429,7 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
             <label className="btn-file-input">
               <input 
                 type="file" 
-                accept=".txt,.md" 
+                accept=".txt,.md,.json" 
                 onChange={handleFileUpload} 
                 ref={fileInputRef}
                 className="hidden" 
@@ -404,7 +438,7 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
               />
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem' }}>
                 <span style={{ fontSize: '0.875rem', fontWeight: 'bold', color: '#a3a3a3' }}>
-                  {isProcessing && uploadProgress ? 'PROCESSING...' : 'DROP .TXT / .MD FILES'}
+                  {isProcessing && uploadProgress ? 'PROCESSING...' : 'DROP .TXT / .MD / .JSON FILES'}
                 </span>
                 <span style={{ fontSize: '0.75rem', color: '#666' }}>Auto-chunking & Vector Embedding</span>
               </div>
