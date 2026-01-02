@@ -21,6 +21,9 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
   const [isOpen, setIsOpen] = useState(false);
   const [sessionName, setSessionName] = useState('');
   const [ingestingId, setIngestingId] = useState<string | null>(null);
+  
+  // Feedback State
+  const [statusMsg, setStatusMsg] = useState<{ text: string, type: 'success' | 'error' | 'info' } | null>(null);
 
   const loadSessions = async () => {
     try {
@@ -28,20 +31,29 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
       setSessions(data);
     } catch (e) {
       console.error("Failed to load sessions", e);
+      showStatus("Failed to load saved sessions.", 'error');
     }
   };
 
   useEffect(() => {
     if (isOpen) {
       loadSessions();
+      setStatusMsg(null);
     }
   }, [isOpen]);
+
+  const showStatus = (text: string, type: 'success' | 'error' | 'info') => {
+      setStatusMsg({ text, type });
+      if (type !== 'error') {
+          setTimeout(() => setStatusMsg(null), 3000);
+      }
+  };
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!sessionName.trim()) return;
     if (currentLogs.length === 0) {
-      alert("No chat history to save.");
+      showStatus("No active chat history to save.", 'error');
       return;
     }
 
@@ -60,10 +72,10 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
       await saveChatSession(newSession);
       setSessionName('');
       await loadSessions();
-      alert("Session saved successfully.");
+      showStatus("Session saved successfully.", 'success');
     } catch (e) {
       console.error("Failed to save session", e);
-      alert("Failed to save session");
+      showStatus("Failed to save session.", 'error');
     }
   };
 
@@ -74,6 +86,7 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
       await loadSessions();
     } catch (e) {
       console.error("Failed to delete session", e);
+      showStatus("Failed to delete session.", 'error');
     }
   };
 
@@ -109,6 +122,7 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
       if(!window.confirm(`This will convert the transcript of "${session.title}" into a Knowledge Base document with vector embeddings for ${currentAgentId}. Continue?`)) return;
       
       setIngestingId(session.id);
+      showStatus("Ingesting... Please wait.", 'info');
       
       try {
           // 1. Format the Transcript
@@ -174,11 +188,11 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
           }
           
           onUpdateKnowledge(); // Trigger visual update in main app
-          alert(`Successfully ingested transcript into ${currentAgentId}'s knowledge base.`);
+          showStatus(`Successfully ingested into ${currentAgentId}'s knowledge base.`, 'success');
 
       } catch(e) {
           console.error("Ingestion failed", e);
-          alert("Failed to ingest transcript.");
+          showStatus("Failed to ingest transcript. Check console.", 'error');
       } finally {
           setIngestingId(null);
       }
@@ -211,6 +225,12 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
 
         <div style={{ padding: '1.5rem', overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: '2rem' }}>
           
+          {statusMsg && (
+              <div className={`status-banner status-${statusMsg.type}`}>
+                  {statusMsg.text}
+              </div>
+          )}
+
           <div className="flex-col">
             <span className="section-header-title">CURRENT SESSION ACTIONS</span>
             <div className="flex-group">

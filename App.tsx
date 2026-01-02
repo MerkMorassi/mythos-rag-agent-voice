@@ -78,6 +78,12 @@ interface Attachment {
   mimeType: string;
 }
 
+interface Toast {
+  id: string;
+  message: string;
+  type: 'success' | 'error' | 'info';
+}
+
 const App: React.FC = () => {
   const [connectionState, setConnectionState] = useState<ConnectionState>(ConnectionState.DISCONNECTED);
   const [logs, setLogs] = useState<LogMessage[]>([]);
@@ -103,6 +109,7 @@ const App: React.FC = () => {
 
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [logsLoaded, setLogsLoaded] = useState(false);
+  const [toast, setToast] = useState<Toast | null>(null);
   
   // Refs
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -187,6 +194,14 @@ const App: React.FC = () => {
     }
   }, [logs, selectedAgentId, logsLoaded]);
 
+  const showToast = (message: string, type: 'success'|'error'|'info' = 'info') => {
+    const id = crypto.randomUUID();
+    setToast({ id, message, type });
+    setTimeout(() => {
+      setToast(prev => prev && prev.id === id ? null : prev);
+    }, 3000);
+  };
+
   const addLog = (type: LogMessage['type'], text: string, id?: string) => {
     const logId = id || crypto.randomUUID();
     setLogs(prev => {
@@ -201,9 +216,40 @@ const App: React.FC = () => {
     return logId;
   };
 
+  // Helper to safely send client content (text)
+  const safeSendClientContent = async (parts: any[]) => {
+      if (!sessionRef.current) return;
+      
+      const session = sessionRef.current;
+      const content = {
+          clientContent: {
+              turns: [{
+                  role: 'user',
+                  parts: parts
+              }],
+              turnComplete: true
+          }
+      };
+
+      try {
+        if (typeof session.send === 'function') {
+            await session.send(content);
+        } else if (typeof (session as any).sendClientContent === 'function') {
+            await (session as any).sendClientContent(content.clientContent);
+        } else {
+            console.warn("Session object does not support 'send' or 'sendClientContent'.");
+            throw new Error("Text injection not supported in this Live Session version.");
+        }
+      } catch(e) {
+          throw e; // Propagate up for UI handling
+      }
+  };
+
   const handleLoreUpdate = async () => {
       const msg = "[SYSTEM ALERT: New knowledge has been ingested into the local database. You can now search for this new information using your tools. Inform the user you are aware of the update.]";
-      setSystemStatus('Knowledge Base Updated: New Data Available');
+      setSystemStatus('Knowledge Base Updated');
+      showToast('Knowledge Base Updated', 'success');
+      
       // Visual log for user
       addLog('system', "SYSTEM: Knowledge Base Updated. Alerting Agent...");
       
@@ -211,18 +257,10 @@ const App: React.FC = () => {
       if (connectionState === ConnectionState.CONNECTED && sessionRef.current) {
           try {
               // Inject a system message as a user turn
-              await sessionRef.current.send({
-                  clientContent: {
-                      turns: [{
-                          role: 'user',
-                          parts: [{ text: msg }]
-                      }],
-                      turnComplete: true
-                  }
-              });
+              await safeSendClientContent([{ text: msg }]);
           } catch (e) {
               console.error("Failed to notify agent of update", e);
-              addLog('system', "SYSTEM ERROR: Failed to inject update alert to Agent.");
+              addLog('system', "SYSTEM WARNING: Could not auto-alert agent (Text injection unsupported). Agent will find data upon next search.");
           }
       }
   };
@@ -233,6 +271,7 @@ const App: React.FC = () => {
         instruction: agentInstruction, 
         modelConfig 
     });
+    showToast('Settings Saved', 'success');
   };
 
   const stopAudioPlayback = () => {
@@ -256,7 +295,7 @@ const App: React.FC = () => {
           setIsCameraActive(true);
         }
       } catch (err) {
-        alert("Camera access denied.");
+        showToast("Camera access denied.", 'error');
       }
     }
   };
@@ -268,7 +307,7 @@ const App: React.FC = () => {
       const isText = file.type === 'application/json' || file.name.endsWith('.md') || file.name.endsWith('.txt');
 
       if (!isImage && !isText) {
-          alert("Unsupported file type. Please upload images, .txt, .md, or .json");
+          showToast("Unsupported file type. Use Image, TXT, MD, or JSON", 'error');
           return;
       }
 
@@ -380,15 +419,7 @@ const App: React.FC = () => {
                     // Inject the analysis as a system/context turn
                     const contextMessage = `[SYSTEM: The user uploaded '${currentAttachment.file.name}'. It was analyzed by the Orchestrator (${gatingModel}).]\n\nANALYSIS RESULT:\n${analysisResult}\n\nUSER COMMENT: ${text}`;
                     
-                    await sessionRef.current.send({
-                        clientContent: {
-                            turns: [{
-                                role: 'user',
-                                parts: [{ text: contextMessage }]
-                            }],
-                            turnComplete: true
-                        }
-                    });
+                    await safeSendClientContent([{ text: contextMessage }]);
                     
                 } catch (analysisErr) {
                     console.error("Deep analysis failed", analysisErr);
@@ -425,15 +456,7 @@ const App: React.FC = () => {
                 }
 
                 if (textParts.length > 0) {
-                    await sessionRef.current.send({
-                        clientContent: {
-                            turns: [{
-                                role: 'user',
-                                parts: [{ text: textParts.join('') }]
-                            }],
-                            turnComplete: true
-                        }
-                    });
+                     await safeSendClientContent([{ text: textParts.join('') }]);
                 }
             }
         }
@@ -497,6 +520,7 @@ const App: React.FC = () => {
           onopen: async () => {
             setConnectionState(ConnectionState.CONNECTED);
             setSystemStatus(`Link Established: ${currentAgent.handle} is online (Voice: ${voiceName}).`);
+            showToast('Uplink Connected', 'success');
 
             const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
             const source = inputCtx.createMediaStreamSource(micStream);
@@ -610,6 +634,7 @@ const App: React.FC = () => {
     } catch (e) {
       setConnectionState(ConnectionState.ERROR);
       setSystemStatus("Connection Failed.");
+      showToast('Connection Failed', 'error');
     }
   };
 
@@ -632,10 +657,22 @@ const App: React.FC = () => {
     if (sessionRef.current) sessionRef.current.close?.();
     setConnectionState(ConnectionState.DISCONNECTED);
     setSystemStatus('Link Terminated.');
+    showToast('Link Terminated', 'info');
   };
 
   return (
     <div className="main-container">
+      {/* Toast Notification */}
+      {toast && (
+          <div className="toast-container">
+              <div className="toast" style={{borderColor: toast.type === 'error' ? '#f87171' : toast.type === 'success' ? '#4ade80' : '#333'}}>
+                  {toast.type === 'success' && <span style={{color:'#4ade80'}}>✓</span>}
+                  {toast.type === 'error' && <span style={{color:'#f87171'}}>!</span>}
+                  {toast.message}
+              </div>
+          </div>
+      )}
+
       <div className="header-container">
         <h1 className="header-title animate-pulse">MYTHOS : : COMMS : : HYPERVISOR</h1>
         <div className="status-bar">

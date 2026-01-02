@@ -1,5 +1,4 @@
 
-
 import React, { useState, useEffect, useRef } from 'react';
 import { GoogleGenAI } from '@google/genai';
 import { KnowledgeDoc } from '../types';
@@ -43,6 +42,9 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
     startTime: number;
   } | null>(null);
 
+  // Feedback State
+  const [statusMsg, setStatusMsg] = useState<{ text: string, type: 'success' | 'error' | 'info' } | null>(null);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
 
@@ -53,6 +55,7 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
       setDocs(data);
     } catch (e) {
       console.error("Failed to fetch docs", e);
+      showStatus("Failed to fetch documents.", 'error');
     }
   };
 
@@ -60,6 +63,7 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
     if (isOpen) {
       setDocs([]); // Clear docs immediately when switching or opening to avoid flash of wrong agent data
       fetchDocs();
+      setStatusMsg(null);
     }
   }, [isOpen, currentAgentId]);
 
@@ -67,6 +71,13 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
   useEffect(() => {
     setCurrentPage(1);
   }, [filterQuery, docs]);
+
+  const showStatus = (text: string, type: 'success' | 'error' | 'info') => {
+      setStatusMsg({ text, type });
+      if (type !== 'error') {
+          setTimeout(() => setStatusMsg(null), 3000);
+      }
+  };
 
   const chunkText = (text: string): string[] => {
     const CHUNK_SIZE = 1500;
@@ -102,6 +113,7 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
     if (!files || files.length === 0) return;
 
     setIsProcessing(true);
+    setStatusMsg(null);
     
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
@@ -186,9 +198,10 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
 
       await fetchDocs();
       onUpdate();
+      showStatus("Files uploaded successfully.", 'success');
     } catch (err) {
       console.error("Upload failed", err);
-      alert("Failed to upload files.");
+      showStatus("Failed to upload files.", 'error');
     } finally {
       setIsProcessing(false);
       setUploadProgress(null);
@@ -203,6 +216,7 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
     setIsProcessing(true);
     setImportStats(null);
     setPendingImportData(null);
+    setStatusMsg(null);
 
     try {
         const text = await file.text();
@@ -238,7 +252,7 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
 
     } catch (err: any) {
         console.error("LorePack verification failed", err);
-        alert(`Failed to verify LorePack: ${err.message}`);
+        showStatus(`Verification Failed: ${err.message}`, 'error');
         if(importInputRef.current) importInputRef.current.value = '';
     } finally {
         setIsProcessing(false);
@@ -265,10 +279,10 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
         setImportStats(null);
         if(importInputRef.current) importInputRef.current.value = '';
         
-        alert(`Successfully imported ${taggedData.length} documents into ${currentAgentId}'s knowledge base.`);
+        showStatus(`Imported ${taggedData.length} documents.`, 'success');
       } catch (err: any) {
         console.error("LorePack import execution failed", err);
-        alert(`Failed to commit import: ${err.message}`);
+        showStatus(`Import Failed: ${err.message}`, 'error');
       } finally {
         setIsProcessing(false);
       }
@@ -298,10 +312,10 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
           await deleteDocumentsByAgentId(currentAgentId);
           await fetchDocs();
           onUpdate();
-          alert(`Database purged for ${currentAgentId}.`);
+          showStatus("Database purged.", 'success');
       } catch (e) {
           console.error("Failed to purge db", e);
-          alert("Failed to purge database.");
+          showStatus("Failed to purge database.", 'error');
       } finally {
           setIsProcessing(false);
       }
@@ -310,7 +324,7 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
   const handleExport = () => {
     const dataToExport = filteredDocs; // Only exports current agent's docs
     if (dataToExport.length === 0) {
-      alert("No documents to export for this agent.");
+      showStatus("No documents to export for this agent.", 'info');
       return;
     }
     const dataStr = JSON.stringify(dataToExport, null, 2);
@@ -369,6 +383,12 @@ const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAg
 
         <div style={{ padding: '1.5rem', overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: '2rem' }}>
           
+          {statusMsg && (
+              <div className={`status-banner status-${statusMsg.type}`}>
+                  {statusMsg.text}
+              </div>
+          )}
+
           {/* Upload Section */}
           <div className="flex-col">
             <span className="section-header-title">INGEST DOCUMENTS (FOR {currentAgentId})</span>
