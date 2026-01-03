@@ -1,4 +1,5 @@
 
+
 export interface KnowledgeDoc {
   id: string;
   agentId?: string; // Links document to a specific agent
@@ -95,4 +96,5 @@ export interface MultiAgentMessage {
     text: string;
     timestamp: number;
     isThinking?: boolean;
+    attachment?: string;
 }
