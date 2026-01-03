@@ -46,7 +46,7 @@ const GATING_MODELS = [
 ];
 
 // SILENCE DETECTION CONFIG
-const SILENCE_TIMEOUT_MS = 15000; // 15 Seconds
+const SILENCE_TIMEOUT_MS = 60000; // Increased to 60 Seconds
 const SPEECH_THRESHOLD = 0.01;    // RMS Threshold for "User is speaking"
 
 // Comprehensive list of known Gemini voices
@@ -210,6 +210,7 @@ interface Toast {
 }
 
 type ViewMode = 'UPLINK' | 'CONFERENCE';
+type ToolMode = 'STANDARD' | 'DEEP' | 'IMAGE' | 'EXTERNAL';
 
 const App: React.FC = () => {
   const [viewMode, setViewMode] = useState<ViewMode>('UPLINK');
@@ -224,6 +225,7 @@ const App: React.FC = () => {
   // Gating / Orchestration State
   const [useDeepAnalysis, setUseDeepAnalysis] = useState(false);
   const [gatingModel, setGatingModel] = useState<string>(GATING_MODELS[0].id);
+  const [toolMode, setToolMode] = useState<ToolMode>('STANDARD');
   
   // Cloud File State
   const [availableCloudFiles, setAvailableCloudFiles] = useState<CloudFile[]>([]);
@@ -355,9 +357,9 @@ const App: React.FC = () => {
     }
   }, [logs, selectedAgentId, logsLoaded]);
 
-  // MODEL GATE: Auto-detect complexity
+  // MODEL GATE: Auto-detect complexity (Only in STANDARD Mode)
   useEffect(() => {
-      if (inputText.length > 10) {
+      if (toolMode === 'STANDARD' && inputText.length > 10) {
           if (ModelGate.shouldActivateDeepAnalysis(inputText)) {
               if (!useDeepAnalysis) {
                   setUseDeepAnalysis(true);
@@ -366,7 +368,7 @@ const App: React.FC = () => {
               }
           }
       }
-  }, [inputText]);
+  }, [inputText, toolMode]);
 
   // STOP SILENCE TIMER WHEN TYPING
   useEffect(() => {
@@ -428,6 +430,11 @@ const App: React.FC = () => {
   };
 
   const addLog = (type: LogMessage['type'], text: string, id?: string, attachment?: string) => {
+    // If system message, also update status bar
+    if (type === 'system') {
+        setSystemStatus(text.replace(/SYSTEM:/i, '').trim());
+    }
+
     const logId = id || crypto.randomUUID();
     setLogs(prev => {
         const index = prev.findIndex(l => l.id === logId);
@@ -669,17 +676,29 @@ const App: React.FC = () => {
     const text = inputText.trim();
     const currentAttachment = attachment;
     const currentCloudUri = activeCloudFileUri;
-    // Deep analysis is required if using a Cloud File (Live API doesn't support fileData URI natively yet)
-    const isGated = useDeepAnalysis || !!currentCloudUri; 
+    
+    // Check Tool Mode Overrides
+    const isDeepReasoning = toolMode === 'DEEP' || useDeepAnalysis;
+    const isImageGen = toolMode === 'IMAGE';
+    const isExternal = toolMode === 'EXTERNAL';
+
+    // Deep analysis is required if using a Cloud File (Live API doesn't support fileData URI natively yet) or Deep Mode is Active
+    const isGated = isDeepReasoning || !!currentCloudUri; 
     
     setInputText('');
     setAttachment(null);
     setUseDeepAnalysis(false); 
+    setToolMode('STANDARD'); // Reset mode after use
     setActiveCloudFileUri(''); // Reset selection
     
     let logText = text;
     if (currentAttachment) logText = `[Sent ${currentAttachment.type}] ` + logText;
     if (currentCloudUri) logText = `[Ref: CloudFile] ` + logText;
+    
+    // Log Mode Prefix
+    if (isDeepReasoning) logText = `[DEEP] ` + logText;
+    if (isImageGen) logText = `[IMAGE] ` + logText;
+    if (isExternal) logText = `[EXTERNAL] ` + logText;
 
     addLog('user', logText);
     
@@ -687,13 +706,16 @@ const App: React.FC = () => {
         if(sessionRef.current) {
             
             if (isGated) {
-                setSystemStatus(`Orchestrator: Offloading to ${gatingModel}...`);
+                // If forced deep mode, ensure gating model is Pro
+                const activeGatingModel = 'gemini-3-pro-preview';
+                
+                setSystemStatus(`Orchestrator: Offloading to ${activeGatingModel}...`);
                 
                 try {
                     const analysisResult = await performDeepAnalysis(currentAttachment, currentCloudUri, text);
                     setSystemStatus('Orchestrator: Analysis Complete. Injecting context...');
                     
-                    let contextMessage = `[SYSTEM: Orchestrator Report (${gatingModel})]\n`;
+                    let contextMessage = `[SYSTEM: Orchestrator Report (${activeGatingModel})]\n`;
                     if (currentCloudUri) contextMessage += `REF: Cloud File Analyzed.\n`;
                     if (currentAttachment) contextMessage += `REF: User Upload (${currentAttachment.file.name}).\n`;
                     contextMessage += `\nANALYSIS RESULT:\n${analysisResult}\n\nUSER COMMENT: ${text}`;
@@ -717,6 +739,15 @@ const App: React.FC = () => {
                 }
 
                 let textParts = [];
+                
+                // INJECT TOOL ROUTING INSTRUCTIONS
+                if (isImageGen) {
+                    textParts.push(`[SYSTEM: User explicitly requests IMAGE GENERATION via tool selector. You MUST use 'routeRequest' with target='FLUX_IMAGE' for this request.] `);
+                }
+                if (isExternal) {
+                    textParts.push(`[SYSTEM: User explicitly requests EXTERNAL LLM routing via tool selector. You MUST use 'routeRequest' with target='EXTERNAL_LLM' for this request.] `);
+                }
+
                 if (currentAttachment && currentAttachment.type === 'text') {
                     textParts.push(`[System: User uploaded file '${currentAttachment.file.name}']\n\nCONTENT:\n${currentAttachment.content}\n\n`);
                 }
@@ -851,6 +882,21 @@ const App: React.FC = () => {
                 }
               }, 1500);
             }
+          },
+          onclose: (e) => {
+              console.debug("Connection closed", e);
+              setConnectionState(ConnectionState.DISCONNECTED);
+              setSystemStatus('Link Terminated (Server Closure).');
+              stopAudioPlayback();
+              stopSilenceTimer();
+          },
+          onerror: (e) => {
+              console.error("Connection error", e);
+              setConnectionState(ConnectionState.ERROR);
+              setSystemStatus('Link Error. Reconnect required.');
+              showToast('Connection Error', 'error');
+              stopAudioPlayback();
+              stopSilenceTimer();
           },
           onmessage: async (msg: LiveServerMessage) => {
             if (msg.serverContent?.interrupted) {
@@ -1222,6 +1268,16 @@ const App: React.FC = () => {
       return <MultiAgentConsole onClose={() => setViewMode('UPLINK')} />;
   }
 
+  // Visual Helper for Input Border based on Tool Mode
+  const getInputBorderColor = () => {
+      switch(toolMode) {
+          case 'DEEP': return '#a78bfa'; // Purple
+          case 'IMAGE': return '#f472b6'; // Pink
+          case 'EXTERNAL': return '#fb923c'; // Orange
+          default: return undefined; // Default
+      }
+  };
+
   return (
     <div className="main-container">
       {toast && (
@@ -1238,7 +1294,7 @@ const App: React.FC = () => {
         <h1 className="header-title animate-pulse">MYTHOS : : COMMS : : HYPERVISOR</h1>
         <div className="status-bar">
           <div className="status-item">CORE: <span style={{color:'#fff'}}>{currentAgent.handle}</span></div>
-          <div className="system-status-header"><span className="terminal-cursor" style={{marginRight:'0.5rem'}}></span>{systemStatus}</div>
+          <div className="system-status-header" style={{marginRight:'0.5rem'}}>{systemStatus}</div>
           <div className="status-item">SYNC: <span style={{color: connectionState === ConnectionState.CONNECTED ? '#4ade80' : '#666'}}>{connectionState}</span></div>
         </div>
       </div>
@@ -1271,14 +1327,14 @@ const App: React.FC = () => {
                 </select>
 
                 {isCustomVoice ? (
-                  <div style={{display:'flex', gap:'0.25rem', flex:'1 1 auto', minWidth:'120px'}}>
+                  <div style={{display:'flex', gap:'0.25rem', flex:'1 1 auto', minWidth:'120px', alignItems:'center'}}>
                     <input 
                       type="text" 
                       value={customVoiceName}
                       onChange={(e) => setCustomVoiceName(e.target.value)}
                       placeholder="Voice ID..."
                       className="form-input"
-                      style={{padding:'0.5rem', fontFamily: 'monospace', fontSize: '0.75rem', height: '2.5rem'}}
+                      style={{fontFamily: 'monospace', fontSize: '0.75rem', flex: 1}}
                       disabled={connectionState !== ConnectionState.DISCONNECTED}
                     />
                     <button 
@@ -1391,11 +1447,9 @@ const App: React.FC = () => {
       <div className="chat-history-container" style={{backgroundColor: '#050505', backgroundImage: 'radial-gradient(#111 1px, transparent 0)', backgroundSize: '20px 20px'}}>
         {logs.map(log => {
           if (log.type === 'system') {
-              return (
-                <div key={log.id} className="chat-message-system animate-pulse">
-                    {log.text}
-                </div>
-              );
+              // System messages are now routed to the status bar and hidden from the main chat view
+              // to prevent clutter, per user request.
+              return null;
           }
           const name = log.type === 'user' ? 'USER' : 'AGENT';
           return (
@@ -1425,11 +1479,10 @@ const App: React.FC = () => {
               onChange={handleFileSelect} 
           />
           <button 
-              className="btn btn-secondary"
+              className="btn btn-secondary btn-icon"
               onClick={() => fileInputRef.current?.click()}
               disabled={connectionState !== ConnectionState.CONNECTED}
               title="Attach File (Image, TXT, MD, JSON)"
-              style={{ padding: '0.5rem 0.75rem' }}
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
@@ -1445,26 +1498,6 @@ const App: React.FC = () => {
                           ) : (
                               <span style={{ fontSize: '0.75rem', color: '#a3a3a3' }}>{attachment.preview}</span>
                           )}
-                          
-                          <div className="gating-controls">
-                              <label className="gating-toggle" title="Perform Deep Reasoning before sending to Voice Agent">
-                                  <input 
-                                      type="checkbox" 
-                                      checked={useDeepAnalysis}
-                                      onChange={(e) => setUseDeepAnalysis(e.target.checked)}
-                                  />
-                                  <span>Deep Analysis</span>
-                              </label>
-                              {useDeepAnalysis && (
-                                  <select 
-                                      value={gatingModel}
-                                      onChange={(e) => setGatingModel(e.target.value)}
-                                      className="gating-select"
-                                  >
-                                      {GATING_MODELS.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-                                  </select>
-                              )}
-                          </div>
                       </div>
 
                       <button 
@@ -1476,43 +1509,44 @@ const App: React.FC = () => {
                   </div>
               )}
               
-              {/* Cloud File Selector - Shows only if Deep Analysis is active OR a cloud file is already selected */}
-              {(useDeepAnalysis || activeCloudFileUri) && availableCloudFiles.length > 0 && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0 0.25rem' }}>
-                      <span style={{ fontSize: '0.7rem', color: '#a78bfa', fontWeight: 'bold' }}>CLOUD CONTEXT:</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', width: '100%' }}>
+                  {/* TOOL MODE SELECTOR */}
+                  <div style={{ position: 'relative' }} title="Task Routing Mode">
                       <select 
-                          value={activeCloudFileUri}
-                          onChange={(e) => {
-                              setActiveCloudFileUri(e.target.value);
-                              // Auto-enable deep analysis if a cloud file is picked
-                              if (e.target.value) setUseDeepAnalysis(true);
+                          value={toolMode}
+                          onChange={(e) => setToolMode(e.target.value as ToolMode)}
+                          disabled={connectionState !== ConnectionState.CONNECTED}
+                          className="form-select"
+                          style={{ 
+                              backgroundColor: '#111', 
+                              color: getInputBorderColor() || '#a3a3a3', 
+                              border: `1px solid ${getInputBorderColor() || '#333'}`,
+                              width: 'auto',
+                              minWidth: '120px'
                           }}
-                          className="gating-select"
-                          style={{ maxWidth: '300px' }}
                       >
-                          <option value="">-- None Selected --</option>
-                          {availableCloudFiles.map(f => (
-                              <option key={f.name} value={f.uri}>
-                                  {f.displayName} ({(parseInt(f.sizeBytes)/1024/1024).toFixed(1)}MB)
-                              </option>
-                          ))}
+                          <option value="STANDARD">STANDARD</option>
+                          <option value="DEEP">DEEP REASON</option>
+                          <option value="IMAGE">IMAGE GEN</option>
+                          <option value="EXTERNAL">EXTERNAL LLM</option>
                       </select>
                   </div>
-              )}
 
-              <input 
-                  type="text" 
-                  className="chat-input" 
-                  placeholder={connectionState === ConnectionState.CONNECTED ? (isMicMuted ? "Type message (Mic Muted)..." : "Type a message...") : "Connect to chat..."}
-                  value={inputText}
-                  onChange={(e) => setInputText(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleSendText()}
-                  disabled={connectionState !== ConnectionState.CONNECTED}
-                  onFocus={() => { isTypingRef.current = true; }}
-                  onBlur={() => { 
-                      setTimeout(() => { isTypingRef.current = false; }, 200); 
-                  }}
-              />
+                  <input 
+                      type="text" 
+                      className="chat-input" 
+                      placeholder={connectionState === ConnectionState.CONNECTED ? (isMicMuted ? "Type message (Mic Muted)..." : "Type a message...") : "Connect to chat..."}
+                      value={inputText}
+                      onChange={(e) => setInputText(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && handleSendText()}
+                      disabled={connectionState !== ConnectionState.CONNECTED}
+                      style={{ borderColor: getInputBorderColor() }}
+                      onFocus={() => { isTypingRef.current = true; }}
+                      onBlur={() => { 
+                          setTimeout(() => { isTypingRef.current = false; }, 200); 
+                      }}
+                  />
+              </div>
           </div>
           
           <button 

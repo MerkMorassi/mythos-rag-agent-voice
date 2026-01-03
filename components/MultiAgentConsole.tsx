@@ -17,12 +17,16 @@ interface MultiAgentConsoleProps {
 const CONFERENCE_ID = 'CONFERENCE_MAIN';
 const ARCHIVAX_ID = 'ARCHIVAX';
 
+// Filter out Gemini Core for the Multi-Agent Conference
+// Gemini Core is a neutral assistant and does not participate in the persona-based group chat.
+const CONFERENCE_AGENTS = AGENTS.filter(a => a.id !== 'GEMINI_CORE');
+
 export const MultiAgentConsole: React.FC<MultiAgentConsoleProps> = ({ onClose }) => {
     const [messages, setMessages] = useState<MultiAgentMessage[]>([]);
     const [input, setInput] = useState('');
     
-    // Initial state includes all, but useEffect will prune empty ones
-    const [activeAgents, setActiveAgents] = useState<Set<string>>(new Set(AGENTS.map(a => a.id))); 
+    // Initial state includes all conference agents, but useEffect will prune empty ones
+    const [activeAgents, setActiveAgents] = useState<Set<string>>(new Set(CONFERENCE_AGENTS.map(a => a.id))); 
     const [initializingAgents, setInitializingAgents] = useState<Set<string>>(new Set());
     
     const [agentCounts, setAgentCounts] = useState<Record<string, number>>({});
@@ -53,11 +57,11 @@ export const MultiAgentConsole: React.FC<MultiAgentConsoleProps> = ({ onClose })
             // Temporarily clear active agents to show them "coming online"
             setActiveAgents(new Set()); 
 
-            for (const agent of AGENTS) {
+            for (const agent of CONFERENCE_AGENTS) {
                 setInitializingAgents(prev => new Set(prev).add(agent.id));
                 
                 // Small artificial delay to show the sequence
-                await new Promise(r => setTimeout(r, 50));
+                await new Promise(r => setTimeout(r, 100));
                 
                 const count = await getDocumentCountByAgentId(agent.id);
                 counts[agent.id] = count;
@@ -144,11 +148,11 @@ export const MultiAgentConsole: React.FC<MultiAgentConsoleProps> = ({ onClose })
     };
 
     const handleClearHistory = async () => {
-        if(!window.confirm("Purge Conference Archives? This cannot be undone.")) return;
+        if(!window.confirm("Clear current session history? This cannot be undone.")) return;
         setMessages([]);
         await saveActiveChat(CONFERENCE_ID, []);
         await saveActiveChat(ARCHIVAX_ID, []);
-        addMessage('SYSTEM', 'ARCHIVAX', 'Archives Purged. New session started.');
+        addMessage('SYSTEM', 'ARCHIVAX', 'Chat Cleared. New session started.');
     };
 
     const toggleAgent = (id: string) => {
@@ -164,10 +168,10 @@ export const MultiAgentConsole: React.FC<MultiAgentConsoleProps> = ({ onClose })
     const selectAllCapable = async () => {
         // Show sequential loading effect again for "ALL"
         setActiveAgents(new Set());
-        for (const agent of AGENTS) {
+        for (const agent of CONFERENCE_AGENTS) {
             if ((agentCounts[agent.id] || 0) > 0) {
                 setInitializingAgents(prev => new Set(prev).add(agent.id));
-                await new Promise(r => setTimeout(r, 30)); // Fast sequence
+                await new Promise(r => setTimeout(r, 50)); // Fast sequence
                 setActiveAgents(prev => new Set(prev).add(agent.id));
                 setInitializingAgents(prev => { const n = new Set(prev); n.delete(agent.id); return n; });
             }
@@ -191,10 +195,10 @@ export const MultiAgentConsole: React.FC<MultiAgentConsoleProps> = ({ onClose })
                 const result = event.target?.result as string;
                 if (isImage) {
                     const base64 = result.split(',')[1];
-                    setAttachment({ type: 'image', content: base64, mimeType: file.type });
+                    setAttachment({ type: 'image', content: base64, mimeType: file.type, name: file.name });
                     setAttachmentPreview(result);
                 } else {
-                    setAttachment({ type: 'text', content: result, mimeType: 'text/plain' });
+                    setAttachment({ type: 'text', content: result, mimeType: 'text/plain', name: file.name });
                     setAttachmentPreview('DOC: ' + file.name);
                 }
             };
@@ -218,7 +222,7 @@ export const MultiAgentConsole: React.FC<MultiAgentConsoleProps> = ({ onClose })
         let match;
         while ((match = regex.exec(text)) !== null) {
             const name = match[1].toLowerCase();
-            const agent = AGENTS.find(a => a.handle.toLowerCase() === name);
+            const agent = CONFERENCE_AGENTS.find(a => a.handle.toLowerCase() === name);
             if (agent && (agentCounts[agent.id] || 0) > 0) {
                 mentions.add(agent.id);
             }
@@ -241,7 +245,7 @@ export const MultiAgentConsole: React.FC<MultiAgentConsoleProps> = ({ onClose })
         // If it's an image, we save the full DataURI to render it in history
         const displayAttachment = currentAttachment?.type === 'image' ? currentPreview : undefined;
         let logText = userText;
-        if (currentAttachment?.type === 'text') logText = `[FILE SENT] ${logText}`;
+        if (currentAttachment?.type === 'text') logText = `[FILE: ${currentAttachment.name}] ${logText}`;
         
         addMessage('USER', 'DIRECTOR', logText, false, displayAttachment || undefined);
         
@@ -254,7 +258,7 @@ export const MultiAgentConsole: React.FC<MultiAgentConsoleProps> = ({ onClose })
         if (userMentions.length > 0) {
             targetIds = userMentions;
         } else {
-            targetIds = AGENTS.filter(a => activeAgents.has(a.id)).map(a => a.id);
+            targetIds = CONFERENCE_AGENTS.filter(a => activeAgents.has(a.id)).map(a => a.id);
         }
         
         if (targetIds.length === 0) {
@@ -273,7 +277,7 @@ export const MultiAgentConsole: React.FC<MultiAgentConsoleProps> = ({ onClose })
             if (spokenSet.has(currentAgentId)) continue;
             spokenSet.add(currentAgentId);
 
-            const agent = AGENTS.find(a => a.id === currentAgentId);
+            const agent = CONFERENCE_AGENTS.find(a => a.id === currentAgentId);
             if (!agent) continue;
 
             if (spokenSet.size > 1) await new Promise(r => setTimeout(r, 1500));
@@ -312,7 +316,7 @@ export const MultiAgentConsole: React.FC<MultiAgentConsoleProps> = ({ onClose })
             <div className="section-panel" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', overflow: 'hidden', padding: '0.75rem' }}>
                 <div className="section-header" style={{ marginBottom: '0.5rem' }}><span className="section-header-title">ROSTER ({activeAgents.size})</span></div>
                 <div style={{ overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                    {AGENTS.map(agent => {
+                    {CONFERENCE_AGENTS.map(agent => {
                         const hasLore = (agentCounts[agent.id] || 0) > 0;
                         const isActive = activeAgents.has(agent.id);
                         const isInit = initializingAgents.has(agent.id);
@@ -362,8 +366,8 @@ export const MultiAgentConsole: React.FC<MultiAgentConsoleProps> = ({ onClose })
                 <div className="section-header" style={{ marginBottom: 0, paddingBottom: '0.5rem', display: 'flex', justifyContent: 'space-between' }}>
                     <span className="section-header-title">CONFERENCE TRANSCRIPT [REC: ARCHIVAX]</span>
                     <div style={{ display: 'flex', gap: '0.5rem' }}>
-                        <button onClick={handleClearHistory} className="btn btn-danger" style={{ padding: '0.2rem 0.5rem', fontSize:'0.7rem', width: 'auto' }}>PURGE ARCHIVES</button>
-                        <button onClick={onClose} className="btn btn-secondary" style={{ padding: '0.2rem 0.5rem', fontSize:'0.7rem', width: 'auto' }}>EXIT TO UPLINK</button>
+                        <button onClick={handleClearHistory} className="btn btn-danger" style={{ width: 'auto' }}>CLEAR CHAT</button>
+                        <button onClick={onClose} className="btn btn-secondary" style={{ width: 'auto' }}>EXIT TO UPLINK</button>
                     </div>
                 </div>
 
@@ -399,11 +403,10 @@ export const MultiAgentConsole: React.FC<MultiAgentConsoleProps> = ({ onClose })
                         onChange={handleFileSelect} 
                     />
                     <button 
-                        className="btn btn-secondary"
+                        className="btn btn-secondary btn-icon"
                         onClick={() => fileInputRef.current?.click()}
                         disabled={isProcessing}
                         title="Attach File to Conference"
-                        style={{ padding: '0.5rem 0.75rem', height: 'auto' }}
                     >
                         <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                             <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />

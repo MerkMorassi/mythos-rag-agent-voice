@@ -34,6 +34,7 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [saveSuccess, setSaveSuccess] = useState(false);
   const [savedPrompts, setSavedPrompts] = useState<SavedPrompt[]>([]);
   
   // API Credentials State
@@ -84,6 +85,8 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
         else localStorage.removeItem('hf_token');
 
         await onSave();
+        setSaveSuccess(true);
+        setTimeout(() => setSaveSuccess(false), 2000);
     } catch (e) {
         console.error(e);
     } finally {
@@ -135,7 +138,10 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
           <form onSubmit={handleSave} className="flex-col" style={{gap: '1.5rem'}}>
             
             <div className="flex-col">
-                <span className="section-header-title" style={{color: '#facc15'}}>CREDENTIALS</span>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span className="section-header-title" style={{color: '#facc15'}}>CREDENTIALS</span>
+                    {saveSuccess && <span className="animate-pulse" style={{ color: '#4ade80', fontWeight: 'bold' }}>✓ SAVED</span>}
+                </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                     <div>
                         <label style={{ fontSize: '0.7rem', color: '#888', display: 'block', marginBottom: '0.25rem' }}>GEMINI API KEY (Required)</label>

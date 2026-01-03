@@ -4,8 +4,8 @@ import { Agent, MultiAgentMessage } from "../types";
 import { searchDocuments, getAgentConfig } from "./db";
 import { RetrievalGate } from "./retrievalGate";
 
-// Standard model for text chat (cheaper/faster than Live model)
-const CHAT_MODEL = "gemini-2.0-flash-exp"; 
+// Standard model for text chat
+const CHAT_MODEL = "gemini-3-flash-preview"; 
 
 export interface AgentResponse {
     agentId: string;
@@ -17,6 +17,7 @@ export interface AgentAttachment {
     type: 'image' | 'text';
     content: string; // Base64 or Text
     mimeType: string;
+    name?: string;
 }
 
 export const MultiAgentService = {
@@ -119,7 +120,7 @@ ${agent.handle.toUpperCase()}:`;
                     });
                 } else if (attachment.type === 'text') {
                     parts.push({
-                        text: `\n[USER ATTACHED FILE]:\n${attachment.content}\n`
+                        text: `\n[USER ATTACHED FILE: ${attachment.name || 'document'}]\n${attachment.content}\n`
                     });
                 }
             }

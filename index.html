@@ -14,6 +14,7 @@
           --color-text-muted: #666666;
           --color-accent: #ffffff;
           --font-mono: 'Menlo', 'Monaco', 'Courier New', monospace;
+          --control-height: 2.5rem; /* UNIFORM HEIGHT VARIABLE */
       }
 
       html { 
@@ -121,6 +122,9 @@
           letter-spacing: 0.05em;
           font-weight: bold;
           font-size: 0.75rem;
+          display: flex;
+          align-items: center;
+          height: var(--control-height); /* Match button height for alignment */
       }
 
       /* Terminal Status Display */
@@ -154,12 +158,15 @@
           width: 100%;
           background-color: var(--color-panel);
           border: 1px solid var(--color-border);
-          padding: 0.75rem;
+          padding: 0 0.75rem; /* Horizontal padding only */
+          height: var(--control-height);
           border-radius: 0.25rem;
           color: var(--color-text-main);
           outline: none;
           transition: border-color 0.15s ease-in-out;
           box-sizing: border-box;
+          display: flex;
+          align-items: center;
       }
 
       .form-input:focus {
@@ -171,7 +178,7 @@
           background-color: #262626;
           border: 1px solid var(--color-border);
           color: var(--color-text-muted);
-          padding: 0.5rem 0.75rem; /* Reduced padding for cleaner look */
+          padding: 0 2rem 0 0.75rem; /* Right padding for arrow */
           border-radius: 0.25rem;
           outline: none;
           cursor: pointer;
@@ -180,12 +187,19 @@
           font-size: 0.75rem;
           font-weight: bold;
           text-transform: uppercase;
-          height: 2.5rem; /* Fixed height for alignment */
+          height: var(--control-height);
+          box-sizing: border-box;
+          appearance: none;
+          background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
+          background-position: right 0.5rem center;
+          background-repeat: no-repeat;
+          background-size: 1.5em 1.5em;
       }
 
       .form-select:hover:not(:disabled) {
           color: var(--color-accent);
           border-color: var(--color-accent);
+          background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%23ffffff' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
       }
 
       .form-select:disabled {
@@ -293,8 +307,8 @@
 
       /* Buttons */
       .btn {
-          padding: 0.5rem 1rem;
-          height: 2.5rem; /* Fixed height alignment */
+          padding: 0 1rem; /* Horizontal padding only */
+          height: var(--control-height);
           border-radius: 0.25rem;
           font-weight: bold;
           text-transform: uppercase;
@@ -308,6 +322,7 @@
           font-family: var(--font-mono);
           font-size: 0.75rem;
           box-sizing: border-box;
+          line-height: 1;
       }
 
       .btn:disabled {
@@ -359,9 +374,13 @@
       }
 
       .btn-icon {
-          width: 2.5rem; /* Square */
+          width: var(--control-height); /* Square */
+          height: var(--control-height);
           padding: 0;
           flex: none;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
       }
       
       .btn-icon svg {
@@ -499,7 +518,7 @@
       .chat-input-container {
           display: flex;
           gap: 0.5rem;
-          align-items: flex-end;
+          align-items: center; /* Center Vertically */
           flex: 0 0 auto; /* Don't shrink */
       }
 
@@ -534,12 +553,15 @@
           background-color: var(--color-panel);
           border: 1px solid var(--color-border);
           color: var(--color-text-main);
-          padding: 0.75rem;
+          padding: 0 0.75rem;
+          height: var(--control-height);
           border-radius: 0.25rem;
           outline: none;
           font-family: var(--font-mono);
           transition: border-color 0.15s ease-in-out;
           box-sizing: border-box;
+          display: flex;
+          align-items: center;
       }
 
       .chat-input:focus {
@@ -551,64 +573,6 @@
           cursor: not-allowed;
       }
       
-      /* Gating Controls */
-      .gating-controls {
-          display: flex;
-          align-items: center;
-          gap: 0.5rem;
-          background-color: #111;
-          padding: 0.25rem 0.5rem;
-          border-radius: 0.25rem;
-          border: 1px solid #333;
-      }
-      
-      .gating-toggle {
-          display: flex;
-          align-items: center;
-          gap: 0.5rem;
-          cursor: pointer;
-          font-size: 0.7rem;
-          color: #a3a3a3;
-      }
-      
-      .gating-toggle input {
-          cursor: pointer;
-      }
-      
-      .gating-select {
-          background-color: #000;
-          color: #a3a3a3;
-          border: 1px solid #333;
-          font-size: 0.7rem;
-          padding: 0.1rem;
-          border-radius: 0.125rem;
-          font-family: var(--font-mono);
-      }
-
-      /* Feedback Buttons */
-      .feedback-controls {
-          display: flex;
-          gap: 0.5rem;
-          margin-top: 0.25rem;
-          justify-content: flex-end;
-      }
-      
-      .feedback-btn {
-          background: none;
-          border: none;
-          cursor: pointer;
-          font-size: 0.875rem;
-          padding: 0.25rem;
-          opacity: 0.3;
-          transition: opacity 0.2s;
-          filter: grayscale(100%);
-      }
-      
-      .feedback-btn:hover, .feedback-btn.active {
-          opacity: 1;
-          filter: grayscale(0%);
-      }
-
       /* Status Bar */
       .status-bar {
           display: flex;

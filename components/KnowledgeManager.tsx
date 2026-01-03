@@ -558,13 +558,13 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
                                     <button 
                                         onClick={handleExportLorePack} 
                                         className="btn btn-secondary" 
-                                        style={{ padding: '0.4rem', fontSize: '0.6rem', color: '#a78bfa', borderColor: '#a78bfa' }}
+                                        style={{ color: '#a78bfa', borderColor: '#a78bfa' }}
                                         title="Download valid LorePack JSON with NumMark-X Sigils"
                                     >
                                         EXPORT LOREPACK
                                     </button>
                                     
-                                    <label className="btn btn-secondary" style={{ padding: '0.4rem', fontSize: '0.6rem', cursor: 'pointer' }}>
+                                    <label className="btn btn-secondary" style={{ cursor: 'pointer' }}>
                                         IMPORT LOREPACK
                                         <input type="file" accept=".json" onChange={handleSelectLorePack} ref={importInputRef} className="hidden" />
                                     </label>
@@ -573,15 +573,15 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
                                         <button 
                                             onClick={handleVaultSync} 
                                             className="btn btn-secondary" 
-                                            style={{ padding: '0.4rem', fontSize: '0.6rem', borderColor: '#4ade80', color: '#4ade80' }}
+                                            style={{ borderColor: '#4ade80', color: '#4ade80' }}
                                             title="Backup Sovereign Data to Z: Drive Vault"
                                         >
                                             SYNC VAULT (Z:)
                                         </button>
                                     ) : (
-                                        <span style={{ fontSize: '0.6rem', color: '#666', alignSelf: 'center', border: '1px solid #333', padding: '0.4rem' }}>VAULT OFFLINE</span>
+                                        <span style={{ fontSize: '0.6rem', color: '#666', alignSelf: 'center', border: '1px solid #333', padding: '0 0.5rem', height: '2.5rem', display: 'flex', alignItems: 'center' }}>VAULT OFFLINE</span>
                                     )}
-                                    <button onClick={handlePurgeAll} className="btn btn-danger" style={{ padding: '0.4rem', fontSize: '0.6rem' }}>PURGE ALL</button>
+                                    <button onClick={handlePurgeAll} className="btn btn-danger">PURGE ALL</button>
                                 </div>
                             </div>
                             <input type="text" placeholder="Filter..." value={filterQuery} onChange={(e) => setFilterQuery(e.target.value)} className="form-input" />
@@ -638,7 +638,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
                         <div className="flex-col">
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                 <span className="section-header-title">CLOUD FILES ({cloudFiles.length})</span>
-                                <button onClick={fetchCloudFiles} className="btn btn-secondary" style={{ padding: '0.25rem 0.5rem', fontSize: '0.7rem' }}>REFRESH</button>
+                                <button onClick={fetchCloudFiles} className="btn btn-secondary" style={{ fontSize: '0.7rem' }}>REFRESH</button>
                             </div>
                             
                             {cloudFiles.length === 0 ? (
