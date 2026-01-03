@@ -1,12 +1,4 @@
-
-export interface Agent {
-  id: string;
-  handle: string;
-  role: string;
-  system_instruction: string;
-  voice: string;
-  voiceReference?: string; // Path or URL to a default audio file for cloning
-}
+import { Agent } from './types';
 
 const ROUTER_PROTOCOL = `
 [ROUTER PROTOCOL: CAPABILITY OFFLOADING]

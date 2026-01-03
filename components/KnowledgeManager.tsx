@@ -10,9 +10,8 @@ import {
   deleteDocumentsByAgentId
 } from '../services/db';
 import { uploadCloudFile, listCloudFiles, deleteCloudFile } from '../services/googleFiles';
-import { IngestionService, IngestionResult } from '../services/ingestion';
+import { IngestionService } from '../services/ingestion';
 import { NumMarkX_GenerateSigil, NumMarkX_GenerateHeader } from '../patterns/NumMarkX';
-import { SyncBridge } from '../services/syncBridge';
 
 interface KnowledgeManagerProps {
   onUpdate: () => void;
@@ -71,9 +70,6 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
   const [isProcessing, setIsProcessing] = useState(false);
   const [statusMsg, setStatusMsg] = useState<{ text: string, type: 'success' | 'error' | 'info' } | null>(null);
 
-  // SYNC State
-  const [serverOnline, setServerOnline] = useState(false);
-
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cloudFileInputRef = useRef<HTMLInputElement>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
@@ -105,7 +101,6 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
       if (activeTab === 'local') {
           setDocs([]); 
           fetchDocs();
-          SyncBridge.checkHeartbeat().then(s => setServerOnline(s.online));
       } else {
           fetchCloudFiles();
       }
@@ -121,27 +116,6 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
       setStatusMsg({ text, type });
       if (type !== 'error') {
           setTimeout(() => setStatusMsg(null), 3000);
-      }
-  };
-
-  const handleVaultSync = async () => {
-      if (!serverOnline) return;
-      if (!window.confirm(`Push ${docs.length} nodes to Z: Drive Vault (Orchestrator)? This overwrites the Agent's file on the server.`)) return;
-      
-      setIsProcessing(true);
-      showStatus("Syncing with Vault...", 'info');
-      
-      try {
-          const res = await SyncBridge.pushLorePack(currentAgentId, docs);
-          if (res.success) {
-              showStatus(`Vault Sync Complete. Saved to: ${res.path}`, 'success');
-          } else {
-              showStatus(`Sync Failed: ${res.error}`, 'error');
-          }
-      } catch(e) {
-          showStatus("Network Error during Sync", 'error');
-      } finally {
-          setIsProcessing(false);
       }
   };
 
@@ -415,13 +389,11 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
     <div className="modal-overlay">
       <div className="modal-content animate-slide-in-right">
         
-        <div className="section-header" style={{ padding: '1.5rem', paddingBottom: '0.5rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-             <span className="section-header-title" style={{ fontSize: '1.25rem' }}>KNOWLEDGE MANAGER</span>
+        <div className="modal-header-area">
+          <div className="flex-group">
+             <span className="modal-section-title">KNOWLEDGE MANAGER</span>
           </div>
-          <button onClick={() => setIsOpen(false)} style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer' }}>
-            [X]
-          </button>
+          <button onClick={() => setIsOpen(false)} className="close-btn">[X]</button>
         </div>
 
         {isStreamingImport ? (
@@ -474,7 +446,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
                     </button>
                 </div>
 
-                <div style={{ padding: '1.5rem', overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: '2rem' }}>
+                <div className="modal-body-area">
                 
                 {statusMsg && (
                     <div className={`status-banner status-${statusMsg.type}`}>
@@ -535,19 +507,6 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
                                         IMPORT LOREPACK
                                         <input type="file" accept=".json" onChange={handleSelectLorePack} ref={importInputRef} className="hidden" />
                                     </label>
-
-                                    {serverOnline ? (
-                                        <button 
-                                            onClick={handleVaultSync} 
-                                            className="btn btn-secondary" 
-                                            style={{ borderColor: '#4ade80', color: '#4ade80' }}
-                                            title="Backup Sovereign Data to Z: Drive Vault"
-                                        >
-                                            SYNC VAULT (Z:)
-                                        </button>
-                                    ) : (
-                                        <span style={{ fontSize: '0.6rem', color: '#666', alignSelf: 'center', border: '1px solid #333', padding: '0 0.5rem', height: '2.5rem', display: 'flex', alignItems: 'center' }}>VAULT OFFLINE</span>
-                                    )}
                                     <button onClick={handlePurgeAll} className="btn btn-danger">PURGE ALL</button>
                                 </div>
                             </div>

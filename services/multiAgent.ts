@@ -24,16 +24,13 @@ export const MultiAgentService = {
     
     /**
      * Executes a single turn for a specific agent.
-     * 1. Checks Retrieval Gate.
-     * 2. Performs RAG (if gated).
-     * 3. Constructs Prompt with History + Context + Attachments.
-     * 4. Calls Gemini.
      */
     async queryAgent(
         agent: Agent, 
         userMessage: string, 
         history: MultiAgentMessage[],
         globalInstructions: string,
+        roomFocusContext: string, // <-- Added Parameter
         attachment?: AgentAttachment | null
     ): Promise<AgentResponse> {
         
@@ -43,13 +40,12 @@ export const MultiAgentService = {
         try {
             const ai = new GoogleGenAI({ apiKey });
             
-            // 1. MEMORY GATING (Skip if just processing an image with no text, otherwise evaluate)
+            // 1. MEMORY GATING
             let contextDocs: any[] = [];
             
             if (userMessage.trim().length > 0) {
                 const gate = RetrievalGate.evaluate(userMessage, agent.id);
                 if (gate.shouldRetrieve) {
-                    // Generate embedding for query
                     let queryVector = undefined;
                     try {
                         const embedRes = await ai.models.embedContent({
@@ -60,19 +56,18 @@ export const MultiAgentService = {
                     } catch(e) {
                         console.warn(`[${agent.handle}] Embedding failed`, e);
                     }
-
-                    // Search Agent's specific knowledge base
                     contextDocs = await searchDocuments(userMessage, queryVector, agent.id);
                 }
             }
 
             // 2. CONTEXT CONSTRUCTION
-            // Load custom configs if any (persisted preferences)
             const agentConfig = await getAgentConfig(agent.id);
             const specificInstruction = agentConfig.instruction || "";
 
             let systemPrompt = `
 ${globalInstructions}
+
+${roomFocusContext} 
 
 === IDENTITY ===
 NAME: ${agent.handle}
@@ -109,7 +104,6 @@ ${agent.handle.toUpperCase()}:`;
             // 4. PAYLOAD CONSTRUCTION
             const parts: any[] = [];
             
-            // Add Attachment if present
             if (attachment) {
                 if (attachment.type === 'image') {
                     parts.push({
@@ -125,7 +119,6 @@ ${agent.handle.toUpperCase()}:`;
                 }
             }
 
-            // Add Text Prompt
             parts.push({ text: fullPrompt });
 
             // 5. GENERATION

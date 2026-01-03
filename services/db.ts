@@ -279,7 +279,7 @@ export const getGeneralInstructions = async (): Promise<string> => {
   });
 };
 
-export const saveAgentConfig = async (agentId: string, config: { instruction: string, modelConfig: ModelConfig }): Promise<void> => {
+export const saveAgentConfig = async (agentId: string, config: { instruction: string, modelConfig: ModelConfig, voiceReference?: string }): Promise<void> => {
   const db = await initDB();
   return new Promise((resolve, reject) => {
     const transaction = db.transaction([CONFIG_STORE_NAME], 'readwrite');
@@ -290,7 +290,7 @@ export const saveAgentConfig = async (agentId: string, config: { instruction: st
   });
 };
 
-export const getAgentConfig = async (agentId: string): Promise<{ instruction: string, modelConfig: ModelConfig }> => {
+export const getAgentConfig = async (agentId: string): Promise<{ instruction: string, modelConfig: ModelConfig, voiceReference?: string }> => {
   const db = await initDB();
   return new Promise((resolve, reject) => {
     const transaction = db.transaction([CONFIG_STORE_NAME], 'readonly');
@@ -342,6 +342,9 @@ export const deleteSavedPrompt = async (id: string): Promise<void> => {
   });
 };
 
+// Helper: Normalize score (0-1)
+const normalize = (val: number, max: number) => (max === 0 ? 0 : val / max);
+
 function cosineSimilarity(vecA: number[], vecB: number[]): number {
   let dotProduct = 0;
   let normA = 0;
@@ -353,8 +356,6 @@ function cosineSimilarity(vecA: number[], vecB: number[]): number {
   }
   return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
 }
-
-// services/db.ts
 
 export const searchDocuments = async (query: string, queryEmbedding?: number[], agentId?: string): Promise<KnowledgeDoc[]> => {
   const docsToSearch = agentId ? await getDocumentsByAgentId(agentId) : await getAllDocuments();
@@ -386,7 +387,7 @@ export const searchDocuments = async (query: string, queryEmbedding?: number[], 
       // If we have vectors: 70% Semantic + 30% Keyword
       // If no vectors: 100% Keyword
       let finalScore = 0;
-      if (queryEmbedding) {
+      if (queryEmbedding && doc.embedding) {
           finalScore = (vectorScore * 0.7) + (keywordScore * 0.3);
       } else {
           finalScore = keywordScore;

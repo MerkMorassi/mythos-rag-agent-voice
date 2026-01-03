@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { ModelConfig, DEFAULT_MODEL_CONFIG } from '../types';
 import { getSavedPromptsByAgentId, SavedPrompt, deleteSavedPrompt } from '../services/db';
 
@@ -15,9 +15,9 @@ interface SettingsManagerProps {
   setAgentInstruction: (val: string) => void;
   
   agentName: string;
-  agentId: string; // Needed for loading saved prompts
+  agentId: string; 
   
-  onSave: () => Promise<void>;
+  onSave: (voiceRef?: string) => Promise<void>;
 }
 
 const SettingsManager: React.FC<SettingsManagerProps> = ({ 
@@ -37,6 +37,11 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [savedPrompts, setSavedPrompts] = useState<SavedPrompt[]>([]);
   
+  // Voice Clone State
+  const [voiceFile, setVoiceFile] = useState<File | null>(null);
+  const [voiceBase64, setVoiceBase64] = useState<string | undefined>(undefined);
+  const voiceInputRef = useRef<HTMLInputElement>(null);
+  
   // API Credentials State
   const [geminiKey, setGeminiKey] = useState('');
   const [hfToken, setHfToken] = useState('');
@@ -44,7 +49,6 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
   useEffect(() => {
       if (isOpen) {
           if (agentId) loadPrompts();
-          // Load credentials from local storage (not persistent across devices/sessions if cleared)
           setGeminiKey(localStorage.getItem('gemini_api_key') || '');
           setHfToken(localStorage.getItem('hf_token') || '');
       }
@@ -73,18 +77,31 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
     setModelConfig({ ...modelConfig, [key]: value });
   };
 
+  const handleVoiceSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (e.target.files && e.target.files[0]) {
+          const file = e.target.files[0];
+          setVoiceFile(file);
+          
+          const reader = new FileReader();
+          reader.onload = (evt) => {
+              const res = evt.target?.result as string;
+              setVoiceBase64(res); 
+          };
+          reader.readAsDataURL(file);
+      }
+  };
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSaving(true);
     try {
-        // Save Credentials
         if (geminiKey) localStorage.setItem('gemini_api_key', geminiKey);
         else localStorage.removeItem('gemini_api_key');
 
         if (hfToken) localStorage.setItem('hf_token', hfToken);
         else localStorage.removeItem('hf_token');
 
-        await onSave();
+        await onSave(voiceBase64);
         setSaveSuccess(true);
         setTimeout(() => setSaveSuccess(false), 2000);
     } catch (e) {
@@ -113,16 +130,16 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
     <div className="modal-overlay">
       <div className="modal-content animate-slide-in-right">
         
-        <div className="section-header" style={{ padding: '1.5rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-             <span className="section-header-title" style={{ fontSize: '1.25rem' }}>SYSTEM CONFIGURATION</span>
+        <div className="modal-header-area">
+          <div className="flex-group">
+             <span className="modal-section-title">SYSTEM CONFIGURATION</span>
           </div>
-          <button onClick={() => setIsOpen(false)} style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer' }}>
+          <button onClick={() => setIsOpen(false)} className="close-btn">
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         </div>
 
-        <div style={{ padding: '1.5rem', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+        <div className="modal-body-area">
           
           <div className="section-panel" style={{ borderColor: disabled ? '#4ade80' : '#4ade80' }}>
             <div className="section-header" style={{ borderBottom: 'none', padding: 0, marginBottom: '0.5rem' }}>
@@ -166,6 +183,31 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
                         />
                     </div>
                 </div>
+            </div>
+
+            {/* VOICE CLONE SECTION */}
+            <div className="flex-col">
+                <span className="section-header-title" style={{color: '#f472b6'}}>VOICE CLONE REFERENCE</span>
+                <input 
+                    type="file" 
+                    accept="audio/*" 
+                    ref={voiceInputRef} 
+                    className="hidden" 
+                    onChange={handleVoiceSelect}
+                />
+                <div 
+                    onClick={() => voiceInputRef.current?.click()}
+                    className="btn btn-secondary"
+                    style={{ borderStyle: 'dashed', textAlign: 'center', cursor: 'pointer', padding: '1rem' }}
+                >
+                    {voiceFile ? `SELECTED: ${voiceFile.name}` : "UPLOAD REFERENCE AUDIO (WAV/MP3)"}
+                </div>
+                {voiceBase64 && (
+                    <audio src={voiceBase64} controls style={{ width: '100%', height: '2rem' }} />
+                )}
+                <p style={{ fontSize: '0.65rem', color: '#666' }}>
+                    Upload a 10-15s clean audio clip. This will be used by Chatterbox for offline dubbing of chat messages.
+                </p>
             </div>
 
             <div className="flex-col">

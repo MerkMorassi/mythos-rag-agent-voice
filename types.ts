@@ -1,5 +1,4 @@
 
-
 export interface KnowledgeDoc {
   id: string;
   agentId?: string; // Links document to a specific agent
@@ -51,6 +50,7 @@ export interface AgentConfig {
   agentId: string;
   systemInstruction: string;
   modelConfig: ModelConfig;
+  voiceReference?: string; // Base64 audio string for Voice Cloning
 }
 
 export interface CloudFile {
@@ -88,13 +88,20 @@ export interface LorePack {
   sacred_archive: KnowledgeDoc[];
 }
 
-// --- MULTI-AGENT TYPES ---
+// --- MULTI-AGENT TYPES (ENVELOPE PROTOCOL) ---
 export interface MultiAgentMessage {
     id: string;
     senderId: string; // 'USER' | 'SYSTEM' | AgentID
     senderName: string;
     text: string;
     timestamp: number;
+    
+    // Envelope Routing
+    targets?: string[]; // Array of AgentIDs this message is addressed to (or empty for Room Broadcast)
+    msgType?: 'utterance' | 'action' | 'thought' | 'system';
+    
+    // Metadata
     isThinking?: boolean;
     attachment?: string;
+    meta?: Record<string, any>; // Provenance, confidence, tokens, etc.
 }

@@ -27,12 +27,15 @@ import { ExternalRouter } from './services/externalRouter';
 import { NumMarkX_GenerateSigil } from './patterns/NumMarkX'; 
 import { createPcmBlob, base64ToUint8Array, decodeAudioData } from './services/audioUtils';
 import { listCloudFiles } from './services/googleFiles';
+import { ChatterboxService } from './services/chatterbox'; // Import TTS Service
 import Visualizer from './components/Visualizer';
 import { KnowledgeManager } from './components/KnowledgeManager';
 import ChatHistoryManager from './components/ChatHistoryManager';
 import SettingsManager from './components/SettingsManager';
 import { MultiAgentConsole } from './components/MultiAgentConsole'; 
 import { VoiceCommandList } from './components/VoiceCommandList';
+import { RoomFocusConfig } from './components/RoomFocusConfig'; 
+import { McpManager } from './components/McpManager'; 
 import { ConnectionState, LogMessage, ModelConfig, DEFAULT_MODEL_CONFIG, CloudFile } from './types';
 import { AGENTS } from './agents';
 
@@ -46,13 +49,13 @@ const GATING_MODELS = [
 ];
 
 // SILENCE DETECTION CONFIG
-const SILENCE_TIMEOUT_MS = 60000; // Increased to 60 Seconds
-const SPEECH_THRESHOLD = 0.01;    // RMS Threshold for "User is speaking"
+const SILENCE_TIMEOUT_MS = 60000; 
+const SPEECH_THRESHOLD = 0.01;    
 
 // Comprehensive list of known Gemini voices
 const PREBUILT_VOICES = [
-  "Puck", "Charon", "Kore", "Fenrir", "Zephyr", // Classic
-  "Aoede", "Callirrhoe", "Leda" // New / Star-themed
+  "Puck", "Charon", "Kore", "Fenrir", "Zephyr", 
+  "Aoede", "Callirrhoe", "Leda"
 ].sort();
 
 const LANGUAGE_PROTOCOL = `
@@ -240,17 +243,19 @@ const App: React.FC = () => {
   const [selectedVoice, setSelectedVoice] = useState<string>(AGENTS[0].voice);
   const [isCustomVoice, setIsCustomVoice] = useState(false);
   const [customVoiceName, setCustomVoiceName] = useState('');
+  const [agentVoiceRef, setAgentVoiceRef] = useState<string | undefined>(undefined); // Cloned Voice
 
   const [isCameraActive, setIsCameraActive] = useState(false);
   
   // Audio Input State
   const [isMicMuted, setIsMicMuted] = useState(false);
-  const isMicMutedRef = useRef(false); // Ref for audio processor access
-  const isTypingRef = useRef(false);   // Ref to auto-mute when typing
+  const isMicMutedRef = useRef(false); 
+  const isTypingRef = useRef(false);   
 
   const [logsLoaded, setLogsLoaded] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
-  
+  const [isSpeaking, setIsSpeaking] = useState<string | null>(null); // ID of message currently playing TTS
+
   // Refs
   const audioContextRef = useRef<AudioContext | null>(null);
   const inputAudioContextRef = useRef<AudioContext | null>(null);
@@ -293,11 +298,8 @@ const App: React.FC = () => {
         setGeneralInstruction(gen);
     };
     loadGeneral();
-    
-    // Initial fetch of cloud files
     updateCloudFileList();
-
-    // Check for HF Token (Dynamic or Env)
+    
     const hfToken = localStorage.getItem('hf_token') || process.env.HF_TOKEN;
     if (!hfToken) {
         showToast("Warning: HF_TOKEN missing in Settings. External tools disabled.", 'error');
@@ -316,7 +318,6 @@ const App: React.FC = () => {
       }
   }, [connectionState, selectedAgentId, selectedVoice, isCustomVoice, customVoiceName, isMicMuted, isCameraActive, viewMode]);
 
-  // Load Agent Config & Chat History when agent changes
   useEffect(() => {
     let isMounted = true;
     const loadData = async () => {
@@ -325,13 +326,13 @@ const App: React.FC = () => {
       try {
         const savedLogs = await loadActiveChat(selectedAgentId);
         const savedConfig = await getAgentConfig(selectedAgentId);
-        // Check for persisted knowledge
         const docCount = await getDocumentCountByAgentId(selectedAgentId);
 
         if (isMounted) {
           setLogs(savedLogs);
           setAgentInstruction(savedConfig.instruction);
           setModelConfig(savedConfig.modelConfig);
+          setAgentVoiceRef(savedConfig.voiceReference); // Load cloned voice ref
           setLogsLoaded(true); 
           
           if (docCount > 0) {
@@ -350,27 +351,23 @@ const App: React.FC = () => {
     return () => { isMounted = false; };
   }, [selectedAgentId]);
 
-  // Auto-save chat history when logs change
   useEffect(() => {
     if (logsLoaded) {
       saveActiveChat(selectedAgentId, logs).catch(console.error);
     }
   }, [logs, selectedAgentId, logsLoaded]);
 
-  // MODEL GATE: Auto-detect complexity (Only in STANDARD Mode)
   useEffect(() => {
       if (toolMode === 'STANDARD' && inputText.length > 10) {
           if (ModelGate.shouldActivateDeepAnalysis(inputText)) {
               if (!useDeepAnalysis) {
                   setUseDeepAnalysis(true);
-                  // We also switch to Pro model automatically
                   setGatingModel('gemini-3-pro-preview');
               }
           }
       }
   }, [inputText, toolMode]);
 
-  // STOP SILENCE TIMER WHEN TYPING
   useEffect(() => {
       if (inputText.length > 0) {
           stopSilenceTimer();
@@ -386,9 +383,9 @@ const App: React.FC = () => {
   };
 
   const startSilenceTimer = () => {
-      stopSilenceTimer(); // Ensure no duplicates
+      stopSilenceTimer(); 
       if (connectionState !== ConnectionState.CONNECTED) return;
-      if (inputText.length > 0) return; // Don't nudge if user is typing
+      if (inputText.length > 0) return;
 
       silenceTimerRef.current = window.setTimeout(() => {
           triggerSilenceNudge();
@@ -397,16 +394,13 @@ const App: React.FC = () => {
 
   const triggerSilenceNudge = async () => {
       if (connectionState !== ConnectionState.CONNECTED) return;
-      // Double check before firing
       if (inputText.length > 0) return;
 
       console.log("Silence detected. Nudging agent...");
-      // We send a hidden system prompt to the model
       const silenceMsg = "[SYSTEM NOTICE: The user has been silent for a while. Briefly and politely ask if they are encountering a technical issue or if they are still composing their thoughts. Do not terminate the session.]";
       
       try {
           await safeSendClientContent([{ text: silenceMsg }]);
-          // Don't restart timer immediately, let the model respond first
       } catch (e) {
           console.error("Failed to send silence nudge", e);
       }
@@ -430,7 +424,6 @@ const App: React.FC = () => {
   };
 
   const addLog = (type: LogMessage['type'], text: string, id?: string, attachment?: string) => {
-    // If system message, also update status bar
     if (type === 'system') {
         setSystemStatus(text.replace(/SYSTEM:/i, '').trim());
     }
@@ -450,8 +443,6 @@ const App: React.FC = () => {
 
   const safeSendClientContent = async (parts: any[]) => {
       if (!sessionRef.current) return;
-      
-      // STOP TIMER WHEN SENDING CONTENT
       stopSilenceTimer();
 
       const session = sessionRef.current;
@@ -480,16 +471,13 @@ const App: React.FC = () => {
   };
 
   const handleLoreUpdate = async () => {
-      updateCloudFileList(); // Refresh cloud files if knowledge manager changed something
+      updateCloudFileList();
       const msg = "[SYSTEM ALERT: New knowledge has been ingested into the local database or cloud context. You can now search for this new information using your tools. Inform the user you are aware of the update.]";
       
       if (connectionState === ConnectionState.CONNECTED) {
           setSystemStatus('Knowledge Base Updated');
           addLog('system', "SYSTEM: Knowledge Base Updated. Alerting Agent...");
-      } else {
-          // If disconnected, just show toast, standard status bar handles the rest
-          // docCount check on connect will confirm it
-      }
+      } 
       showToast('Knowledge Base Updated', 'success');
       
       if (connectionState === ConnectionState.CONNECTED && sessionRef.current) {
@@ -502,14 +490,16 @@ const App: React.FC = () => {
       }
   };
 
-  const handleSaveSettings = async () => {
+  const handleSaveSettings = async (newVoiceRef?: string) => {
     await saveGeneralInstructions(generalInstruction);
     await saveAgentConfig(selectedAgentId, { 
         instruction: agentInstruction, 
-        modelConfig 
+        modelConfig,
+        voiceReference: newVoiceRef !== undefined ? newVoiceRef : agentVoiceRef 
     });
     
-    // --- REAL-TIME INJECTION LOGIC ---
+    if (newVoiceRef) setAgentVoiceRef(newVoiceRef);
+
     if (connectionState === ConnectionState.CONNECTED && sessionRef.current) {
         setSystemStatus('Injecting Updated Instructions...');
         const updateMsg = `[SYSTEM INSTRUCTION UPDATE]\n\nGLOBAL INSTRUCTIONS:\n${generalInstruction}\n\nAGENT SPECIFIC INSTRUCTIONS:\n${agentInstruction}\n\n[INSTRUCTION END] Please adhere to these updated instructions immediately.`;
@@ -525,6 +515,39 @@ const App: React.FC = () => {
     } else {
         showToast('Settings Saved', 'success');
     }
+  };
+  
+  // TTS / DUBBING FUNCTION
+  const playTts = async (text: string, id: string) => {
+      if (!agentVoiceRef) {
+          showToast("No Voice Reference found for this agent. Check Settings.", 'error');
+          return;
+      }
+      
+      setIsSpeaking(id);
+      try {
+          // Remove data URI prefix if present for Chatterbox
+          const audioBase64 = agentVoiceRef.replace(/^data:audio\/\w+;base64,/, '');
+          
+          const audioBuffer = await ChatterboxService.synthesize({
+              text,
+              audioRef: audioBase64
+          });
+          
+          const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+          const decoded = await ctx.decodeAudioData(audioBuffer);
+          const source = ctx.createBufferSource();
+          source.buffer = decoded;
+          source.connect(ctx.destination);
+          source.start(0);
+          
+          source.onended = () => setIsSpeaking(null);
+          
+      } catch (e: any) {
+          console.error("TTS Error:", e);
+          showToast(`TTS Failed: ${e.message}`, 'error');
+          setIsSpeaking(null);
+      }
   };
 
   const stopAudioPlayback = () => {
@@ -617,7 +640,6 @@ const App: React.FC = () => {
     let parts: any[] = [];
     let logMsg = "Analyzing ";
 
-    // 1. Cloud File (High Capacity)
     if (cloudFileUri) {
         const fileObj = availableCloudFiles.find(f => f.uri === cloudFileUri);
         if (fileObj) {
@@ -631,7 +653,6 @@ const App: React.FC = () => {
         }
     }
 
-    // 2. Local Attachment (Base64)
     if (att) {
         if (att.type === 'image') {
             parts.push({
@@ -651,15 +672,12 @@ const App: React.FC = () => {
             logMsg += `& Local Doc `;
         }
     } else if (cloudFileUri) {
-         // If only cloud file and no attachment, add the prompt
          parts.push({
              text: userPrompt ? `Analyze the attached file in the context of: "${userPrompt}".` : "Analyze the attached file."
          });
     }
 
     if (parts.length === 0) return "No content to analyze.";
-
-    console.log("Sending parts to Gating Model:", parts);
     
     const response = await ai.models.generateContent({
         model: gatingModel,
@@ -671,31 +689,28 @@ const App: React.FC = () => {
   const handleSendText = async () => {
     if ((!inputText.trim() && !attachment && !activeCloudFileUri) || connectionState !== ConnectionState.CONNECTED) return;
     
-    stopSilenceTimer(); // Reset silence logic on manual send
+    stopSilenceTimer(); 
 
     const text = inputText.trim();
     const currentAttachment = attachment;
     const currentCloudUri = activeCloudFileUri;
     
-    // Check Tool Mode Overrides
     const isDeepReasoning = toolMode === 'DEEP' || useDeepAnalysis;
     const isImageGen = toolMode === 'IMAGE';
     const isExternal = toolMode === 'EXTERNAL';
 
-    // Deep analysis is required if using a Cloud File (Live API doesn't support fileData URI natively yet) or Deep Mode is Active
     const isGated = isDeepReasoning || !!currentCloudUri; 
     
     setInputText('');
     setAttachment(null);
     setUseDeepAnalysis(false); 
-    setToolMode('STANDARD'); // Reset mode after use
-    setActiveCloudFileUri(''); // Reset selection
+    setToolMode('STANDARD'); 
+    setActiveCloudFileUri(''); 
     
     let logText = text;
     if (currentAttachment) logText = `[Sent ${currentAttachment.type}] ` + logText;
     if (currentCloudUri) logText = `[Ref: CloudFile] ` + logText;
     
-    // Log Mode Prefix
     if (isDeepReasoning) logText = `[DEEP] ` + logText;
     if (isImageGen) logText = `[IMAGE] ` + logText;
     if (isExternal) logText = `[EXTERNAL] ` + logText;
@@ -704,11 +719,8 @@ const App: React.FC = () => {
     
     try {
         if(sessionRef.current) {
-            
             if (isGated) {
-                // If forced deep mode, ensure gating model is Pro
                 const activeGatingModel = 'gemini-3-pro-preview';
-                
                 setSystemStatus(`Orchestrator: Offloading to ${activeGatingModel}...`);
                 
                 try {
@@ -740,7 +752,6 @@ const App: React.FC = () => {
 
                 let textParts = [];
                 
-                // INJECT TOOL ROUTING INSTRUCTIONS
                 if (isImageGen) {
                     textParts.push(`[SYSTEM: User explicitly requests IMAGE GENERATION via tool selector. You MUST use 'routeRequest' with target='FLUX_IMAGE' for this request.] `);
                 }
@@ -782,11 +793,8 @@ const App: React.FC = () => {
     const recentHistory = logs.slice(-10).map(l => `${l.type === 'user' ? 'User' : 'Agent'}: ${l.text}`).join('\n');
     const historyContext = recentHistory ? `\n\nRECENT CONVERSATION HISTORY (RESUME CONTEXT):\n${recentHistory}` : '';
     
-    // --- NEUTRAL AGENT LOGIC ---
     let parts: string[] = [];
     if (selectedAgentId === 'GEMINI_CORE') {
-        // Minimalist Prompt: General Instruction + Agent specific (Identity) + History
-        // Skips Language Protocol & RAG Instructions for pure/neutral behavior
         parts = [
             currentAgent.system_instruction,
             "=== GENERAL SYSTEM INSTRUCTIONS ===",
@@ -794,7 +802,6 @@ const App: React.FC = () => {
             historyContext
         ];
     } else {
-        // Standard Lore-Compliant Prompt
         parts = [
             currentAgent.system_instruction, 
             LANGUAGE_PROTOCOL,
@@ -846,21 +853,15 @@ const App: React.FC = () => {
             processor.onaudioprocess = (e) => {
               const inputData = e.inputBuffer.getChannelData(0);
               
-              // --- CLIENT SIDE SILENCE DETECTION ---
-              // Calculate RMS to see if user is speaking
               let sum = 0;
               for(let i = 0; i < inputData.length; i++) {
                   sum += inputData[i] * inputData[i];
               }
               const rms = Math.sqrt(sum / inputData.length);
               if (rms > SPEECH_THRESHOLD && !isMicMutedRef.current) {
-                  // User is speaking, ensure timer is stopped
                   stopSilenceTimer();
               }
 
-              // AUTO-MUTE / TYPING PROTECTION
-              // If user is typing or manually muted, silence the input
-              // to prevent keyboard noise from interrupting the model.
               if (isMicMutedRef.current || isTypingRef.current) {
                   inputData.fill(0); 
               }
@@ -901,7 +902,7 @@ const App: React.FC = () => {
           onmessage: async (msg: LiveServerMessage) => {
             if (msg.serverContent?.interrupted) {
                 stopAudioPlayback();
-                stopSilenceTimer(); // User interrupted, so they are active
+                stopSilenceTimer(); 
                 return;
             }
 
@@ -910,8 +911,6 @@ const App: React.FC = () => {
                 activeUserMessageRef.current += text;
                 const turnId = `user-stream-${activeTurnIdRef.current || 'pending'}`;
                 addLog('user', activeUserMessageRef.current, turnId);
-                
-                // Definitive User Activity
                 stopSilenceTimer(); 
             }
 
@@ -933,8 +932,6 @@ const App: React.FC = () => {
                 }
                 setLogs(prev => prev.filter(l => !l.id.startsWith('user-stream-') && !l.id.startsWith('model-stream-')));
                 activeTurnIdRef.current = null;
-
-                // --- MODEL TURN DONE: Start Silence Timer ---
                 startSilenceTimer();
             }
             
@@ -942,17 +939,13 @@ const App: React.FC = () => {
               for (const fc of msg.toolCall.functionCalls) {
                 if (fc.name === 'searchKnowledgeBase') {
                   const query = (fc.args as any).query;
-                  
-                  // --- RETRIEVAL GATE & TELEPORT LOGIC ---
-                  
-                  // 1. GATE: Should we search?
                   const gateDecision = RetrievalGate.evaluate(query, selectedAgentId);
+                  
                   if (!gateDecision.shouldRetrieve) {
-                      sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "Memory retrieval skipped (Not required for this query)." } } }));
+                      sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "Memory retrieval skipped (Not required)." } } }));
                       continue;
                   }
 
-                  // 2. TELEPORT: Try Exact Sigil Match
                   const sigil = NumMarkX_GenerateSigil(query);
                   const directHit = await findDocumentBySigil(sigil);
                   
@@ -962,11 +955,8 @@ const App: React.FC = () => {
                       continue;
                   }
 
-                  // 3. VECTOR SEARCH: Generate Embedding + Search
                   let queryVector = undefined;
                   try {
-                      // We can use the existing `ai` instance from the connect scope, OR create a new lightweight one for just this call
-                      // The current `ai` instance is bound to the live session, but `ai.models.embedContent` is stateless.
                       const embedResponse = await ai.models.embedContent({
                           model: 'text-embedding-004',
                           contents: [{ parts: [{ text: query }] }]
@@ -1000,7 +990,8 @@ const App: React.FC = () => {
                       const newInstruction = (currentConfig.instruction || "") + "\n\n[USER PREFERENCE]: " + addition;
                       await saveAgentConfig(selectedAgentId, {
                           instruction: newInstruction,
-                          modelConfig: currentConfig.modelConfig
+                          modelConfig: currentConfig.modelConfig,
+                          voiceReference: agentVoiceRef
                       });
                       setAgentInstruction(newInstruction);
                       
@@ -1015,7 +1006,6 @@ const App: React.FC = () => {
                 } else if (fc.name === 'savePrompt') {
                     const name = (fc.args as any).name;
                     const content = (fc.args as any).content || agentInstruction; 
-                    
                     try {
                         await saveSavedPrompt({
                             id: crypto.randomUUID(),
@@ -1037,13 +1027,9 @@ const App: React.FC = () => {
                         const res = await ai.models.generateContent({
                             model: "gemini-2.0-flash-exp",
                             contents: [{ parts: [{ text: `
-                                You are an expert Prompt Engineer for Large Language Models.
-                                Your task is to rewrite the following prompt to be more structured, clear, and optimized for AI comprehension (chain of thought, role definition, constraints).
-                                
-                                ORIGINAL PROMPT:
+                                You are an expert Prompt Engineer. Rewrite the following prompt to be more structured and optimized:
                                 "${text}"
-                                
-                                OUTPUT ONLY THE OPTIMIZED PROMPT TEXT. NO MARKDOWN BLOCK.
+                                OUTPUT ONLY THE OPTIMIZED PROMPT TEXT.
                             ` }] }]
                         });
                         
@@ -1051,7 +1037,8 @@ const App: React.FC = () => {
                         setAgentInstruction(optimized);
                         await saveAgentConfig(selectedAgentId, {
                             instruction: optimized,
-                            modelConfig
+                            modelConfig,
+                            voiceReference: agentVoiceRef
                         });
                         await safeSendClientContent([{ text: `[SYSTEM] Instructions optimized and updated. New Instructions:\n${optimized}` }]);
                         setSystemStatus('Prompt Optimized.');
@@ -1071,7 +1058,7 @@ const App: React.FC = () => {
                             functionResponses: { 
                                 id: fc.id, 
                                 name: fc.name, 
-                                response: { result: `[SYSTEM ERROR] Routing failed: HF_TOKEN is missing in environment variables. External tools are disabled.` } 
+                                response: { result: `[SYSTEM ERROR] Routing failed: HF_TOKEN is missing.` } 
                             } 
                         }));
                         showToast('External Tool Failed: Token Missing', 'error');
@@ -1081,31 +1068,22 @@ const App: React.FC = () => {
                     setSystemStatus(`ROUTER: Offloading to ${target}...`);
                     
                     try {
-                        // Call External Router Service
                         const routeRes = await ExternalRouter.route(target, prompt);
                         
                         if (routeRes.success && routeRes.data) {
                             if (routeRes.type === 'image') {
-                                // Image Response
                                 setSystemStatus(`ROUTER: Image Generated (${target})`);
                                 showToast('External Image Generated', 'success');
-                                
-                                // Inject into chat log with attachment
                                 addLog('model', `[ROUTER] Generated image via ${target}`, undefined, routeRes.data);
-                                
-                                // Tell Gemini we are done
                                 sessionPromise.then(s => s.sendToolResponse({ 
                                     functionResponses: { 
                                         id: fc.id, 
                                         name: fc.name, 
-                                        response: { result: `[SYSTEM] Image generated successfully and displayed to user. You do not need to describe it.` } 
+                                        response: { result: `[SYSTEM] Image generated successfully and displayed.` } 
                                     } 
                                 }));
                             } else {
-                                // Text Response (Uncensored LLM, etc)
                                 setSystemStatus(`ROUTER: Text Generated (${target})`);
-                                
-                                // We feed the text back to Gemini so it can "speak" it or summarize it
                                 sessionPromise.then(s => s.sendToolResponse({ 
                                     functionResponses: { 
                                         id: fc.id, 
@@ -1124,7 +1102,7 @@ const App: React.FC = () => {
                             functionResponses: { 
                                 id: fc.id, 
                                 name: fc.name, 
-                                response: { result: `[SYSTEM ERROR] Routing failed: ${e.message}. Inform the user.` } 
+                                response: { result: `[SYSTEM ERROR] Routing failed: ${e.message}.` } 
                             } 
                         }));
                     }
@@ -1268,13 +1246,12 @@ const App: React.FC = () => {
       return <MultiAgentConsole onClose={() => setViewMode('UPLINK')} />;
   }
 
-  // Visual Helper for Input Border based on Tool Mode
   const getInputBorderColor = () => {
       switch(toolMode) {
-          case 'DEEP': return '#a78bfa'; // Purple
-          case 'IMAGE': return '#f472b6'; // Pink
-          case 'EXTERNAL': return '#fb923c'; // Orange
-          default: return undefined; // Default
+          case 'DEEP': return '#a78bfa'; 
+          case 'IMAGE': return '#f472b6'; 
+          case 'EXTERNAL': return '#fb923c'; 
+          default: return undefined; 
       }
   };
 
@@ -1300,7 +1277,6 @@ const App: React.FC = () => {
       </div>
 
       <div className="control-panel">
-        {/* ROW 1: PRIMARY CONFIGURATION */}
         <div className="control-row">
             <div className="control-group">
                 <button 
@@ -1312,6 +1288,9 @@ const App: React.FC = () => {
                 >
                     CONF
                 </button>
+                
+                {/* NEW MCP BUTTON */}
+                <McpManager />
 
                 <select 
                     value={selectedAgentId} 
@@ -1368,7 +1347,6 @@ const App: React.FC = () => {
             </div>
         </div>
 
-        {/* ROW 2: ACTION & TOOLS */}
         <div className="control-row">
             <div className="control-group" style={{ flex: 2 }}>
                 <button 
@@ -1411,6 +1389,7 @@ const App: React.FC = () => {
             <div className="control-group tight" style={{ justifyContent: 'flex-end', marginLeft: 'auto' }}>
                 <KnowledgeManager currentAgentId={selectedAgentId} onUpdate={handleLoreUpdate} />
                 <ChatHistoryManager currentLogs={logs} onLoadSession={setLogs} currentAgentId={selectedAgentId} onUpdateKnowledge={handleLoreUpdate} />
+                <RoomFocusConfig />
                 <SettingsManager 
                     modelConfig={modelConfig} 
                     setModelConfig={setModelConfig} 
@@ -1447,17 +1426,32 @@ const App: React.FC = () => {
       <div className="chat-history-container" style={{backgroundColor: '#050505', backgroundImage: 'radial-gradient(#111 1px, transparent 0)', backgroundSize: '20px 20px'}}>
         {logs.map(log => {
           if (log.type === 'system') {
-              // System messages are now routed to the status bar and hidden from the main chat view
-              // to prevent clutter, per user request.
               return null;
           }
           const name = log.type === 'user' ? 'USER' : 'AGENT';
+          const isAgent = log.type === 'model';
           return (
             <div key={log.id} className={`chat-message-base chat-message-${log.type} ${log.id.includes('-stream-') ? 'animate-pulse' : ''}`}>
-              <div style={{fontSize: '0.7rem', marginBottom: '0.2rem', opacity: 0.8, fontWeight: 'bold'}}>
-                {name} <span style={{opacity:0.5, marginLeft: '0.2rem', fontWeight: 'normal'}}>[{new Date(log.timestamp).toLocaleTimeString()}]</span>
+              <div style={{fontSize: '0.7rem', marginBottom: '0.2rem', opacity: 0.8, fontWeight: 'bold', display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+                <div>
+                  {name} <span style={{opacity:0.5, marginLeft: '0.2rem', fontWeight: 'normal'}}>[{new Date(log.timestamp).toLocaleTimeString()}]</span>
+                </div>
+                
+                {/* TTS PLAY BUTTON FOR AGENT MESSAGES */}
+                {isAgent && agentVoiceRef && !log.id.includes('-stream-') && (
+                    <button 
+                        onClick={() => playTts(log.text, log.id)} 
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: isSpeaking === log.id ? '#4ade80' : '#666' }}
+                        title="Dub Message (Voice Clone)"
+                    >
+                        {isSpeaking === log.id ? (
+                            <span className="animate-pulse">🔊 SPEAKING...</span>
+                        ) : (
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+                        )}
+                    </button>
+                )}
               </div>
-              {/* RENDER ATTACHMENT IMAGE IF PRESENT */}
               {log.attachment && (
                   <div style={{ margin: '0.5rem 0' }}>
                       <img src={log.attachment} alt="Model Output" style={{ maxWidth: '100%', maxHeight: '300px', borderRadius: '4px', border: '1px solid #4ade80' }} />
@@ -1470,7 +1464,6 @@ const App: React.FC = () => {
         <div ref={logsEndRef} />
       </div>
 
-      {/* INPUT AREA */}
       <div className="chat-input-container">
           <input 
               type="file" 
@@ -1502,7 +1495,6 @@ const App: React.FC = () => {
               
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', width: '100%' }}>
                   
-                  {/* 1. TOOL MODE SELECTOR */}
                   <div style={{ position: 'relative', flex: '0 0 auto' }} title="Task Routing Mode">
                       <select 
                           value={toolMode}
@@ -1524,7 +1516,6 @@ const App: React.FC = () => {
                       </select>
                   </div>
 
-                  {/* 2. ATTACHMENT BUTTON (PAPERCLIP) */}
                   <button 
                       className="btn btn-secondary btn-icon"
                       onClick={() => fileInputRef.current?.click()}
@@ -1537,7 +1528,6 @@ const App: React.FC = () => {
                       </svg>
                   </button>
 
-                  {/* 3. TEXT INPUT */}
                   <input 
                       type="text" 
                       className="chat-input" 

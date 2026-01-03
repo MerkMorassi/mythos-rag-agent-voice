@@ -242,16 +242,17 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
   return (
     <div className="modal-overlay">
       <div className="modal-content animate-slide-in-right">
-        <div className="section-header" style={{ padding: '1.5rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-             <span className="section-header-title" style={{ fontSize: '1.25rem' }}>SESSION HISTORY</span>
+        
+        <div className="modal-header-area">
+          <div className="flex-group">
+             <span className="modal-section-title">SESSION HISTORY</span>
           </div>
-          <button onClick={() => setIsOpen(false)} style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer' }}>
+          <button onClick={() => setIsOpen(false)} className="close-btn">
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         </div>
 
-        <div style={{ padding: '1.5rem', overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: '2rem' }}>
+        <div className="modal-body-area">
           
           {statusMsg && (
               <div className={`status-banner status-${statusMsg.type}`}>

@@ -23,16 +23,14 @@ export const VoiceCommandList: React.FC = () => {
         <div className="modal-overlay">
             <div className="modal-content animate-slide-in-right" style={{ maxWidth: '40rem' }}>
                 
-                <div className="section-header" style={{ padding: '1.5rem', paddingBottom: '0.5rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                        <span className="section-header-title" style={{ fontSize: '1.25rem', color: '#4ade80' }}>VOICE COMMAND REFERENCE</span>
+                <div className="modal-header-area">
+                    <div className="flex-group">
+                        <span className="modal-section-title" style={{ color: '#4ade80' }}>VOICE COMMAND REFERENCE</span>
                     </div>
-                    <button onClick={() => setIsOpen(false)} style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer' }}>
-                        [ESC]
-                    </button>
+                    <button onClick={() => setIsOpen(false)} className="close-btn">[ESC]</button>
                 </div>
 
-                <div style={{ padding: '1.5rem', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '2rem' }}>
+                <div className="modal-body-area">
                     
                     {/* PROMPT ENGINEERING (NEW) */}
                     <div className="flex-col">

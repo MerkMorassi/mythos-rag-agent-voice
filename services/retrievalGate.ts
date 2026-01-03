@@ -38,9 +38,9 @@ export const RetrievalGate = {
         }
 
         // 3. PERSONA GATE
-        // Archivists always check records.
-        if (['CLIO', 'ARCHIVAX', 'POLYHYMNIA'].includes(agentId)) {
-            return { shouldRetrieve: true, strategy: 'RCI', reason: 'Role Mandate: Historian' };
+        // Archivists and Memory Proxies always check records.
+        if (['CLIO', 'ARCHIVAX', 'POLYHYMNIA', 'MERKOS'].includes(agentId)) {
+            return { shouldRetrieve: true, strategy: 'RCI', reason: 'Role Mandate: Historian/Memory' };
         }
 
         // 4. COMPLEXITY HEURISTIC
