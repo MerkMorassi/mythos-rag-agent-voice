@@ -29,8 +29,11 @@ export const MultiAgentService = {
         globalInstructions: string
     ): Promise<AgentResponse> {
         
+        const apiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY;
+        if (!apiKey) return { agentId: agent.id, text: "", error: "Missing API Key" };
+
         try {
-            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+            const ai = new GoogleGenAI({ apiKey });
             
             // 1. MEMORY GATING
             const gate = RetrievalGate.evaluate(userMessage, agent.id);

@@ -140,6 +140,12 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
   const handleIngestToLore = async (session: ChatSession) => {
       if(!window.confirm(`This will convert the transcript of "${session.title}" into a Knowledge Base document with vector embeddings for ${currentAgentId}. Continue?`)) return;
       
+      const apiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY;
+      if (!apiKey) {
+          showStatus("API Key required. Check Settings.", 'error');
+          return;
+      }
+
       setIngestingId(session.id);
       showStatus("Ingesting... Please wait.", 'info');
       
@@ -177,7 +183,7 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
           }
 
           // 3. Generate Embeddings and Save
-          const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+          const ai = new GoogleGenAI({ apiKey });
           
           // Process in batches
           const BATCH_SIZE = 50; 

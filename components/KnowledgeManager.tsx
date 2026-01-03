@@ -212,10 +212,16 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
+    const apiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY;
+    if (!apiKey) {
+        showStatus("API Key Missing. Configure in Settings.", 'error');
+        return;
+    }
+
     setIsProcessing(true);
     setStatusMsg(null);
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const ai = new GoogleGenAI({ apiKey });
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
         await new Promise(resolve => setTimeout(resolve, 0));

@@ -3,9 +3,10 @@ import { GoogleGenAI } from "@google/genai";
 import { CloudFile } from "../types";
 
 export const uploadCloudFile = async (file: File): Promise<CloudFile> => {
-  if (!process.env.API_KEY) throw new Error("API Key missing");
+  const apiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY;
+  if (!apiKey) throw new Error("API Key missing");
   
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const ai = new GoogleGenAI({ apiKey });
   
   // Use the Files API to upload
   const uploadResult = await ai.files.upload({
@@ -21,9 +22,10 @@ export const uploadCloudFile = async (file: File): Promise<CloudFile> => {
 };
 
 export const listCloudFiles = async (): Promise<CloudFile[]> => {
-  if (!process.env.API_KEY) return [];
+  const apiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY;
+  if (!apiKey) return [];
   
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const ai = new GoogleGenAI({ apiKey });
   
   try {
     const response = await ai.files.list();
@@ -49,7 +51,8 @@ export const listCloudFiles = async (): Promise<CloudFile[]> => {
 };
 
 export const deleteCloudFile = async (fileName: string): Promise<void> => {
-  if (!process.env.API_KEY) return;
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const apiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY;
+  if (!apiKey) return;
+  const ai = new GoogleGenAI({ apiKey });
   await ai.files.delete({ name: fileName });
 };

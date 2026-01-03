@@ -35,10 +35,17 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
   const [isOpen, setIsOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [savedPrompts, setSavedPrompts] = useState<SavedPrompt[]>([]);
+  
+  // API Credentials State
+  const [geminiKey, setGeminiKey] = useState('');
+  const [hfToken, setHfToken] = useState('');
 
   useEffect(() => {
-      if (isOpen && agentId) {
-          loadPrompts();
+      if (isOpen) {
+          if (agentId) loadPrompts();
+          // Load credentials from local storage (not persistent across devices/sessions if cleared)
+          setGeminiKey(localStorage.getItem('gemini_api_key') || '');
+          setHfToken(localStorage.getItem('hf_token') || '');
       }
   }, [isOpen, agentId]);
 
@@ -69,6 +76,13 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
     e.preventDefault();
     setIsSaving(true);
     try {
+        // Save Credentials
+        if (geminiKey) localStorage.setItem('gemini_api_key', geminiKey);
+        else localStorage.removeItem('gemini_api_key');
+
+        if (hfToken) localStorage.setItem('hf_token', hfToken);
+        else localStorage.removeItem('hf_token');
+
         await onSave();
     } catch (e) {
         console.error(e);
@@ -120,6 +134,34 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
           
           <form onSubmit={handleSave} className="flex-col" style={{gap: '1.5rem'}}>
             
+            <div className="flex-col">
+                <span className="section-header-title" style={{color: '#facc15'}}>CREDENTIALS</span>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                    <div>
+                        <label style={{ fontSize: '0.7rem', color: '#888', display: 'block', marginBottom: '0.25rem' }}>GEMINI API KEY (Required)</label>
+                        <input 
+                            type="password"
+                            value={geminiKey}
+                            onChange={(e) => setGeminiKey(e.target.value)}
+                            placeholder="AIza..."
+                            className="form-input"
+                            style={{ fontFamily: 'monospace' }}
+                        />
+                    </div>
+                    <div>
+                        <label style={{ fontSize: '0.7rem', color: '#888', display: 'block', marginBottom: '0.25rem' }}>HUGGING FACE TOKEN (Read - Optional)</label>
+                        <input 
+                            type="password"
+                            value={hfToken}
+                            onChange={(e) => setHfToken(e.target.value)}
+                            placeholder="hf_..."
+                            className="form-input"
+                            style={{ fontFamily: 'monospace' }}
+                        />
+                    </div>
+                </div>
+            </div>
+
             <div className="flex-col">
               <span className="section-header-title" style={{color: '#a3a3a3'}}>GENERAL SYSTEM INSTRUCTIONS (GLOBAL)</span>
               <textarea

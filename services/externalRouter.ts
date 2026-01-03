@@ -8,9 +8,9 @@
 // Example Space: Flux.1-Schnell (Fast, High Quality Images)
 const HF_FLUX_URL = "https://black-forest-labs-flux-1-schnell.hf.space/api/predict";
 
-// Target Model: Dolphin 3.0 Llama 3.1 8B (Uncensored/Specialized)
-// Using HF Inference API directly
-const HF_TEXT_URL = "https://api-inference.huggingface.co/models/dphn/Dolphin3.0-Llama3.1-8B";
+// Target Model: Cognitive Computations Dolphin 2.9.4 (Llama 3.1 8B)
+// This is an uncensored model widely available on HF Inference API
+const HF_TEXT_URL = "https://api-inference.huggingface.co/models/cognitivecomputations/dolphin-2.9.4-llama3.1-8b";
 
 export interface RouteResult {
     success: boolean;
@@ -76,8 +76,10 @@ export const ExternalRouter = {
         };
         
         // Use token if available to avoid rate limits
-        if (process.env.HF_TOKEN) {
-            headers["Authorization"] = `Bearer ${process.env.HF_TOKEN}`;
+        // Check localStorage first, then process.env
+        const token = localStorage.getItem('hf_token') || process.env.HF_TOKEN;
+        if (token) {
+            headers["Authorization"] = `Bearer ${token}`;
         }
 
         const response = await fetch(HF_TEXT_URL, {

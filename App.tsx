@@ -294,6 +294,12 @@ const App: React.FC = () => {
     
     // Initial fetch of cloud files
     updateCloudFileList();
+
+    // Check for HF Token (Dynamic or Env)
+    const hfToken = localStorage.getItem('hf_token') || process.env.HF_TOKEN;
+    if (!hfToken) {
+        showToast("Warning: HF_TOKEN missing in Settings. External tools disabled.", 'error');
+    }
   }, []);
 
   // Update Status Bar dynamically when Disconnected
@@ -596,7 +602,10 @@ const App: React.FC = () => {
   };
 
   const performDeepAnalysis = async (att: Attachment | null, cloudFileUri: string, userPrompt: string): Promise<string> => {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const apiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY;
+    if (!apiKey) throw new Error("Missing API Key");
+
+    const ai = new GoogleGenAI({ apiKey });
     
     let parts: any[] = [];
     let logMsg = "Analyzing ";
@@ -730,7 +739,12 @@ const App: React.FC = () => {
   };
 
   const connect = async () => {
-    if (!process.env.API_KEY) return;
+    const apiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY;
+    if (!apiKey) {
+        showToast("Missing API Key. Check Settings.", 'error');
+        return;
+    }
+
     setConnectionState(ConnectionState.CONNECTING);
     setSystemStatus(`Initializing Link to ${currentAgent.handle}...`);
     
@@ -774,7 +788,7 @@ const App: React.FC = () => {
       const analyser = outputCtx.createAnalyser();
       analyserRef.current = analyser;
 
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const ai = new GoogleGenAI({ apiKey });
       const sessionPromise = ai.live.connect({
         model: LIVE_MODEL_NAME,
         config: {
@@ -1004,6 +1018,20 @@ const App: React.FC = () => {
                     }
                 } else if (fc.name === 'routeRequest') {
                     const { target, prompt } = fc.args as any;
+                    
+                    const hfToken = localStorage.getItem('hf_token') || process.env.HF_TOKEN;
+                    if (!hfToken) {
+                        sessionPromise.then(s => s.sendToolResponse({ 
+                            functionResponses: { 
+                                id: fc.id, 
+                                name: fc.name, 
+                                response: { result: `[SYSTEM ERROR] Routing failed: HF_TOKEN is missing in environment variables. External tools are disabled.` } 
+                            } 
+                        }));
+                        showToast('External Tool Failed: Token Missing', 'error');
+                        return;
+                    }
+
                     setSystemStatus(`ROUTER: Offloading to ${target}...`);
                     
                     try {
