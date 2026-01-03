@@ -6,8 +6,8 @@ const STORE_NAME = 'documents';
 const CHAT_STORE_NAME = 'chat_sessions';
 const ACTIVE_CHAT_STORE_NAME = 'active_chats'; 
 const CONFIG_STORE_NAME = 'config';
-const PROMPT_STORE_NAME = 'saved_prompts'; // New Store
-const DB_VERSION = 7; // Increment version
+const PROMPT_STORE_NAME = 'saved_prompts';
+const DB_VERSION = 7;
 
 export interface SavedPrompt {
     id: string;
@@ -17,7 +17,6 @@ export interface SavedPrompt {
     timestamp: number;
 }
 
-// Request persistent storage if available
 if (navigator.storage && navigator.storage.persist) {
   navigator.storage.persist().then((granted) => {
     if (granted) {
@@ -41,7 +40,6 @@ export const initDB = (): Promise<IDBDatabase> => {
       const db = (event.target as IDBOpenDBRequest).result;
       const tx = (event.target as IDBOpenDBRequest).transaction;
       
-      // Documents Store
       let store: IDBObjectStore;
       if (!db.objectStoreNames.contains(STORE_NAME)) {
         store = db.createObjectStore(STORE_NAME, { keyPath: 'id' });
@@ -58,23 +56,19 @@ export const initDB = (): Promise<IDBDatabase> => {
         store.createIndex('numMarkId', 'numMarkId', { unique: false });
       }
 
-      // Chat Sessions Store
       if (!db.objectStoreNames.contains(CHAT_STORE_NAME)) {
         const chatStore = db.createObjectStore(CHAT_STORE_NAME, { keyPath: 'id' });
         chatStore.createIndex('timestamp', 'timestamp', { unique: false });
       }
 
-      // Active Chat Store
       if (!db.objectStoreNames.contains(ACTIVE_CHAT_STORE_NAME)) {
         db.createObjectStore(ACTIVE_CHAT_STORE_NAME, { keyPath: 'agentId' });
       }
 
-      // Config Store
       if (!db.objectStoreNames.contains(CONFIG_STORE_NAME)) {
         db.createObjectStore(CONFIG_STORE_NAME, { keyPath: 'id' });
       }
 
-      // Prompts Store (NEW)
       if (!db.objectStoreNames.contains(PROMPT_STORE_NAME)) {
         const promptStore = db.createObjectStore(PROMPT_STORE_NAME, { keyPath: 'id' });
         promptStore.createIndex('agentId', 'agentId', { unique: false });
@@ -87,7 +81,6 @@ export const initDB = (): Promise<IDBDatabase> => {
   });
 };
 
-// ... [Existing Document Methods: addDocument, bulkAddDocuments, deleteDocument, etc. - No changes needed] ...
 export const addDocument = async (doc: KnowledgeDoc): Promise<void> => {
   const db = await initDB();
   return new Promise((resolve, reject) => {
@@ -205,7 +198,6 @@ export const findDocumentBySigil = async (sigil: string): Promise<KnowledgeDoc |
   });
 };
 
-// ... [Existing Chat Session Methods - No changes] ...
 export const saveChatSession = async (session: ChatSession): Promise<void> => {
   const db = await initDB();
   return new Promise((resolve, reject) => {
@@ -243,7 +235,6 @@ export const deleteChatSession = async (id: string): Promise<void> => {
   });
 };
 
-// ... [Existing Active Chat Methods - No changes] ...
 export const saveActiveChat = async (agentId: string, logs: LogMessage[]): Promise<void> => {
   const db = await initDB();
   return new Promise((resolve, reject) => {
@@ -266,7 +257,6 @@ export const loadActiveChat = async (agentId: string): Promise<LogMessage[]> => 
   });
 };
 
-// ... [Existing Config Methods - No changes] ...
 export const saveGeneralInstructions = async (instructions: string): Promise<void> => {
   const db = await initDB();
   return new Promise((resolve, reject) => {
@@ -314,8 +304,6 @@ export const getAgentConfig = async (agentId: string): Promise<{ instruction: st
 export const saveSystemInstructions = saveGeneralInstructions;
 export const getSystemInstructions = getGeneralInstructions;
 
-// --- PROMPT MANAGEMENT (New) ---
-
 export const saveSavedPrompt = async (prompt: SavedPrompt): Promise<void> => {
   const db = await initDB();
   return new Promise((resolve, reject) => {
@@ -354,7 +342,6 @@ export const deleteSavedPrompt = async (id: string): Promise<void> => {
   });
 };
 
-// ... [Existing Vector Search - No changes] ...
 function cosineSimilarity(vecA: number[], vecB: number[]): number {
   let dotProduct = 0;
   let normA = 0;
@@ -367,26 +354,51 @@ function cosineSimilarity(vecA: number[], vecB: number[]): number {
   return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
+// services/db.ts
+
 export const searchDocuments = async (query: string, queryEmbedding?: number[], agentId?: string): Promise<KnowledgeDoc[]> => {
-  const startTime = performance.now();
   const docsToSearch = agentId ? await getDocumentsByAgentId(agentId) : await getAllDocuments();
-  
-  if (queryEmbedding && docsToSearch.some(d => d.embedding)) {
-    const scoredDocs = docsToSearch.map(doc => {
-      if (!doc.embedding) return { doc, score: -1 };
-      return { doc, score: cosineSimilarity(queryEmbedding, doc.embedding) };
-    });
-    const results = scoredDocs
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 5)
-      .map(item => item.doc);
-    return results;
-  } else {
-    const lowerQuery = query.toLowerCase();
-    const results = docsToSearch.filter(doc => 
-      doc.title.toLowerCase().includes(lowerQuery) || 
-      doc.content.toLowerCase().includes(lowerQuery)
-    ).slice(0, 5);
-    return results;
-  }
+  const lowerQuery = query.toLowerCase();
+  const queryTerms = lowerQuery.split(/\s+/).filter(t => t.length > 2); // Ignore 'a', 'the'
+
+  const scoredDocs = docsToSearch.map(doc => {
+      // 1. Vector Score (Semantic)
+      let vectorScore = 0;
+      if (doc.embedding && queryEmbedding) {
+          vectorScore = cosineSimilarity(queryEmbedding, doc.embedding);
+          // Clamp negative cosine scores to 0 for simpler fusion
+          vectorScore = Math.max(0, vectorScore);
+      }
+
+      // 2. Keyword Score (Precision)
+      // Boost score if specific terms (names, codes) appear in the content or title
+      let keywordHits = 0;
+      const contentLower = (doc.content + " " + doc.title).toLowerCase();
+      
+      queryTerms.forEach(term => {
+          if (contentLower.includes(term)) keywordHits++;
+      });
+      
+      // Simple keyword density score (capped at 1.0 for ~5 hits)
+      const keywordScore = Math.min(keywordHits * 0.2, 1.0);
+
+      // 3. Hybrid Fusion
+      // If we have vectors: 70% Semantic + 30% Keyword
+      // If no vectors: 100% Keyword
+      let finalScore = 0;
+      if (queryEmbedding) {
+          finalScore = (vectorScore * 0.7) + (keywordScore * 0.3);
+      } else {
+          finalScore = keywordScore;
+      }
+
+      return { doc, score: finalScore };
+  });
+
+  // Sort and Return Top Results
+  return scoredDocs
+    .filter(item => item.score > 0.1) // Noise filter
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 8) // Return top 8 chunks
+    .map(item => item.doc);
 };

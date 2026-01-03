@@ -19,11 +19,9 @@ export class IngestionService {
 
     /**
      * UNIFIED INGESTION ENTRY POINT
-     * Now redirects to streaming logic even for string inputs to ensure consistency and memory safety.
      */
     static async parseLorePack(input: string | Blob, defaultAgentId: string = 'UNKNOWN'): Promise<IngestionResult> {
         try {
-            // Convert string input to Blob to use the unified streaming pipeline
             let fileBlob: Blob;
             if (typeof input === 'string') {
                 if (!input || input.trim().length === 0) throw new Error("Input is empty");
@@ -32,14 +30,12 @@ export class IngestionService {
                 fileBlob = input;
             }
 
-            // Accumulate results from stream
             const docs: KnowledgeDoc[] = [];
             let header: LorePackHeader = NumMarkX_GenerateHeader(defaultAgentId, defaultAgentId, "Streamed Import");
             let count = 0;
 
             for await (const obj of IngestionService.streamLorePack(fileBlob)) {
                 if (obj.schema === 'MYTHOS.LOREPACK.v1' || (obj.agentId && obj.handle)) {
-                    // It's the header
                     header = {
                          schema: 'MYTHOS.LOREPACK.v1',
                          id: obj.id || crypto.randomUUID(),
@@ -50,15 +46,11 @@ export class IngestionService {
                          description: obj.description
                     };
                 } else if (obj.content || obj.text || obj.sacred_archive || Array.isArray(obj)) {
-                    // It's data
                     if (Array.isArray(obj)) {
-                        // If we yielded a whole array (small file), flatten it
                         obj.forEach(sub => docs.push(IngestionService.normalizeNode(sub, header.agentId, count++)));
                     } else if (obj.sacred_archive) {
-                        // Wrapped object that wasn't caught as header
                         obj.sacred_archive.forEach((sub: any) => docs.push(IngestionService.normalizeNode(sub, header.agentId, count++)));
                     } else {
-                        // Single Node
                         docs.push(IngestionService.normalizeNode(obj, header.agentId, count++));
                     }
                 }
@@ -90,7 +82,6 @@ export class IngestionService {
 
     /**
      * ROBUST STREAMING PROCESSOR
-     * Handles Arrays [...], Objects { "nodes": [...] }, and Concatenated JSON {} {}
      */
     static async *streamLorePack(file: Blob): AsyncGenerator<any, void, unknown> {
         const stream = file.stream();
@@ -101,7 +92,6 @@ export class IngestionService {
         let inString = false;
         let escaped = false;
         
-        // Root detection state
         let rootDetermined = false;
         let isArrayRoot = false;
         
@@ -118,7 +108,6 @@ export class IngestionService {
                 for (let i = 0; i < chunk.length; i++) {
                     const char = chunk[i];
 
-                    // --- 1. STRING STATE MACHINE ---
                     if (inString) {
                         if (char === '\\' && !escaped) {
                             escaped = true;
@@ -137,41 +126,27 @@ export class IngestionService {
                         continue;
                     }
 
-                    // --- 2. ROOT DETECTION ---
                     if (!rootDetermined) {
-                        if (/\s/.test(char)) continue; // Skip whitespace
+                        if (/\s/.test(char)) continue; 
                         
                         if (char === '[') {
                             isArrayRoot = true;
                             rootDetermined = true;
-                            // We are inside the root array, depth remains 0 relative to items
                             continue;
                         } else if (char === '{') {
                             isArrayRoot = false;
                             rootDetermined = true;
-                            // We are inside a root object.
-                            // If this object CONTAINS the array, we need to dig deeper.
-                            // But for streaming, we treat the root object properties as streamable items too if possible.
-                            depth = 1; // We consumed the first {
-                            // Actually, let's treat the root object as a container.
-                            // We want to capture items INSIDE it.
+                            depth = 1;
                             continue;
                         }
                     }
 
-                    // --- 3. STRUCTURE PARSING ---
                     if (char === '{') {
-                        // When to start buffering?
-                        // If Array Root: Items are at depth 0 -> 1 (start at {)
-                        // If Object Root: Items (like header) are at depth 1 -> 2
-                        
                         const triggerDepth = isArrayRoot ? 0 : 1;
-                        
                         if (depth === triggerDepth) {
                             buffering = true;
                             objectBuffer = '';
                         }
-                        
                         depth++;
                         if (buffering) objectBuffer += char;
                     } 
@@ -183,13 +158,10 @@ export class IngestionService {
 
                         if (depth === triggerDepth && buffering) {
                             buffering = false;
-                            // Emit Object
                             try {
                                 const parsed = JSON.parse(objectBuffer);
                                 yield parsed;
-                            } catch (e) {
-                                // Squelch parsing errors for partial/malformed chunks
-                            }
+                            } catch (e) { }
                             objectBuffer = '';
                         }
                     }
@@ -205,9 +177,7 @@ export class IngestionService {
 
     static normalizeNode(n: any, agentId: string, index: number): KnowledgeDoc {
         const content = n.content || n.text || n.value || '';
-        // Handle various vector formats (OpenAI style, Gemini style)
         const embedding = n.embedding || n.vector || n.values;
-        // Generate deterministic sigil if missing
         const sigil = n.numMarkId || NumMarkX_GenerateSigil(typeof content === 'string' ? content : 'nodata');
 
         return {
@@ -231,5 +201,46 @@ export class IngestionService {
         }
         parts.push("\n  ]\n}");
         return new Blob(parts, { type: 'application/json' });
+    }
+
+    /**
+     * STRUCTURE-AWARE RECURSIVE CHUNKER
+     * Splits text by Headers -> Paragraphs -> Sentences to preserve context.
+     */
+    static chunkText(text: string, maxChunkSize: number = 1000, overlap: number = 100): string[] {
+        const chunks: string[] = [];
+        
+        // 1. Split by Markdown Headers (Narrative Scenes)
+        // Regex looks for # Header at start of line
+        const sections = text.split(/(?=^#{1,3}\s)/gm);
+
+        for (const section of sections) {
+            if (section.trim().length === 0) continue;
+
+            // If section fits, keep it whole (Preserve Context)
+            if (section.length <= maxChunkSize) {
+                chunks.push(section.trim());
+                continue;
+            }
+
+            // 2. If too big, split by Paragraphs
+            const paragraphs = section.split(/\n\s*\n/);
+            let currentChunk = "";
+
+            for (const para of paragraphs) {
+                // If adding this para exceeds limit, push current and start new
+                if ((currentChunk.length + para.length) > maxChunkSize) {
+                    if (currentChunk) chunks.push(currentChunk.trim());
+                    // Start new chunk with overlap from previous (The "Narrative Tail")
+                    const tail = currentChunk.slice(-overlap);
+                    currentChunk = tail + "\n\n" + para;
+                } else {
+                    currentChunk += (currentChunk ? "\n\n" : "") + para;
+                }
+            }
+            if (currentChunk) chunks.push(currentChunk.trim());
+        }
+
+        return chunks;
     }
 }

@@ -35,7 +35,6 @@ const FileIcon = ({ typeStr }: { typeStr: string }) => {
       </svg>
     );
   }
-  // ... (keeping other icons same for brevity, they work fine) ...
   return (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" strokeLinecap="round" strokeLinejoin="round" style={style}>
       <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
@@ -181,33 +180,6 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
       }
   };
 
-  const chunkText = (text: string): string[] => {
-    const CHUNK_SIZE = 1500;
-    const chunks: string[] = [];
-    const cleanText = text.replace(/\r\n/g, '\n');
-    let startIndex = 0;
-    while (startIndex < cleanText.length) {
-        let endIndex = startIndex + CHUNK_SIZE;
-        if (endIndex >= cleanText.length) {
-            endIndex = cleanText.length;
-        } else {
-            const lastNewline = cleanText.lastIndexOf('\n', endIndex);
-            const lastPeriod = cleanText.lastIndexOf('. ', endIndex);
-            if (lastNewline > startIndex && lastNewline > endIndex - 200) {
-                endIndex = lastNewline;
-            } else if (lastPeriod > startIndex && lastPeriod > endIndex - 200) {
-                endIndex = lastPeriod + 1;
-            } else {
-                 const lastSpace = cleanText.lastIndexOf(' ', endIndex);
-                 if (lastSpace > startIndex) endIndex = lastSpace;
-            }
-        }
-        chunks.push(cleanText.substring(startIndex, endIndex).trim());
-        startIndex = endIndex;
-    }
-    return chunks;
-  };
-
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
@@ -226,7 +198,10 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
         const file = files[i];
         await new Promise(resolve => setTimeout(resolve, 0));
         const text = await file.text();
-        const chunks = chunkText(text);
+        
+        // Use the new Recursive Chunker
+        const chunks = IngestionService.chunkText(text);
+        
         const startTime = Date.now();
         setUploadProgress({ fileName: file.name, current: 0, total: chunks.length, startTime });
         const BATCH_SIZE = 100;
@@ -304,13 +279,10 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
     let foundHeader = null;
 
     try {
-        // Use Streaming Generator to parse file without loading entirely into RAM
-        // This is the CRITICAL path for 900MB+ files.
         for await (const obj of IngestionService.streamLorePack(file)) {
             if (obj.schema === 'MYTHOS.LOREPACK.v1' || (obj.agentId && obj.handle)) {
                 foundHeader = obj;
             } else {
-                // Normalize and buffer
                 const doc = IngestionService.normalizeNode(obj, currentAgentId, count);
                 batch.push(doc);
                 count++;
@@ -319,13 +291,11 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
                     await bulkAddDocuments(batch);
                     batch = [];
                     setStreamedDocsCount(count);
-                    // Breathe to let UI update
                     await new Promise(r => setTimeout(r, 0));
                 }
             }
         }
         
-        // Final batch
         if (batch.length > 0) {
             await bulkAddDocuments(batch);
             setStreamedDocsCount(count);
@@ -358,8 +328,8 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
       setIsProcessing(true);
       try {
           await deleteDocumentsByAgentId(currentAgentId);
-          setDocs([]); // Instant clear visual feedback
-          await fetchDocs(); // Verify clear
+          setDocs([]);
+          await fetchDocs();
           onUpdate();
           showStatus("Database purged.", 'success');
       } catch (e) {
@@ -444,7 +414,6 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
   return (
     <div className="modal-overlay">
       <div className="modal-content animate-slide-in-right">
-        {/* Component content preserved ... */}
         
         <div className="section-header" style={{ padding: '1.5rem', paddingBottom: '0.5rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
@@ -455,7 +424,6 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
           </button>
         </div>
 
-        {/* STREAMING IMPORT OVERLAY */}
         {isStreamingImport ? (
             <div style={{ padding: '2rem', flex: 1, display: 'flex', flexDirection: 'column', gap: '1.5rem', justifyContent: 'center', animation: 'fadeIn 0.3s' }}>
                 <div style={{ textAlign: 'center' }}>
@@ -473,7 +441,6 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
             </div>
         ) : (
             <>
-                {/* TABS */}
                 <div style={{ display: 'flex', borderBottom: '1px solid #333', padding: '0 1.5rem' }}>
                     <button 
                         onClick={() => setActiveTab('local')}
@@ -533,7 +500,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
                                 <span style={{ fontSize: '0.875rem', fontWeight: 'bold', color: '#a3a3a3' }}>
                                 {isProcessing && uploadProgress ? 'PROCESSING...' : 'DROP .TXT / .MD / .JSON'}
                                 </span>
-                                <span style={{ fontSize: '0.75rem', color: '#666' }}>Auto-chunking & Vector Embedding</span>
+                                <span style={{ fontSize: '0.75rem', color: '#666' }}>Smart Recursive Chunking & Embedding</span>
                             </div>
                             </label>
 
@@ -559,7 +526,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
                                         onClick={handleExportLorePack} 
                                         className="btn btn-secondary" 
                                         style={{ color: '#a78bfa', borderColor: '#a78bfa' }}
-                                        title="Download valid LorePack JSON with NumMark-X Sigils"
+                                        title="Download valid LorePack JSON"
                                     >
                                         EXPORT LOREPACK
                                     </button>

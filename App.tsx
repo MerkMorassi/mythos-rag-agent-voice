@@ -1470,6 +1470,7 @@ const App: React.FC = () => {
         <div ref={logsEndRef} />
       </div>
 
+      {/* INPUT AREA */}
       <div className="chat-input-container">
           <input 
               type="file" 
@@ -1478,16 +1479,6 @@ const App: React.FC = () => {
               className="hidden" 
               onChange={handleFileSelect} 
           />
-          <button 
-              className="btn btn-secondary btn-icon"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={connectionState !== ConnectionState.CONNECTED}
-              title="Attach File (Image, TXT, MD, JSON)"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-            </svg>
-          </button>
           
           <div className="chat-input-wrapper">
               {attachment && (
@@ -1510,8 +1501,9 @@ const App: React.FC = () => {
               )}
               
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', width: '100%' }}>
-                  {/* TOOL MODE SELECTOR */}
-                  <div style={{ position: 'relative' }} title="Task Routing Mode">
+                  
+                  {/* 1. TOOL MODE SELECTOR */}
+                  <div style={{ position: 'relative', flex: '0 0 auto' }} title="Task Routing Mode">
                       <select 
                           value={toolMode}
                           onChange={(e) => setToolMode(e.target.value as ToolMode)}
@@ -1532,6 +1524,20 @@ const App: React.FC = () => {
                       </select>
                   </div>
 
+                  {/* 2. ATTACHMENT BUTTON (PAPERCLIP) */}
+                  <button 
+                      className="btn btn-secondary btn-icon"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={connectionState !== ConnectionState.CONNECTED}
+                      title="Attach File (Image, TXT, MD, JSON)"
+                      style={{ flex: '0 0 auto' }}
+                  >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                      </svg>
+                  </button>
+
+                  {/* 3. TEXT INPUT */}
                   <input 
                       type="text" 
                       className="chat-input" 
@@ -1540,7 +1546,7 @@ const App: React.FC = () => {
                       onChange={(e) => setInputText(e.target.value)}
                       onKeyDown={(e) => e.key === 'Enter' && handleSendText()}
                       disabled={connectionState !== ConnectionState.CONNECTED}
-                      style={{ borderColor: getInputBorderColor() }}
+                      style={{ borderColor: getInputBorderColor(), flex: 1, width: 'auto', minWidth: 0 }}
                       onFocus={() => { isTypingRef.current = true; }}
                       onBlur={() => { 
                           setTimeout(() => { isTypingRef.current = false; }, 200); 
