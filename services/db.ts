@@ -9,6 +9,18 @@ const CONFIG_STORE_NAME = 'config';
 const PROMPT_STORE_NAME = 'saved_prompts';
 const DB_VERSION = 7;
 
+// --- PORTABILITY INTERFACE ---
+// Implement this interface for Postgres/pgVector or other backends
+export interface IVectorStore {
+    addDocument(doc: KnowledgeDoc): Promise<void>;
+    updateDocument(id: string, content: string): Promise<void>;
+    deleteDocument(id: string): Promise<void>;
+    search(query: string, embedding?: number[], agentId?: string): Promise<KnowledgeDoc[]>;
+    count(agentId: string): Promise<number>;
+    purge(agentId: string): Promise<void>;
+}
+// -----------------------------
+
 export interface SavedPrompt {
     id: string;
     agentId: string;
@@ -90,6 +102,30 @@ export const addDocument = async (doc: KnowledgeDoc): Promise<void> => {
     request.onsuccess = () => resolve();
     request.onerror = () => reject(request.error);
   });
+};
+
+export const updateDocumentContent = async (id: string, newContent: string): Promise<void> => {
+    const db = await initDB();
+    return new Promise((resolve, reject) => {
+        const transaction = db.transaction([STORE_NAME], 'readwrite');
+        const store = transaction.objectStore(STORE_NAME);
+        
+        const getReq = store.get(id);
+        getReq.onsuccess = () => {
+            const doc = getReq.result as KnowledgeDoc;
+            if (!doc) {
+                reject("Document not found");
+                return;
+            }
+            doc.content = newContent;
+            doc.timestamp = Date.now(); // Update timestamp
+            // Note: Embedding is now stale, ideal to re-embed, but treating as text update for now.
+            const putReq = store.put(doc);
+            putReq.onsuccess = () => resolve();
+            putReq.onerror = () => reject(putReq.error);
+        };
+        getReq.onerror = () => reject(getReq.error);
+    });
 };
 
 export const bulkAddDocuments = async (docs: KnowledgeDoc[]): Promise<void> => {

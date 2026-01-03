@@ -64,13 +64,23 @@ export interface CloudFile {
   uri: string;
 }
 
+// SOMA PERMISSION TYPES
+export type SomaPermission = 
+  | 'READ_LORE'      // Can search RAG
+  | 'WRITE_LORE'     // Can save to RAG
+  | 'MODIFY_LORE'    // Can update/delete RAG
+  | 'EXECUTE_CODE'   // Can run code/tools
+  | 'ROUTE_EXTERNAL' // Can call other models
+  | 'ADMIN_OVERRIDE'; // Can change settings
+
 export interface Agent {
   id: string;
   handle: string;
   role: string;
   system_instruction: string;
   voice: string;
-  voiceReference?: string; // Path or URL to a default audio file for cloning
+  voiceReference?: string; 
+  permissions: SomaPermission[]; // SOMA Schema
 }
 
 // --- LOREPACK SCHEMA (MYTHOS.LOREPACK.v1) ---

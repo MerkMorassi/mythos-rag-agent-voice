@@ -19,7 +19,9 @@ import {
   saveAgentConfig,
   addDocument,
   getDocumentCountByAgentId,
-  saveSavedPrompt
+  saveSavedPrompt,
+  updateDocumentContent, 
+  deleteDocument
 } from './services/db';
 import { RetrievalGate } from './services/retrievalGate'; 
 import { ModelGate } from './services/modelGate'; 
@@ -27,7 +29,7 @@ import { ExternalRouter } from './services/externalRouter';
 import { NumMarkX_GenerateSigil } from './patterns/NumMarkX'; 
 import { createPcmBlob, base64ToUint8Array, decodeAudioData } from './services/audioUtils';
 import { listCloudFiles } from './services/googleFiles';
-import { ChatterboxService } from './services/chatterbox'; // Import TTS Service
+import { ChatterboxService } from './services/chatterbox';
 import Visualizer from './components/Visualizer';
 import { KnowledgeManager } from './components/KnowledgeManager';
 import ChatHistoryManager from './components/ChatHistoryManager';
@@ -36,7 +38,7 @@ import { MultiAgentConsole } from './components/MultiAgentConsole';
 import { VoiceCommandList } from './components/VoiceCommandList';
 import { RoomFocusConfig } from './components/RoomFocusConfig'; 
 import { McpManager } from './components/McpManager'; 
-import { ConnectionState, LogMessage, ModelConfig, DEFAULT_MODEL_CONFIG, CloudFile } from './types';
+import { ConnectionState, LogMessage, ModelConfig, DEFAULT_MODEL_CONFIG, CloudFile, Agent } from './types';
 import { AGENTS } from './agents';
 
 // LIVE MODEL
@@ -54,7 +56,7 @@ const SPEECH_THRESHOLD = 0.01;
 
 // Comprehensive list of known Gemini voices
 const PREBUILT_VOICES = [
-  "Puck", "Charon", "Kore", "Fenrir", "Zephyr", 
+  "Puck", "Kore", "Fenrir", "Zephyr", 
   "Aoede", "Callirrhoe", "Leda"
 ].sort();
 
@@ -77,9 +79,12 @@ You have access to a local Knowledge Base via the tool 'searchKnowledgeBase'.
 
 [TOOL USE PROTOCOL]
 *   **googleSearch**: Use for real-time news or broad web queries.
+*   **codeExecution**: Use this FREELY to solve logic puzzles, perform math, process text data, or demonstrate coding concepts.
 *   **generateMediaContent**: Use when the user asks for VISUAL media (images, videos, painting, drawing, animation).
 *   **updateSystemInstructions**: Use to permanently adjust your persona.
 *   **routeRequest**: Use for specific External LLM tasks if needed.
+*   **consultCouncil**: Use when you need to ask another agent for their perspective. The system will play their voice response.
+*   **analyzeVisualField**: Use when the user asks to "Look closely", "Analyze this scene", or "What do you see in detail?" to trigger a High-Res Visual Analysis.
 `;
 
 const TRANSLATION_PROTOCOL = `
@@ -91,6 +96,8 @@ const TRANSLATION_PROTOCOL = `
     *   Store the meaning in your immediate context.
     *   Say: "Translation complete. I have deciphered the text. Would you like a full reading, a summary, or an analysis?"
 `;
+
+// --- TOOL DEFINITIONS ---
 
 const searchTool: FunctionDeclaration = {
   name: 'searchKnowledgeBase',
@@ -158,7 +165,7 @@ const routeRequestTool: FunctionDeclaration = {
     properties: {
       target: { 
           type: Type.STRING, 
-          description: 'The target model service. Options: "EXTERNAL_LLM" (Uncensored/Specialized text).' 
+          description: 'The target model service. Options: "EXTERNAL_LLM" (Uncensored/Specialized text), "FLUX_IMAGE" (Generate Image).' 
       },
       prompt: { type: Type.STRING, description: 'The prompt to send to the external model.' }
     },
@@ -190,6 +197,49 @@ const saveMemoryTool: FunctionDeclaration = {
     },
     required: ['text'],
   },
+};
+
+const appendNoteTool: FunctionDeclaration = {
+    name: 'appendNoteToMemory',
+    description: 'Finds a memory document by topic and appends new information to it. Requires MODIFY_LORE permission.',
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            topic: { type: Type.STRING, description: 'The topic/keyword to search for.' },
+            note: { type: Type.STRING, description: 'The new information to append.' }
+        },
+        required: ['topic', 'note']
+    }
+};
+
+const deleteMemoryTool: FunctionDeclaration = {
+    name: 'deleteMemoryByKeyword',
+    description: 'Finds and deletes a memory document by topic. Requires MODIFY_LORE permission. Use with caution.',
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            topic: { type: Type.STRING, description: 'The topic/keyword of the memory to delete.' }
+        },
+        required: ['topic']
+    }
+};
+
+const consultCouncilTool: FunctionDeclaration = {
+    name: 'consultCouncil',
+    description: 'Consults another Agent in the SOMA network. Initiates a Multi-Voice Podcast Mode where the other agent speaks.',
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            agentName: { type: Type.STRING, description: 'The name of the agent to consult (e.g., "Archivax", "Thalia", "Clio").' },
+            question: { type: Type.STRING, description: 'The question or topic to ask them.' }
+        },
+        required: ['agentName', 'question']
+    }
+};
+
+const visualAnalysisTool: FunctionDeclaration = {
+    name: 'analyzeVisualField',
+    description: 'Captures a high-resolution frame from the camera and performs a Deep Analysis using the Gemini Pro Vision model. Use this when the user asks for detailed visual inspection.',
 };
 
 const translateTool: FunctionDeclaration = {
@@ -544,16 +594,18 @@ const App: React.FC = () => {
   };
   
   // TTS / DUBBING FUNCTION
-  const playTts = async (text: string, id: string) => {
-      if (!agentVoiceRef) {
-          showToast("No Voice Reference found for this agent. Check Settings.", 'error');
+  const playTts = async (text: string, id?: string, voiceRef?: string) => {
+      const ref = voiceRef || agentVoiceRef;
+      if (!ref) {
+          if (!id) console.warn("No voice reference for TTS");
+          else showToast("No Voice Reference found for this agent. Check Settings.", 'error');
           return;
       }
       
-      setIsSpeaking(id);
+      if (id) setIsSpeaking(id);
       try {
           // Remove data URI prefix if present for Chatterbox
-          const audioBase64 = agentVoiceRef.replace(/^data:audio\/\w+;base64,/, '');
+          const audioBase64 = ref.replace(/^data:audio\/\w+;base64,/, '');
           
           const audioBuffer = await ChatterboxService.synthesize({
               text,
@@ -565,14 +617,19 @@ const App: React.FC = () => {
           const source = ctx.createBufferSource();
           source.buffer = decoded;
           source.connect(ctx.destination);
-          source.start(0);
           
-          source.onended = () => setIsSpeaking(null);
+          return new Promise<void>((resolve) => {
+              source.onended = () => {
+                  if (id) setIsSpeaking(null);
+                  resolve();
+              };
+              source.start(0);
+          });
           
       } catch (e: any) {
           console.error("TTS Error:", e);
-          showToast(`TTS Failed: ${e.message}`, 'error');
-          setIsSpeaking(null);
+          if(id) showToast(`TTS Failed: ${e.message}`, 'error');
+          if(id) setIsSpeaking(null);
       }
   };
 
@@ -868,7 +925,8 @@ const App: React.FC = () => {
           speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } },
           tools: [
               { googleSearch: {} }, 
-              { functionDeclarations: [searchTool, transcriptTool, terminateTool, updateInstructionsTool, updateConfigTool, saveMemoryTool, translateTool, savePromptTool, optimizePromptTool, routeRequestTool, mediaTool] }
+              { codeExecution: {} },
+              { functionDeclarations: [searchTool, transcriptTool, terminateTool, updateInstructionsTool, updateConfigTool, saveMemoryTool, translateTool, savePromptTool, optimizePromptTool, routeRequestTool, mediaTool, appendNoteTool, deleteMemoryTool, consultCouncilTool, visualAnalysisTool] }
           ],
         },
         callbacks: {
@@ -972,6 +1030,11 @@ const App: React.FC = () => {
             if (msg.toolCall) {
               for (const fc of msg.toolCall.functionCalls) {
                 if (fc.name === 'searchKnowledgeBase') {
+                  if (!currentAgent.permissions.includes('READ_LORE')) {
+                      sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "PERMISSION DENIED: You do not have READ access to the Knowledge Base." } } }));
+                      continue;
+                  }
+                  
                   const query = (fc.args as any).query;
                   const gateDecision = RetrievalGate.evaluate(query, selectedAgentId);
                   
@@ -1084,6 +1147,11 @@ const App: React.FC = () => {
                         sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "Failed to optimize prompt." } } }));
                     }
                 } else if (fc.name === 'routeRequest') {
+                    if (!currentAgent.permissions.includes('ROUTE_EXTERNAL')) {
+                        sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "PERMISSION DENIED: You do not have permission to route requests to external models." } } }));
+                        return;
+                    }
+
                     const { target, prompt } = fc.args as any;
                     
                     const hfToken = localStorage.getItem('hf_token') || process.env.HF_TOKEN;
@@ -1146,6 +1214,10 @@ const App: React.FC = () => {
                         }));
                     }
                 } else if (fc.name === 'updateModelConfiguration') {
+                  if (!currentAgent.permissions.includes('ADMIN_OVERRIDE')) {
+                      // Note: This is soft-gated in UI usually, but enforcing in agent logic too
+                      // For now, we allow self-modification of temps as it's harmless
+                  }
                   const { temperature, topP, topK } = fc.args as any;
                   setModelConfig(prev => ({
                       temperature: temperature ?? prev.temperature,
@@ -1161,6 +1233,11 @@ const App: React.FC = () => {
                       }
                   }));
                 } else if (fc.name === 'saveToKnowledgeBase') {
+                  if (!currentAgent.permissions.includes('WRITE_LORE')) {
+                      sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "PERMISSION DENIED: You cannot write to the Knowledge Base." } } }));
+                      return;
+                  }
+                  
                   const text = (fc.args as any).text;
                   const title = (fc.args as any).title || "Agent Memory";
                   try {
@@ -1188,6 +1265,150 @@ const App: React.FC = () => {
                        console.error(e);
                        sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "Failed to save memory." } } }));
                   }
+                } else if (fc.name === 'appendNoteToMemory') {
+                    if (!currentAgent.permissions.includes('MODIFY_LORE')) {
+                        sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "PERMISSION DENIED: You do not have permission to MODIFY the Knowledge Base." } } }));
+                        return;
+                    }
+                    const { topic, note } = fc.args as any;
+                    
+                    try {
+                        const docs = await searchDocuments(topic, undefined, selectedAgentId);
+                        if (docs.length > 0) {
+                            const topDoc = docs[0];
+                            const newContent = topDoc.content + `\n\n[UPDATE ${new Date().toLocaleDateString()}]: ${note}`;
+                            await updateDocumentContent(topDoc.id, newContent);
+                            handleLoreUpdate();
+                            sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: `Memory updated: "${topDoc.title}"` } } }));
+                        } else {
+                            sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "No relevant memory found to update. Consider creating a new one." } } }));
+                        }
+                    } catch (e: any) {
+                        sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: `Update failed: ${e.message}` } } }));
+                    }
+
+                } else if (fc.name === 'deleteMemoryByKeyword') {
+                    if (!currentAgent.permissions.includes('MODIFY_LORE')) {
+                        sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "PERMISSION DENIED: You do not have permission to DELETE from the Knowledge Base." } } }));
+                        return;
+                    }
+                    const { topic } = fc.args as any;
+                    try {
+                        const docs = await searchDocuments(topic, undefined, selectedAgentId);
+                        if (docs.length > 0) {
+                            const topDoc = docs[0];
+                            await deleteDocument(topDoc.id);
+                            handleLoreUpdate();
+                            sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: `Memory deleted: "${topDoc.title}"` } } }));
+                        } else {
+                            sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "No relevant memory found to delete." } } }));
+                        }
+                    } catch(e: any) {
+                        sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: `Deletion failed: ${e.message}` } } }));
+                    }
+
+                } else if (fc.name === 'consultCouncil') {
+                    const { agentName, question } = fc.args as any;
+                    const targetAgent = AGENTS.find(a => a.handle.toLowerCase() === agentName.toLowerCase());
+                    
+                    if (!targetAgent) {
+                        sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: `Agent ${agentName} is not in the roster.` } } }));
+                        return;
+                    }
+
+                    setSystemStatus(`COUNCIL: Consulting ${targetAgent.handle}...`);
+                    
+                    try {
+                        // 1. Get Text Response
+                        const guestRes = await ai.models.generateContent({
+                            model: 'gemini-3-flash-preview',
+                            contents: [{
+                                role: 'user',
+                                parts: [{ text: `
+                                    You are ${targetAgent.handle}. Role: ${targetAgent.role}.
+                                    System Instruction: ${targetAgent.system_instruction}.
+                                    
+                                    The "Host" agent is asking you a question during a live session.
+                                    Question: "${question}"
+                                    
+                                    Respond in character, briefly (under 50 words).
+                                ` }]
+                            }]
+                        });
+                        
+                        const answer = guestRes.text || "(No response)";
+                        setSystemStatus(`COUNCIL: ${targetAgent.handle} Speaking...`);
+                        addLog('model', `[COUNCIL: ${targetAgent.handle}] ${answer}`);
+                        
+                        // 2. Synthesize & Play Audio (Podcast Mode)
+                        if (targetAgent.id !== selectedAgentId) {
+                            // Find target agent config to get voice ref
+                            const targetConfig = await getAgentConfig(targetAgent.id);
+                            if (targetConfig.voiceReference) {
+                                await playTts(answer, undefined, targetConfig.voiceReference);
+                            }
+                        }
+
+                        sessionPromise.then(s => s.sendToolResponse({ 
+                            functionResponses: { 
+                                id: fc.id, 
+                                name: fc.name, 
+                                response: { result: `[AUDIO PLAYED] ${targetAgent.handle} said: "${answer}". You may now acknowledge or summarize.` } 
+                            } 
+                        }));
+
+                    } catch (e: any) {
+                        sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: `Connection to ${targetAgent.handle} failed.` } } }));
+                    }
+
+                } else if (fc.name === 'analyzeVisualField') {
+                    if (!videoRef.current || !canvasRef.current) {
+                        sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "Camera not available for visual analysis." } } }));
+                        return;
+                    }
+
+                    setSystemStatus("Gemini Pro Vision: Analyzing Field...");
+                    const video = videoRef.current;
+                    const canvas = canvasRef.current;
+                    const ctx = canvas.getContext('2d');
+                    
+                    if (ctx) {
+                        // Capture High-Res Frame
+                        canvas.width = video.videoWidth;
+                        canvas.height = video.videoHeight;
+                        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                        const base64 = canvas.toDataURL('image/jpeg', 0.9).split(',')[1];
+
+                        try {
+                            const analysisRes = await ai.models.generateContent({
+                                model: 'gemini-3-pro-preview',
+                                contents: [{
+                                    parts: [
+                                        { inlineData: { mimeType: 'image/jpeg', data: base64 } },
+                                        { text: "Analyze this image in extreme detail. Identify objects, text, spatial relationships, and potential context. Be thorough." }
+                                    ]
+                                }]
+                            });
+                            
+                            const analysis = analysisRes.text || "No analysis generated.";
+                            setSystemStatus("Visual Analysis Complete.");
+                            addLog('model', `[VISUAL ANALYSIS] ${analysis}`);
+                            
+                            sessionPromise.then(s => s.sendToolResponse({ 
+                                functionResponses: { 
+                                    id: fc.id, 
+                                    name: fc.name, 
+                                    response: { result: `VISUAL ANALYSIS REPORT:\n${analysis}` } 
+                                } 
+                            }));
+                        } catch (e: any) {
+                            console.error("Visual Analysis Failed", e);
+                            sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: `Analysis failed: ${e.message}` } } }));
+                        }
+                    } else {
+                        sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "Failed to capture video frame." } } }));
+                    }
+
                 } else if (fc.name === 'translateAncientGreek') {
                   const { text, target } = fc.args as any;
                   setSystemStatus("Universal Translator: Deciphering..."); 

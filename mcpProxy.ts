@@ -1,9 +1,8 @@
-
 import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
-const CONFIG_PATH = path.join(process.cwd(), 'mcp_config.json');
+const CONFIG_PATH = path.join((process as any).cwd(), 'mcp_config.json');
 
 export function loadMcpConfig(): Record<string, any> {
     try {

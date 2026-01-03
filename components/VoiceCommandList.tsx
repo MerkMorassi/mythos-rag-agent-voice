@@ -32,6 +32,32 @@ export const VoiceCommandList: React.FC = () => {
 
                 <div className="modal-body-area">
                     
+                    {/* SOMA PERMISSIONS */}
+                    <div className="flex-col">
+                        <span className="section-header-title" style={{ color: '#f87171' }}>SOMA: MEMORY OPERATIONS (CRUD)</span>
+                        <div className="section-panel" style={{ padding: '0.75rem', borderColor: '#f87171' }}>
+                            <p style={{ fontSize: '0.65rem', color: '#ccc', marginBottom: '0.5rem' }}>
+                                Requires 'MODIFY_LORE' permission (e.g., Archivax).
+                            </p>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.75rem' }}>
+                                <tbody>
+                                    <tr style={{ borderBottom: '1px dashed #333' }}>
+                                        <td style={{ padding: '0.5rem', color: '#eee' }}>CREATE</td>
+                                        <td style={{ padding: '0.5rem', color: '#f87171' }}>"Save this fact to memory: [Content]"</td>
+                                    </tr>
+                                    <tr style={{ borderBottom: '1px dashed #333' }}>
+                                        <td style={{ padding: '0.5rem', color: '#eee' }}>UPDATE</td>
+                                        <td style={{ padding: '0.5rem', color: '#f87171' }}>"Append to the note about [Topic]: [New Info]"</td>
+                                    </tr>
+                                    <tr>
+                                        <td style={{ padding: '0.5rem', color: '#eee' }}>DELETE</td>
+                                        <td style={{ padding: '0.5rem', color: '#f87171' }}>"Delete the memory about [Topic]"</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
                     {/* PROMPT ENGINEERING (NEW) */}
                     <div className="flex-col">
                         <span className="section-header-title" style={{ color: '#4ade80' }}>PROMPT ENGINEERING</span>
@@ -84,16 +110,8 @@ export const VoiceCommandList: React.FC = () => {
 
                     {/* MEMORY & UTILITIES */}
                     <div className="flex-col">
-                        <span className="section-header-title" style={{ color: '#facc15' }}>MEMORY & TOOLS</span>
+                        <span className="section-header-title" style={{ color: '#facc15' }}>UTILITIES</span>
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
-                            <div className="section-panel" style={{ padding: '0.5rem' }}>
-                                <div style={{ color: '#facc15', fontWeight: 'bold', fontSize: '0.7rem' }}>SEARCH MEMORY</div>
-                                <div style={{ color: '#666', fontSize: '0.65rem' }}>"Search knowledge base for [Topic]"</div>
-                            </div>
-                            <div className="section-panel" style={{ padding: '0.5rem' }}>
-                                <div style={{ color: '#facc15', fontWeight: 'bold', fontSize: '0.7rem' }}>SAVE MEMORY</div>
-                                <div style={{ color: '#666', fontSize: '0.65rem' }}>"Save conversation to memory"</div>
-                            </div>
                             <div className="section-panel" style={{ padding: '0.5rem' }}>
                                 <div style={{ color: '#38bdf8', fontWeight: 'bold', fontSize: '0.7rem' }}>DOWNLOAD</div>
                                 <div style={{ color: '#666', fontSize: '0.65rem' }}>"Download transcript."</div>
