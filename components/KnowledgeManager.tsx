@@ -78,9 +78,9 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
     try {
       const data = await getDocumentsByAgentId(currentAgentId);
       setDocs(data);
-    } catch (e) {
+    } catch (e: any) {
       console.error("Failed to fetch docs", e);
-      showStatus("Failed to fetch documents.", 'error');
+      showStatus(`Failed to fetch documents: ${e.message}`, 'error');
     }
   };
 
@@ -89,8 +89,9 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
       setIsProcessing(true);
       const files = await listCloudFiles();
       setCloudFiles(files);
-    } catch (e) {
+    } catch (e: any) {
       console.error("Failed to fetch cloud files", e);
+      showStatus(`Cloud List Error: ${e.message}`, 'error');
     } finally {
       setIsProcessing(false);
     }
@@ -204,7 +205,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
                         numMarkId: sigil
                     });
                 }
-            } catch(err) {
+            } catch(err: any) {
                 console.error("Batch embedding failed, saving without vectors", err);
                 for (let k = 0; k < batchChunks.length; k++) {
                     const chunkContent = batchChunks[k];
@@ -219,6 +220,9 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
                          numMarkId: sigil
                     });
                 }
+                if (err.message && err.message.includes('429')) {
+                    showStatus("Rate limit hit. Saving remaining chunks without vectors.", 'info');
+                }
             }
             setUploadProgress(prev => {
                 if (!prev) return null;
@@ -229,9 +233,9 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
       await fetchDocs();
       onUpdate();
       showStatus("Files uploaded successfully.", 'success');
-    } catch (err) {
+    } catch (err: any) {
       console.error("Upload failed", err);
-      showStatus("Failed to upload files.", 'error');
+      showStatus(`Failed to upload files: ${err.message}`, 'error');
     } finally {
       setIsProcessing(false);
       setUploadProgress(null);
@@ -306,9 +310,9 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
           await fetchDocs();
           onUpdate();
           showStatus("Database purged.", 'success');
-      } catch (e) {
+      } catch (e: any) {
           console.error(e);
-          showStatus("Failed to purge database.", 'error');
+          showStatus(`Failed to purge database: ${e.message}`, 'error');
       } finally { setIsProcessing(false); }
   };
 
@@ -347,8 +351,8 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
       await fetchCloudFiles();
       onUpdate();
       showStatus("File deleted.", 'success');
-    } catch (err) {
-      showStatus("Failed to delete file.", 'error');
+    } catch (err: any) {
+      showStatus(`Failed to delete file: ${err.message}`, 'error');
     } finally {
       setIsProcessing(false);
     }

@@ -360,19 +360,18 @@ function cosineSimilarity(vecA: number[], vecB: number[]): number {
 export const searchDocuments = async (query: string, queryEmbedding?: number[], agentId?: string): Promise<KnowledgeDoc[]> => {
   const docsToSearch = agentId ? await getDocumentsByAgentId(agentId) : await getAllDocuments();
   const lowerQuery = query.toLowerCase();
-  const queryTerms = lowerQuery.split(/\s+/).filter(t => t.length > 2); // Ignore 'a', 'the'
+  const queryTerms = lowerQuery.split(/\s+/).filter(t => t.length > 2); 
 
   const scoredDocs = docsToSearch.map(doc => {
       // 1. Vector Score (Semantic)
+      // Clamping negative cosine similarity to 0 to avoid punishing distinct but related concepts
       let vectorScore = 0;
       if (doc.embedding && queryEmbedding) {
-          vectorScore = cosineSimilarity(queryEmbedding, doc.embedding);
-          // Clamp negative cosine scores to 0 for simpler fusion
-          vectorScore = Math.max(0, vectorScore);
+          const rawScore = cosineSimilarity(queryEmbedding, doc.embedding);
+          vectorScore = Math.max(0, rawScore);
       }
 
       // 2. Keyword Score (Precision)
-      // Boost score if specific terms (names, codes) appear in the content or title
       let keywordHits = 0;
       const contentLower = (doc.content + " " + doc.title).toLowerCase();
       
@@ -380,26 +379,24 @@ export const searchDocuments = async (query: string, queryEmbedding?: number[], 
           if (contentLower.includes(term)) keywordHits++;
       });
       
-      // Simple keyword density score (capped at 1.0 for ~5 hits)
       const keywordScore = Math.min(keywordHits * 0.2, 1.0);
 
-      // 3. Hybrid Fusion
-      // If we have vectors: 70% Semantic + 30% Keyword
-      // If no vectors: 100% Keyword
+      // 3. Hybrid Fusion: Weighted Scoring
+      // Priority: Semantic (70%) > Keyword (30%)
       let finalScore = 0;
       if (queryEmbedding && doc.embedding) {
           finalScore = (vectorScore * 0.7) + (keywordScore * 0.3);
       } else {
+          // Fallback to Keyword Only if embeddings are missing
           finalScore = keywordScore;
       }
 
       return { doc, score: finalScore };
   });
 
-  // Sort and Return Top Results
   return scoredDocs
     .filter(item => item.score > 0.1) // Noise filter
     .sort((a, b) => b.score - a.score)
-    .slice(0, 8) // Return top 8 chunks
+    .slice(0, 8) 
     .map(item => item.doc);
 };

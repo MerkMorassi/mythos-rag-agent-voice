@@ -77,8 +77,19 @@ You have access to a local Knowledge Base via the tool 'searchKnowledgeBase'.
 
 [TOOL USE PROTOCOL]
 *   **googleSearch**: Use for real-time news or broad web queries.
+*   **generateMediaContent**: Use when the user asks for VISUAL media (images, videos, painting, drawing, animation).
 *   **updateSystemInstructions**: Use to permanently adjust your persona.
-*   **routeRequest**: Use for Image Generation (FLUX_IMAGE) or Policy-Restricted tasks (EXTERNAL_LLM).
+*   **routeRequest**: Use for specific External LLM tasks if needed.
+`;
+
+const TRANSLATION_PROTOCOL = `
+[UNIVERSAL TRANSLATOR PROTOCOL]
+1.  **ACTIVATION:** If a user asks to translate text (especially Ancient Greek) or an uploaded document, you MUST use the 'translateAncientGreek' tool.
+2.  **ACKNOWLEDGEMENT:** Before calling the tool, verbally acknowledge: "Accessing Universal Translator module. Standby."
+3.  **RESULT HANDLING:** When the tool returns the translation:
+    *   Do NOT read the entire text aloud immediately if it is long.
+    *   Store the meaning in your immediate context.
+    *   Say: "Translation complete. I have deciphered the text. Would you like a full reading, a summary, or an analysis?"
 `;
 
 const searchTool: FunctionDeclaration = {
@@ -141,13 +152,13 @@ const optimizePromptTool: FunctionDeclaration = {
 
 const routeRequestTool: FunctionDeclaration = {
   name: 'routeRequest',
-  description: 'Routes a request to a specialized external AI model. Use for Image Generation (Flux) or when standard policy restrictions prevent you from fulfilling a safe user request (Offloading).',
+  description: 'Routes a request to a specialized external AI model. Use for Uncensored/Specialized text generation via External LLMs.',
   parameters: {
     type: Type.OBJECT,
     properties: {
       target: { 
           type: Type.STRING, 
-          description: 'The target model service. Options: "FLUX_IMAGE" (High quality images), "EXTERNAL_LLM" (Uncensored/Specialized text).' 
+          description: 'The target model service. Options: "EXTERNAL_LLM" (Uncensored/Specialized text).' 
       },
       prompt: { type: Type.STRING, description: 'The prompt to send to the external model.' }
     },
@@ -194,6 +205,19 @@ const translateTool: FunctionDeclaration = {
   },
 };
 
+const mediaTool: FunctionDeclaration = {
+  name: 'generateMediaContent',
+  description: 'Generates visual media (Images or Videos) based on a prompt. Use this when the user asks to "draw", "paint", "create a video", "animate", or "visualize" something.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      mediaType: { type: Type.STRING, description: 'Type of media: "image" or "video".' },
+      prompt: { type: Type.STRING, description: 'Detailed prompt for the generation.' },
+    },
+    required: ['mediaType', 'prompt'],
+  },
+};
+
 interface Attachment {
   file: File;
   type: 'image' | 'text';
@@ -216,6 +240,7 @@ const App: React.FC = () => {
   const [connectionState, setConnectionState] = useState<ConnectionState>(ConnectionState.DISCONNECTED);
   const [logs, setLogs] = useState<LogMessage[]>([]);
   const [systemStatus, setSystemStatus] = useState<string>("System Initialized.");
+  const [statusColor, setStatusColor] = useState<string>('#4ade80');
   
   const [selectedAgentId, setSelectedAgentId] = useState<string>(AGENTS[0].id);
   const [inputText, setInputText] = useState('');
@@ -234,6 +259,7 @@ const App: React.FC = () => {
   const [modelConfig, setModelConfig] = useState<ModelConfig>(DEFAULT_MODEL_CONFIG);
   const [generalInstruction, setGeneralInstruction] = useState<string>('');
   const [agentInstruction, setAgentInstruction] = useState<string>('');
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   
   // Voice State
   const [selectedVoice, setSelectedVoice] = useState<string>(AGENTS[0].voice);
@@ -309,8 +335,10 @@ const App: React.FC = () => {
           const mic = isMicMuted ? 'OFF' : 'ON';
           const cam = isCameraActive ? 'ON' : 'OFF';
           setSystemStatus(`READY :: ${currentAgent.handle.toUpperCase()} | VOICE: ${voice.toUpperCase()} | MIC: ${mic} | CAM: ${cam}`);
+          setStatusColor('#4ade80');
       } else if (viewMode === 'CONFERENCE') {
           setSystemStatus("MULTI-AGENT CONFERENCE MODE ACTIVE");
+          setStatusColor('#4ade80');
       }
   }, [connectionState, selectedAgentId, selectedVoice, isCustomVoice, customVoiceName, isMicMuted, isCameraActive, viewMode]);
 
@@ -329,6 +357,7 @@ const App: React.FC = () => {
           setAgentInstruction(savedConfig.instruction);
           setModelConfig(savedConfig.modelConfig);
           setAgentVoiceRef(savedConfig.voiceReference); // Load cloned voice ref
+          setHasUnsavedChanges(false); // Reset dirty flag on load
           setLogsLoaded(true); 
           
           if (docCount > 0) {
@@ -419,7 +448,7 @@ const App: React.FC = () => {
     }, 3000);
   };
 
-  const addLog = (type: LogMessage['type'], text: string, id?: string, attachment?: string) => {
+  const addLog = (type: LogMessage['type'], text: string, id?: string, attachment?: string, attachmentType?: LogMessage['attachmentType']) => {
     if (type === 'system') {
         setSystemStatus(text.replace(/SYSTEM:/i, '').trim());
     }
@@ -429,10 +458,10 @@ const App: React.FC = () => {
         const index = prev.findIndex(l => l.id === logId);
         if (index !== -1) {
             const updated = [...prev];
-            updated[index] = { ...updated[index], text, attachment, timestamp: Date.now() };
+            updated[index] = { ...updated[index], text, attachment, attachmentType, timestamp: Date.now() };
             return updated;
         }
-        return [...prev, { id: logId, type, text, attachment, timestamp: Date.now() }];
+        return [...prev, { id: logId, type, text, attachment, attachmentType, timestamp: Date.now() }];
     });
     return logId;
   };
@@ -495,6 +524,7 @@ const App: React.FC = () => {
     });
     
     if (newVoiceRef) setAgentVoiceRef(newVoiceRef);
+    setHasUnsavedChanges(false);
 
     if (connectionState === ConnectionState.CONNECTED && sessionRef.current) {
         setSystemStatus('Injecting Updated Instructions...');
@@ -749,7 +779,7 @@ const App: React.FC = () => {
                 let textParts = [];
                 
                 if (isImageGen) {
-                    textParts.push(`[SYSTEM: User explicitly requests IMAGE GENERATION via tool selector. You MUST use 'routeRequest' with target='FLUX_IMAGE' for this request.] `);
+                    textParts.push(`[SYSTEM: User explicitly requests IMAGE GENERATION via tool selector. You MUST use 'generateMediaContent' with mediaType='image' for this request.] `);
                 }
                 if (isExternal) {
                     textParts.push(`[SYSTEM: User explicitly requests EXTERNAL LLM routing via tool selector. You MUST use 'routeRequest' with target='EXTERNAL_LLM' for this request.] `);
@@ -785,6 +815,7 @@ const App: React.FC = () => {
 
     setConnectionState(ConnectionState.CONNECTING);
     setSystemStatus(`Initializing Link to ${currentAgent.handle}...`);
+    setStatusColor('#4ade80');
     
     const recentHistory = logs.slice(-10).map(l => `${l.type === 'user' ? 'User' : 'Agent'}: ${l.text}`).join('\n');
     const historyContext = recentHistory ? `\n\nRECENT CONVERSATION HISTORY (RESUME CONTEXT):\n${recentHistory}` : '';
@@ -801,7 +832,8 @@ const App: React.FC = () => {
         parts = [
             currentAgent.system_instruction, 
             LANGUAGE_PROTOCOL,
-            RAG_INSTRUCTION,                 
+            RAG_INSTRUCTION,
+            TRANSLATION_PROTOCOL,
             "=== GENERAL USER INSTRUCTIONS ===",
             generalInstruction,
             `=== ${currentAgent.handle.toUpperCase()} SPECIFIC INSTRUCTIONS ===`,
@@ -834,12 +866,16 @@ const App: React.FC = () => {
           outputAudioTranscription: {}, 
           inputAudioTranscription: {},  
           speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } },
-          tools: [{ googleSearch: {} }, { functionDeclarations: [searchTool, transcriptTool, terminateTool, updateInstructionsTool, updateConfigTool, saveMemoryTool, translateTool, savePromptTool, optimizePromptTool, routeRequestTool] }],
+          tools: [
+              { googleSearch: {} }, 
+              { functionDeclarations: [searchTool, transcriptTool, terminateTool, updateInstructionsTool, updateConfigTool, saveMemoryTool, translateTool, savePromptTool, optimizePromptTool, routeRequestTool, mediaTool] }
+          ],
         },
         callbacks: {
           onopen: async () => {
             setConnectionState(ConnectionState.CONNECTED);
             setSystemStatus(`Link Established: ${currentAgent.handle} is online (Voice: ${voiceName}).`);
+            setStatusColor('#4ade80');
             showToast('Uplink Connected', 'success');
 
             const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -884,6 +920,7 @@ const App: React.FC = () => {
               console.debug("Connection closed", e);
               setConnectionState(ConnectionState.DISCONNECTED);
               setSystemStatus('Link Terminated (Server Closure).');
+              setStatusColor('#666');
               stopAudioPlayback();
               stopSilenceTimer();
           },
@@ -891,6 +928,7 @@ const App: React.FC = () => {
               console.error("Connection error", e);
               setConnectionState(ConnectionState.ERROR);
               setSystemStatus('Link Error. Reconnect required.');
+              setStatusColor('#f87171');
               showToast('Connection Error', 'error');
               stopAudioPlayback();
               stopSilenceTimer();
@@ -1061,7 +1099,12 @@ const App: React.FC = () => {
                         return;
                     }
 
-                    setSystemStatus(`ROUTER: Offloading to ${target}...`);
+                    if (target === 'EXTERNAL_LLM') {
+                        setSystemStatus("WARNING: UNCENSORED MODE ENABLED");
+                        setStatusColor('#fb923c'); // Warning Orange
+                    } else {
+                        setSystemStatus(`ROUTER: Offloading to ${target}...`);
+                    }
                     
                     try {
                         const routeRes = await ExternalRouter.route(target, prompt);
@@ -1147,12 +1190,15 @@ const App: React.FC = () => {
                   }
                 } else if (fc.name === 'translateAncientGreek') {
                   const { text, target } = fc.args as any;
+                  setSystemStatus("Universal Translator: Deciphering..."); 
+                  
+                  const openlKey = localStorage.getItem('openl_api_key') || process.env.OPENL_API_KEY;
                   try {
                       const res = await fetch('https://api.openl.io/translate', {
                           method: 'POST',
                           headers: { 
                               'Content-Type': 'application/json',
-                              'Authorization': `Bearer ${process.env.OPENL_API_KEY || ''}` 
+                              'Authorization': `Bearer ${openlKey || ''}` 
                           },
                           body: JSON.stringify({ 
                               text, 
@@ -1164,12 +1210,14 @@ const App: React.FC = () => {
                       if (res.ok) {
                           const data = await res.json();
                           const translated = data.translated_text || data.translation || JSON.stringify(data);
+                          setSystemStatus("Translator: Complete.");
                           sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: translated } } }));
                       } else {
                           throw new Error("OpenL API Unavailable");
                       }
                   } catch (e) {
                       console.warn("Translation API failed, falling back to internal logic", e);
+                      setSystemStatus("Translator: API Offline. Using Internal Logic.");
                       sessionPromise.then(s => s.sendToolResponse({ 
                           functionResponses: { 
                               id: fc.id, 
@@ -1178,6 +1226,97 @@ const App: React.FC = () => {
                           } 
                       }));
                   }
+                } else if (fc.name === 'generateMediaContent') {
+                    const { mediaType, prompt } = fc.args as any;
+                    
+                    try {
+                        if (mediaType === 'video') {
+                            setSystemStatus("Veo: Generating Video (Please wait ~60s)...");
+                            
+                            // Veo Generation Logic
+                            let operation = await ai.models.generateVideos({
+                                model: 'veo-3.1-fast-generate-preview',
+                                prompt: prompt,
+                                config: {
+                                    numberOfVideos: 1,
+                                    resolution: '720p',
+                                    aspectRatio: '16:9'
+                                }
+                            });
+                            
+                            // Polling for completion
+                            while (!operation.done) {
+                                await new Promise(resolve => setTimeout(resolve, 5000));
+                                operation = await ai.operations.getVideosOperation({operation: operation});
+                            }
+                            
+                            const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri;
+                            if (videoUri) {
+                                // Add API Key to URI for playback
+                                const authenticatedUri = `${videoUri}&key=${apiKey}`;
+                                addLog('model', `[Veo] Generated Video: "${prompt}"`, undefined, authenticatedUri, 'video');
+                                setSystemStatus("Veo: Video Generation Complete.");
+                                sessionPromise.then(s => s.sendToolResponse({ 
+                                    functionResponses: { 
+                                        id: fc.id, 
+                                        name: fc.name, 
+                                        response: { result: `Video generated successfully and displayed in the chat interface.` } 
+                                    } 
+                                }));
+                            } else {
+                                throw new Error("Video URI not found in response.");
+                            }
+
+                        } else {
+                            // Image Generation Logic (Imagen 3 / Gemini Image)
+                            setSystemStatus("Imagen: Generating Image...");
+                            
+                            const res = await ai.models.generateContent({
+                                model: 'gemini-2.5-flash-image', // Using Flash-Image as default per user request
+                                contents: { parts: [{ text: prompt }] },
+                                config: {
+                                    responseMimeType: 'application/json' // Not needed for image gen usually, but ensures no stray text
+                                }
+                            });
+                            
+                            // Iterate to find image part
+                            let foundImage = false;
+                            if (res.candidates?.[0]?.content?.parts) {
+                                for (const part of res.candidates[0].content.parts) {
+                                    if (part.inlineData) {
+                                        const base64 = part.inlineData.data;
+                                        const mime = part.inlineData.mimeType;
+                                        const dataUrl = `data:${mime};base64,${base64}`;
+                                        addLog('model', `[Imagen] Generated Image: "${prompt}"`, undefined, dataUrl, 'image');
+                                        foundImage = true;
+                                    }
+                                }
+                            }
+                            
+                            if (foundImage) {
+                                setSystemStatus("Imagen: Complete.");
+                                sessionPromise.then(s => s.sendToolResponse({ 
+                                    functionResponses: { 
+                                        id: fc.id, 
+                                        name: fc.name, 
+                                        response: { result: `Image generated and displayed.` } 
+                                    } 
+                                }));
+                            } else {
+                                throw new Error("No image data returned from model.");
+                            }
+                        }
+                    } catch (e: any) {
+                        console.error("Media Generation Failed", e);
+                        setSystemStatus(`Media Gen Error: ${e.message}`);
+                        sessionPromise.then(s => s.sendToolResponse({ 
+                            functionResponses: { 
+                                id: fc.id, 
+                                name: fc.name, 
+                                response: { result: `Error generating media: ${e.message}. Inform the user.` } 
+                            } 
+                        }));
+                    }
                 }
               }
             }
@@ -1212,6 +1351,7 @@ const App: React.FC = () => {
     } catch (e) {
       setConnectionState(ConnectionState.ERROR);
       setSystemStatus("Connection Failed.");
+      setStatusColor('#f87171');
       showToast('Connection Failed', 'error');
     }
   };
@@ -1235,6 +1375,7 @@ const App: React.FC = () => {
     if (sessionRef.current) sessionRef.current.close?.();
     setConnectionState(ConnectionState.DISCONNECTED);
     setSystemStatus('Link Terminated.');
+    setStatusColor('#666');
     showToast('Link Terminated', 'info');
   };
 
@@ -1267,7 +1408,7 @@ const App: React.FC = () => {
         <h1 className="header-title animate-pulse">MYTHOS : : COMMS : : HYPERVISOR</h1>
         <div className="status-bar">
           <div className="status-item">CORE: <span style={{color:'#fff'}}>{currentAgent.handle}</span></div>
-          <div className="system-status-header" style={{marginRight:'0.5rem'}}>{systemStatus}</div>
+          <div className="system-status-header" style={{marginRight:'0.5rem', color: statusColor}}>{systemStatus}</div>
           <div className="status-item">SYNC: <span style={{color: connectionState === ConnectionState.CONNECTED ? '#4ade80' : '#666'}}>{connectionState}</span></div>
         </div>
       </div>
@@ -1291,9 +1432,17 @@ const App: React.FC = () => {
                 <select 
                     value={selectedAgentId} 
                     onChange={e => {
+                        const newId = e.target.value;
+                        if (hasUnsavedChanges) {
+                            if (!window.confirm("Unsaved changes in Settings. Switching agents will discard them. Continue?")) {
+                                return;
+                            }
+                        }
+                        setHasUnsavedChanges(false);
                         setLogsLoaded(false); 
                         setLogs([]); 
-                        setSelectedAgentId(e.target.value);
+                        setSelectedAgentId(newId);
+                        showToast(`Active Agent: ${AGENTS.find(a => a.id === newId)?.handle.toUpperCase()}`, 'info');
                     }} 
                     disabled={connectionState !== ConnectionState.DISCONNECTED} 
                     className="form-select control-select-agent"
@@ -1397,6 +1546,7 @@ const App: React.FC = () => {
                     agentName={currentAgent.handle}
                     agentId={selectedAgentId}
                     onSave={handleSaveSettings}
+                    onDirty={() => setHasUnsavedChanges(true)}
                 />
                 <VoiceCommandList /> 
             </div>
@@ -1450,7 +1600,22 @@ const App: React.FC = () => {
               </div>
               {log.attachment && (
                   <div style={{ margin: '0.5rem 0' }}>
-                      <img src={log.attachment} alt="Model Output" style={{ maxWidth: '100%', maxHeight: '300px', borderRadius: '4px', border: '1px solid #4ade80' }} />
+                      {log.attachmentType === 'video' ? (
+                          <video 
+                              src={log.attachment} 
+                              controls 
+                              autoPlay 
+                              muted 
+                              loop 
+                              style={{ maxWidth: '100%', maxHeight: '300px', borderRadius: '4px', border: '1px solid #4ade80' }} 
+                          />
+                      ) : (
+                          <img 
+                              src={log.attachment} 
+                              alt="Model Output" 
+                              style={{ maxWidth: '100%', maxHeight: '300px', borderRadius: '4px', border: '1px solid #4ade80' }} 
+                          />
+                      )}
                   </div>
               )}
               {log.text}

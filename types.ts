@@ -24,7 +24,8 @@ export interface LogMessage {
   text: string;
   timestamp: number;
   feedback?: 'up' | 'down';
-  attachment?: string; // Base64 image data from external models
+  attachment?: string; // Base64 image data or Video URI
+  attachmentType?: 'image' | 'video' | 'text' | 'audio';
 }
 
 export interface ChatSession {

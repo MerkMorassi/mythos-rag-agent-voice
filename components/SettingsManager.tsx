@@ -18,6 +18,7 @@ interface SettingsManagerProps {
   agentId: string; 
   
   onSave: (voiceRef?: string) => Promise<void>;
+  onDirty?: () => void;
 }
 
 const SettingsManager: React.FC<SettingsManagerProps> = ({ 
@@ -30,7 +31,8 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
   setAgentInstruction,
   agentName,
   agentId,
-  onSave
+  onSave,
+  onDirty
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -45,12 +47,14 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
   // API Credentials State
   const [geminiKey, setGeminiKey] = useState('');
   const [hfToken, setHfToken] = useState('');
+  const [openlKey, setOpenlKey] = useState('');
 
   useEffect(() => {
       if (isOpen) {
           if (agentId) loadPrompts();
           setGeminiKey(localStorage.getItem('gemini_api_key') || '');
           setHfToken(localStorage.getItem('hf_token') || '');
+          setOpenlKey(localStorage.getItem('openl_api_key') || '');
       }
   }, [isOpen, agentId]);
 
@@ -71,10 +75,12 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
           if (!window.confirm("Replace current instructions with this saved prompt?")) return;
       }
       setAgentInstruction(content);
+      if (onDirty) onDirty();
   };
 
   const handleChange = (key: keyof ModelConfig, value: number) => {
     setModelConfig({ ...modelConfig, [key]: value });
+    if (onDirty) onDirty();
   };
 
   const handleVoiceSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -86,6 +92,7 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
           reader.onload = (evt) => {
               const res = evt.target?.result as string;
               setVoiceBase64(res); 
+              if (onDirty) onDirty();
           };
           reader.readAsDataURL(file);
       }
@@ -100,6 +107,9 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
 
         if (hfToken) localStorage.setItem('hf_token', hfToken);
         else localStorage.removeItem('hf_token');
+
+        if (openlKey) localStorage.setItem('openl_api_key', openlKey);
+        else localStorage.removeItem('openl_api_key');
 
         await onSave(voiceBase64);
         setSaveSuccess(true);
@@ -182,6 +192,17 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
                             style={{ fontFamily: 'monospace' }}
                         />
                     </div>
+                    <div>
+                        <label style={{ fontSize: '0.7rem', color: '#888', display: 'block', marginBottom: '0.25rem' }}>OPENL.IO API KEY (Translate - Optional)</label>
+                        <input 
+                            type="password"
+                            value={openlKey}
+                            onChange={(e) => setOpenlKey(e.target.value)}
+                            placeholder="Key..."
+                            className="form-input"
+                            style={{ fontFamily: 'monospace' }}
+                        />
+                    </div>
                 </div>
             </div>
 
@@ -215,7 +236,7 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
               <textarea
                 placeholder="Instructions that apply to ALL agents (e.g., 'Be concise', 'Always answer in JSON')..."
                 value={generalInstruction}
-                onChange={(e) => setGeneralInstruction(e.target.value)}
+                onChange={(e) => { setGeneralInstruction(e.target.value); if (onDirty) onDirty(); }}
                 className="form-input"
                 style={{ height: '6rem', resize: 'vertical' }}
                 disabled={false} 
@@ -252,7 +273,7 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
               <textarea
                 placeholder={`Specific instructions for ${agentName}...`}
                 value={agentInstruction}
-                onChange={(e) => setAgentInstruction(e.target.value)}
+                onChange={(e) => { setAgentInstruction(e.target.value); if (onDirty) onDirty(); }}
                 className="form-input"
                 style={{ height: '6rem', resize: 'vertical' }}
                 disabled={false}
@@ -310,7 +331,7 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
 
               <div className="flex-group" style={{ marginTop: '1rem' }}>
                   <button 
-                    onClick={() => setModelConfig(DEFAULT_MODEL_CONFIG)}
+                    onClick={() => { setModelConfig(DEFAULT_MODEL_CONFIG); if (onDirty) onDirty(); }}
                     className="btn btn-secondary"
                     type="button"
                     disabled={disabled}
