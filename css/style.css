@@ -27,6 +27,13 @@ body {
     padding: 0;
 }
 
+#root {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    justify-content: center;
+}
+
 .main-container {
     width: 100%;
     max-width: 64rem;
@@ -35,7 +42,7 @@ body {
     flex-direction: column;
     gap: 1rem;
     padding: 1rem;
-    padding-bottom: 3rem; /* Extra padding at bottom as requested */
+    padding-bottom: 3rem;
     box-sizing: border-box;
 }
 
@@ -46,7 +53,7 @@ body {
 /* Header Styling */
 .header-container {
     text-align: center;
-    flex: 0 0 auto; /* Don't shrink */
+    flex: 0 0 auto;
 }
 
 .header-title {
@@ -63,7 +70,7 @@ body {
     border: 1px solid var(--color-border);
     padding: 1rem;
     border-radius: 0.375rem;
-    flex: 0 0 auto; /* Don't shrink by default */
+    flex: 0 0 auto;
 }
 
 /* Control Panel (New Deck Layout) */
@@ -91,7 +98,7 @@ body {
     gap: 0.5rem;
     align-items: center;
     flex: 1;
-    min-width: 0; /* Prevent flex overflow */
+    min-width: 0;
 }
 
 .control-group.tight {
@@ -117,7 +124,7 @@ body {
     font-size: 0.75rem;
     display: flex;
     align-items: center;
-    height: var(--control-height); /* Match button height for alignment */
+    height: var(--control-height);
 }
 
 /* Terminal Status Display */
@@ -132,7 +139,7 @@ body {
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    margin-top: -1rem; /* Connect to panel above */
+    margin-top: -1rem;
     border-bottom-left-radius: 0.375rem;
     border-bottom-right-radius: 0.375rem;
 }
@@ -151,7 +158,7 @@ body {
     width: 100%;
     background-color: var(--color-panel);
     border: 1px solid var(--color-border);
-    padding: 0 0.75rem; /* Horizontal padding only */
+    padding: 0 0.75rem;
     height: var(--control-height);
     border-radius: 0.25rem;
     color: var(--color-text-main);
@@ -171,7 +178,7 @@ body {
     background-color: #262626;
     border: 1px solid var(--color-border);
     color: var(--color-text-muted);
-    padding: 0 2rem 0 0.75rem; /* Right padding for arrow */
+    padding: 0 2rem 0 0.75rem;
     border-radius: 0.25rem;
     outline: none;
     cursor: pointer;
@@ -219,7 +226,7 @@ input[type=range]::-webkit-slider-thumb {
   border-radius: 50%;
   background: var(--color-accent);
   cursor: pointer;
-  margin-top: -5px; /* (height of track - height of thumb) / 2 */
+  margin-top: -5px;
   border: 2px solid var(--color-panel);
   transition: transform 0.1s;
 }
@@ -300,7 +307,7 @@ input[type=range]:disabled {
 
 /* Buttons */
 .btn {
-    padding: 0 1rem; /* Horizontal padding only */
+    padding: 0 1rem;
     height: var(--control-height);
     border-radius: 0.25rem;
     font-weight: bold;
@@ -367,7 +374,7 @@ input[type=range]:disabled {
 }
 
 .btn-icon {
-    width: var(--control-height); /* Square */
+    width: var(--control-height);
     height: var(--control-height);
     padding: 0;
     flex: none;
@@ -425,7 +432,7 @@ input[type=range]:disabled {
 
 /* Responsive Controls */
 .control-select-agent {
-    flex: 2; /* Take more space */
+    flex: 2;
 }
 .control-btn-link {
     flex: 1;
@@ -454,8 +461,8 @@ input[type=range]:disabled {
 
 /* Chat History */
 .chat-history-container {
-    flex: 1; /* Grow to fill available space */
-    min-height: 0; /* Important for nested flex scrolling */
+    flex: 1;
+    min-height: 0;
     overflow-y: auto;
     padding: 1rem;
     border: 1px solid var(--color-border);
@@ -511,8 +518,8 @@ input[type=range]:disabled {
 .chat-input-container {
     display: flex;
     gap: 0.5rem;
-    align-items: center; /* Center Vertically */
-    flex: 0 0 auto; /* Don't shrink */
+    align-items: center;
+    flex: 0 0 auto;
 }
 
 .chat-input-wrapper {
@@ -617,7 +624,6 @@ input[type=range]:disabled {
     box-shadow: -10px 0 30px rgba(0,0,0,0.5);
 }
 
-/* --- MODAL UTILITIES (For Clean Components) --- */
 .modal-header-area {
     padding: 1.5rem;
     padding-bottom: 0.5rem;
