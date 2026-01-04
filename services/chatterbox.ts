@@ -4,10 +4,7 @@
  * Space URL: https://huggingface.co/spaces/merkmorassi/Chatterbox
  */
 
-// We target the Gradio API endpoint usually exposed at /api/predict or /gradio_api/call
-// Note: Direct calls to HF Spaces from browser may face CORS issues if the space isn't configured for it.
-// In production, this often requires a proxy. We will attempt direct fetch assuming standard Gradio setup.
-
+// We target the Gradio API endpoint
 const HF_SPACE_URL = "https://merkmorassi-chatterbox.hf.space/api/predict";
 
 export interface ChatterboxRequest {
@@ -21,7 +18,7 @@ export const ChatterboxService = {
   async synthesize(req: ChatterboxRequest): Promise<ArrayBuffer> {
     try {
       // Gradio API usually expects a structure like { data: [param1, param2, ...] }
-      // Based on standard Voice Cloning spaces, inputs are usually: Text, Audio Path/Blob, Language
+      // Inputs: Text, Audio (as object or path), Language
       
       const response = await fetch(HF_SPACE_URL, {
         method: "POST",
@@ -45,14 +42,13 @@ export const ChatterboxService = {
       const result = await response.json();
       
       // Gradio returns { data: [{ name: "...", data: "data:audio/wav;base64,..." }] }
-      // or sometimes just the path. Let's handle the base64 data return.
       const output = result.data[0];
       
       let audioDataStr = "";
       if (typeof output === 'string') {
-          audioDataStr = output; // Sometimes it's a direct path/string
+          audioDataStr = output; 
       } else if (output.data) {
-          audioDataStr = output.data; // Standard Gradio serialized file
+          audioDataStr = output.data; 
       }
 
       if (audioDataStr.startsWith('data:')) {

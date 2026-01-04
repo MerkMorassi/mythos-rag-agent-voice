@@ -1,6 +1,8 @@
 
 import { KnowledgeDoc, LorePack, LorePackHeader } from '../types';
 import { NumMarkX_GenerateHeader, NumMarkX_GenerateID, NumMarkX_GenerateSigil } from '../patterns/NumMarkX';
+import { GoogleGenAI } from "@google/genai";
+import { addDocument } from "./db";
 
 export interface IngestionResult {
     success: boolean;
@@ -78,6 +80,75 @@ export class IngestionService {
                 stats: { total: 0, withVectors: 0, avgSize: 0, existingSigils: 0 }
             };
         }
+    }
+
+    /**
+     * AUTO-INGESTION FOR CHAT FILES
+     * Chunks and Embeds text without NumMark-X Sigils.
+     */
+    static async ingestText(
+        text: string, 
+        filename: string, 
+        agentId: string, 
+        apiKey: string
+    ): Promise<number> {
+        const chunks = this.chunkText(text);
+        if (chunks.length === 0) return 0;
+
+        const ai = new GoogleGenAI({ apiKey });
+        const BATCH_SIZE = 50; 
+        let savedCount = 0;
+
+        for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
+            const batch = chunks.slice(i, i + BATCH_SIZE);
+            
+            try {
+                // Generate Embeddings
+                const batchResult = await ai.models.embedContent({
+                    model: 'text-embedding-004',
+                    contents: batch.map(c => ({ parts: [{ text: c }] })),
+                    config: { taskType: 'RETRIEVAL_DOCUMENT', title: filename }
+                });
+                
+                const embeddings = batchResult.embeddings;
+
+                // Save Documents
+                const savePromises = batch.map((chunk, k) => {
+                    const doc: KnowledgeDoc = {
+                        id: crypto.randomUUID(),
+                        agentId: agentId,
+                        title: `${filename} (Part ${i + k + 1})`,
+                        content: chunk,
+                        embedding: embeddings?.[k]?.values,
+                        timestamp: Date.now(),
+                        tags: ['AUTO_INGEST', 'CHAT_UPLOAD']
+                        // numMarkId intentionally OMITTED per requirements
+                    };
+                    return addDocument(doc);
+                });
+
+                await Promise.all(savePromises);
+                savedCount += batch.length;
+
+            } catch (e) {
+                console.warn(`[Ingestion] Batch failed for ${filename}:`, e);
+                // Fallback: Save without vectors
+                const savePromises = batch.map((chunk, k) => {
+                    const doc: KnowledgeDoc = {
+                        id: crypto.randomUUID(),
+                        agentId: agentId,
+                        title: `${filename} (Part ${i + k + 1})`,
+                        content: chunk,
+                        timestamp: Date.now(),
+                        tags: ['AUTO_INGEST', 'CHAT_UPLOAD', 'NO_VECTOR']
+                    };
+                    return addDocument(doc);
+                });
+                await Promise.all(savePromises);
+                savedCount += batch.length;
+            }
+        }
+        return savedCount;
     }
 
     /**

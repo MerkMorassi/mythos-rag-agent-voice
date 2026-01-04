@@ -1,16 +1,19 @@
 
+import { saveMediaAsset } from "./db";
+import { MediaAsset } from "../types";
+import { NumMarkX_GenerateID } from "../patterns/NumMarkX";
+
 /**
  * EXTERNAL MODEL ROUTER
- * Routes prompts to specialized Hugging Face Spaces (or other APIs) 
- * to offload tasks like Image Generation or Uncensored Chat.
+ * Routes prompts to specialized Hugging Face Spaces.
+ * 
+ * TARGETS:
+ * 1. FLUX_IMAGE -> Mythos Engine (Custom SDXL)
+ * 2. EXTERNAL_LLM -> Mythos Engine (Text Logic)
  */
 
-// Example Space: Flux.1-Schnell (Fast, High Quality Images)
-const HF_FLUX_URL = "https://black-forest-labs-flux-1-schnell.hf.space/api/predict";
-
-// Target Model: Cognitive Computations Dolphin 2.9.4 (Llama 3.1 8B)
-// This is an uncensored model widely available on HF Inference API
-const HF_TEXT_URL = "https://api-inference.huggingface.co/models/cognitivecomputations/dolphin-2.9.4-llama3.1-8b";
+// User's specific Spaces
+const MYTHOS_ENGINE_URL = "https://merkmorassi-mythos-engine.hf.space/api/predict";
 
 export interface RouteResult {
     success: boolean;
@@ -21,14 +24,14 @@ export interface RouteResult {
 
 export const ExternalRouter = {
 
-    async route(target: string, prompt: string): Promise<RouteResult> {
-        console.log(`[ROUTER] Routing to ${target}: ${prompt}`);
+    async route(target: string, prompt: string, agent: { id: string, handle: string }): Promise<RouteResult> {
+        console.log(`[ROUTER] Routing to ${target}: ${prompt} (Agent: ${agent.handle})`);
         
         try {
             if (target === 'FLUX_IMAGE') {
-                return await this.callFluxSchnell(prompt);
+                return await this.callMythosImageGen(prompt, agent);
             } else if (target === 'EXTERNAL_LLM') {
-                return await this.callExternalLLM(prompt);
+                return await this.callMythosText(prompt);
             }
             return { success: false, type: 'text', error: "Unknown Target" };
         } catch (e: any) {
@@ -37,84 +40,146 @@ export const ExternalRouter = {
         }
     },
 
-    async callFluxSchnell(prompt: string): Promise<RouteResult> {
-        // Gradio API call structure for Flux Spaces
-        // Note: Public spaces often require this format: { data: [prompt, seed, randomize, width, height, steps] }
-        const response = await fetch(HF_FLUX_URL, {
+    async callMythosImageGen(prompt: string, agent: { id: string, handle: string }): Promise<RouteResult> {
+        // SDXL / Custom Image Gen on Mythos Engine
+        // Standard Gradio Payload for Image Gen usually involves [prompt, negative_prompt, ...]
+        const response = await fetch(MYTHOS_ENGINE_URL, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 data: [
-                    prompt, // Prompt
-                    0,      // Seed
-                    true,   // Randomize Seed
-                    512,    // Width
-                    512,    // Height
-                    4       // Num Inference Steps
+                    prompt,                                     // Prompt
+                    "blur, low quality, distortion, ugly",      // Negative Prompt (Standard Safety)
+                    true,                                       // Randomize Seed? (Common param)
+                    1024,                                       // Width
+                    1024,                                       // Height
+                    7,                                          // Guidance Scale
+                    30                                          // Steps
                 ]
             })
         });
 
-        if (!response.ok) throw new Error("Flux Space Unavailable");
+        if (!response.ok) throw new Error(`Mythos Engine (Image) Unavailable: ${response.statusText}`);
 
         const json = await response.json();
-        // Gradio returns [{ url: "..." }, ...] or data objects
-        const resultData = json.data[0]; 
         
-        // Handle result (Gradio usually returns a URL or Base64 structure)
-        if (resultData && resultData.url) {
-             return { success: true, type: 'image', data: resultData.url }; 
+        // Gradio often returns path to file or base64 data uri in the 'data' array
+        // Expecting: { data: [{ url: "..." }, ...] } OR { data: ["data:image/png;base64,..."] }
+        const resultData = json.data?.[0]; 
+        
+        let imageUrl = "";
+        
+        if (typeof resultData === 'string' && resultData.startsWith('data:')) {
+            imageUrl = resultData;
+        } else if (resultData && resultData.url) {
+            imageUrl = resultData.url;
+        } else if (resultData && resultData.name) {
+             // Sometimes it returns a file reference on the space
+             imageUrl = resultData.name; 
+        }
+
+        if (imageUrl) {
+             // --- AUTO-SAVE TO GALLERY ---
+             await this.saveGeneratedImage(imageUrl, prompt, agent);
+             return { success: true, type: 'image', data: imageUrl }; 
         }
         
-        return { success: false, type: 'text', error: "Invalid Flux response format" };
+        return { success: false, type: 'text', error: "Invalid response format from Mythos Engine" };
     },
 
-    async callExternalLLM(prompt: string): Promise<RouteResult> {
-        // Hugging Face Inference API Structure
-        const headers: Record<string, string> = { 
-            "Content-Type": "application/json" 
-        };
-        
-        // Use token if available to avoid rate limits
-        // Check localStorage first, then process.env
-        const token = localStorage.getItem('hf_token') || process.env.HF_TOKEN;
-        if (token) {
-            headers["Authorization"] = `Bearer ${token}`;
-        }
+    async callMythosText(prompt: string): Promise<RouteResult> {
+        try {
+            // Gradio API Call Structure for Text/Logic on Mythos Engine
+            // Assuming same endpoint, different inputs or maybe just simple text input
+            const response = await fetch(MYTHOS_ENGINE_URL, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    data: [
+                        prompt, // Input Text
+                        0.7,    // Temperature
+                        2048,   // Max Tokens
+                        0.95,   // Top P
+                        1.1     // Repetition Penalty
+                    ]
+                })
+            });
 
-        const response = await fetch(HF_TEXT_URL, {
-            method: "POST",
-            headers: headers,
-            body: JSON.stringify({
-                inputs: prompt,
-                parameters: {
-                    temperature: 0.7,
-                    max_new_tokens: 2048,
-                    top_p: 0.95,
-                    repetition_penalty: 1.1,
-                    return_full_text: false // We only want the generation
+            if (!response.ok) throw new Error(`Mythos Engine (Text) Unavailable: ${response.statusText}`);
+            
+            const json = await response.json();
+            
+            // Handle Gradio response format { data: [ "result_string", ... ] }
+            let text = "";
+            if (json.data && Array.isArray(json.data) && json.data.length > 0) {
+                text = json.data[0];
+            } else if (json.generated_text) {
+                text = json.generated_text;
+            } else {
+                text = JSON.stringify(json);
+            }
+            
+            return { success: true, type: 'text', data: text.trim() };
+
+        } catch (e: any) {
+            console.error("Mythos Engine Error", e);
+            return { success: false, type: 'text', error: `Mythos Engine Error: ${e.message}` };
+        }
+    },
+
+    // --- HELPER: KEYWORD EXTRACTION & SAVING ---
+    async saveGeneratedImage(urlOrBase64: string, prompt: string, agent: { id: string, handle: string }) {
+        try {
+            // 1. Extract Keywords
+            const stopWords = new Set(['a', 'an', 'the', 'of', 'in', 'on', 'with', 'by', 'at', 'to', 'for', 'is', 'style', 'view', 'highly', 'detailed']);
+            const cleanPrompt = prompt.replace(/[^a-zA-Z0-9, ]/g, '');
+            const words = cleanPrompt.split(/[\s,]+/);
+            
+            const keywords = words
+                .map(w => w.trim())
+                .filter(w => w.length > 3 && !stopWords.has(w.toLowerCase()))
+                .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()); // Capitalize
+
+            const uniqueTags = Array.from(new Set(keywords)).slice(0, 7); // Max 7 content tags
+            const finalTags = [agent.handle.toUpperCase(), ...uniqueTags];
+
+            // 2. Fetch Blob to store Base64 if it's a URL (for offline persistence)
+            let finalData = urlOrBase64;
+            if (urlOrBase64.startsWith('http')) {
+                try {
+                    const imgRes = await fetch(urlOrBase64);
+                    const blob = await imgRes.blob();
+                    finalData = await new Promise((resolve) => {
+                        const reader = new FileReader();
+                        reader.onloadend = () => {
+                            const res = reader.result as string;
+                            resolve(res.split(',')[1]); 
+                        };
+                        reader.readAsDataURL(blob);
+                    });
+                } catch (e) {
+                    console.warn("Could not convert URL to Base64 for persistence, saving URL.");
                 }
-            })
-        });
+            } else if (urlOrBase64.startsWith('data:image')) {
+                finalData = urlOrBase64.split(',')[1];
+            }
 
-        if (!response.ok) {
-            const errBody = await response.text();
-            console.error("HF Inference Error:", errBody);
-            throw new Error(`External LLM Unavailable: ${response.statusText}`);
+            // 3. Create Asset
+            const asset: MediaAsset = {
+                id: NumMarkX_GenerateID('IMG'),
+                type: 'image',
+                data: finalData,
+                prompt: prompt,
+                agentId: agent.id,
+                timestamp: Date.now(),
+                tags: finalTags
+            };
+
+            await saveMediaAsset(asset);
+            console.log(`[GALLERY] Auto-saved image for ${agent.handle} with tags: ${finalTags.join(', ')}`);
+
+        } catch (e) {
+            console.error("Failed to auto-save generated image", e);
         }
-        
-        const json = await response.json();
-        
-        // HF Inference API returns an array: [{ generated_text: "..." }]
-        let text = "";
-        if (Array.isArray(json) && json[0]?.generated_text) {
-            text = json[0].generated_text;
-        } else if (typeof json === 'object' && json.generated_text) {
-            text = json.generated_text;
-        } else {
-            text = JSON.stringify(json);
-        }
-        
-        return { success: true, type: 'text', data: text.trim() };
     }
 };

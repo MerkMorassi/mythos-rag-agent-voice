@@ -28,8 +28,6 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [sessionName, setSessionName] = useState('');
   const [ingestingId, setIngestingId] = useState<string | null>(null);
-  
-  // Feedback State
   const [statusMsg, setStatusMsg] = useState<{ text: string, type: 'success' | 'error' | 'info' } | null>(null);
 
   const loadSessions = async () => {
@@ -230,19 +228,7 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
       }
   };
 
-  if (!isOpen) {
-    return (
-      <button 
-        onClick={onOpen}
-        className="btn btn-secondary btn-icon"
-        title="Chat History"
-      >
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-        </svg>
-      </button>
-    );
-  }
+  if (!isOpen) return null;
 
   return (
     <div className="modal-overlay">

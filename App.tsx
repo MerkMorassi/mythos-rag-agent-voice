@@ -6,7 +6,8 @@ import {
   LogMessage, 
   ConnectionState, 
   DEFAULT_MODEL_CONFIG, 
-  ModelConfig 
+  ModelConfig,
+  MediaAsset
 } from './types';
 import Visualizer from './components/Visualizer';
 import ChatHistoryManager from './components/ChatHistoryManager';
@@ -17,23 +18,28 @@ import { VoiceCommandList } from './components/VoiceCommandList';
 import { RoomFocusConfig } from './components/RoomFocusConfig';
 import { McpManager } from './components/McpManager';
 import { Terminal } from './components/Terminal';
+import { MediaGallery } from './components/MediaGallery';
 import {
   saveActiveChat,
   getAgentConfig,
   saveAgentConfig,
   getGeneralInstructions,
-  saveGeneralInstructions
+  saveGeneralInstructions,
+  saveMediaAsset
 } from './services/db';
 import {
   base64ToUint8Array,
   createPcmBlob,
   decodeAudioData
 } from './services/audioUtils';
+import { IngestionService } from './services/ingestion';
+import { NumMarkX_GenerateID } from './patterns/NumMarkX';
 
 const SAMPLE_RATE = 24000;
 const INPUT_SAMPLE_RATE = 16000;
 
 type ViewMode = 'ORCHESTRATOR' | 'COUNCIL';
+type ModelMode = 'STD' | 'DEEP' | 'EXT';
 
 const App: React.FC = () => {
   // --- STATE ---
@@ -50,7 +56,12 @@ const App: React.FC = () => {
   const [generalInstructions, setGeneralInstructions] = useState('');
   const [agentInstructions, setAgentInstructions] = useState('');
   const [selectedVoice, setSelectedVoice] = useState(AGENTS[0].voice);
+  const [voiceSpeed, setVoiceSpeed] = useState(1.0);
+  const [voicePitch, setVoicePitch] = useState(0);
   const [accessLevel, setAccessLevel] = useState(AGENTS[0].accessLevel);
+  
+  // Model Mode State
+  const [modelMode, setModelMode] = useState<ModelMode>('STD');
 
   // Layout & View Modes
   const [layoutMode, setLayoutMode] = useState<'AUDIO' | 'CHAT' | 'HYBRID' | 'VIDEO'>('HYBRID');
@@ -59,7 +70,7 @@ const App: React.FC = () => {
   // Tools and Panels
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
   
-  // Sidebar State Management (For minimizing footer)
+  // Sidebar State Management
   const [activeSidePanel, setActiveSidePanel] = useState<string | null>(null);
 
   // Media State
@@ -81,6 +92,9 @@ const App: React.FC = () => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const frameIntervalRef = useRef<number | null>(null);
+
+  // File Upload Ref
+  const paperclipInputRef = useRef<HTMLInputElement>(null);
 
   // Scroll ref
   const logEndRef = useRef<HTMLDivElement>(null);
@@ -129,7 +143,7 @@ const App: React.FC = () => {
           
           if (frameIntervalRef.current) clearInterval(frameIntervalRef.current);
 
-          // Stream Frames at 1 FPS for basic presence (optimize as needed)
+          // Stream Frames at 1 FPS for basic presence
           frameIntervalRef.current = window.setInterval(() => {
               if (ctx && video.readyState === video.HAVE_ENOUGH_DATA) {
                   canvas.width = video.videoWidth;
@@ -140,7 +154,6 @@ const App: React.FC = () => {
                   
                   if (sessionPromiseRef.current) {
                       sessionPromiseRef.current.then(session => {
-                          // Only send if camera is still logically on
                           if (isCameraOnRef.current) {
                               session.sendRealtimeInput({ 
                                   media: { mimeType: 'image/jpeg', data: base64 } 
@@ -163,6 +176,8 @@ const App: React.FC = () => {
       setAgentInstructions(cfg.instruction || agent?.system_instruction || '');
       setModelConfig(cfg.modelConfig || DEFAULT_MODEL_CONFIG);
       setSelectedVoice(cfg.voiceName || agent?.voice || 'Puck');
+      setVoiceSpeed(cfg.voiceSpeed || 1.0);
+      setVoicePitch(cfg.voicePitch || 0);
       setAccessLevel(cfg.accessLevel || agent?.accessLevel || '400');
   };
 
@@ -174,6 +189,10 @@ const App: React.FC = () => {
   };
 
   const handleSettingsSave = async (voiceRef?: string, newAccessLevel?: string, speed?: number, pitch?: number) => {
+      // Update Local State for UI reflection immediately
+      if (speed) setVoiceSpeed(speed);
+      if (pitch) setVoicePitch(pitch);
+      
       await saveAgentConfig(currentAgentId, {
           instruction: agentInstructions,
           modelConfig,
@@ -222,7 +241,6 @@ const App: React.FC = () => {
       try {
           setConnectionState(ConnectionState.CONNECTING);
           
-          // 1. Audio Output Context
           if (!audioContextRef.current) {
               audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: SAMPLE_RATE });
               analyserRef.current = audioContextRef.current.createAnalyser();
@@ -230,7 +248,6 @@ const App: React.FC = () => {
               nextStartTimeRef.current = 0;
           }
 
-          // 2. Audio Input Context & Stream
           if (!inputContextRef.current) {
               inputContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: INPUT_SAMPLE_RATE });
           }
@@ -239,13 +256,24 @@ const App: React.FC = () => {
           const ai = new GoogleGenAI({ apiKey: keyToUse });
           const currentAgent = AGENTS.find(a => a.id === currentAgentId);
           
+          // CONSTRUCT MODE INSTRUCTIONS based on Selector
+          let modeInstruction = "";
+          if (modelMode === 'DEEP') {
+              modeInstruction = "\n\n[OPERATIONAL MODE: DEEP REASONING]\nACTIVATE 'Gemini 3 Pro' SIMULATION PROTOCOL.\n- Prioritize complex analysis, detailed explanations, and nuance.\n- Do not simplify unless asked.\n- Use advanced vocabulary and structural depth.\n- THINK before speaking.";
+          } else if (modelMode === 'EXT') {
+              modeInstruction = "\n\n[OPERATIONAL MODE: EXTERNAL TOOLING]\nACTIVATE 'Router' PROTOCOL.\n- You are operating in a HIGH-LATENCY, HIGH-POWER environment.\n- AGGRESSIVELY use the 'routeRequest' tool for ANY task involving:\n  1. Image Generation (Target: FLUX_IMAGE)\n  2. Uncensored/NSFW topics (Target: EXTERNAL_LLM)\n  3. Coding/Scripting (Target: EXTERNAL_LLM)\n- Prioritize tool use over chat.";
+          }
+
           const config = {
               responseModalities: [Modality.AUDIO],
               speechConfig: {
                   voiceConfig: { prebuiltVoiceConfig: { voiceName: selectedVoice } }
               },
-              systemInstruction: `${generalInstructions}\n\n${agentInstructions || currentAgent?.system_instruction}`,
-              // Enable Both Input (User) and Output (Model) Transcription
+              systemInstruction: `${generalInstructions}\n\n${agentInstructions || currentAgent?.system_instruction}${modeInstruction}`,
+              // Flattened Generation Config
+              temperature: modelConfig.temperature,
+              topP: modelConfig.topP,
+              topK: modelConfig.topK,
               inputAudioTranscription: {}, 
               outputAudioTranscription: {}, 
           };
@@ -259,68 +287,51 @@ const App: React.FC = () => {
                       setLogs(prev => [...prev, {
                           id: crypto.randomUUID(),
                           type: 'system',
-                          text: `Connected to ${currentAgent?.handle}`,
+                          text: `Connected to ${currentAgent?.handle} [MODE: ${modelMode}]`,
                           timestamp: Date.now()
                       }]);
 
-                      // Start Mic Stream
                       if (inputContextRef.current) {
                           const source = inputContextRef.current.createMediaStreamSource(stream);
                           const processor = inputContextRef.current.createScriptProcessor(4096, 1, 1);
                           
                           processor.onaudioprocess = (e) => {
-                              // Use REF to check mic state inside closure
                               if (!isMicOnRef.current) return;
-
                               const inputData = e.inputBuffer.getChannelData(0);
                               const pcmBlob = createPcmBlob(inputData);
-                              
                               if (sessionPromiseRef.current) {
                                   sessionPromiseRef.current.then(session => {
                                       session.sendRealtimeInput({ media: pcmBlob });
                                   });
                               }
                           };
-                          
                           source.connect(processor);
                           processor.connect(inputContextRef.current.destination);
                       }
                   },
                   onmessage: async (msg: LiveServerMessage) => {
-                      // 1. Handle Audio (Model Speech)
                       const audioData = msg.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
                       if (audioData && audioContextRef.current && analyserRef.current) {
                           const ctx = audioContextRef.current;
                           nextStartTimeRef.current = Math.max(nextStartTimeRef.current, ctx.currentTime);
-                          
-                          const audioBuffer = await decodeAudioData(
-                              base64ToUint8Array(audioData),
-                              ctx,
-                              SAMPLE_RATE
-                          );
-                          
+                          const audioBuffer = await decodeAudioData(base64ToUint8Array(audioData), ctx, SAMPLE_RATE);
                           const source = ctx.createBufferSource();
                           source.buffer = audioBuffer;
                           source.connect(analyserRef.current);
                           analyserRef.current.connect(ctx.destination);
-                          
                           source.start(nextStartTimeRef.current);
                           nextStartTimeRef.current += audioBuffer.duration;
-                          
                           source.onended = () => sourcesRef.current.delete(source);
                           sourcesRef.current.add(source);
                       }
 
-                      // 2. Handle User Input Transcription (Streaming)
                       const inputTranscript = msg.serverContent?.inputTranscription?.text;
                       if (inputTranscript) {
                           setLogs(prev => {
                               const lastLog = prev[prev.length - 1];
-                              // If the last log is a streaming user message, append to it
                               if (lastLog && lastLog.type === 'user' && lastLog.isStreaming) {
                                   return [...prev.slice(0, -1), { ...lastLog, text: lastLog.text + inputTranscript }];
                               }
-                              // Otherwise, create a new streaming user message
                               return [...prev, {
                                   id: crypto.randomUUID(),
                                   type: 'user',
@@ -331,23 +342,14 @@ const App: React.FC = () => {
                           });
                       }
 
-                      // 3. Handle Model Output Transcription (Streaming)
                       const outputTranscript = msg.serverContent?.outputTranscription?.text;
                       if (outputTranscript) {
                           setLogs(prev => {
-                              // Ensure any streaming User log is marked as complete when Model starts
-                              const fixedPrev = prev.map(l => 
-                                  (l.type === 'user' && l.isStreaming) 
-                                  ? { ...l, isStreaming: false } 
-                                  : l
-                              );
-
+                              const fixedPrev = prev.map(l => (l.type === 'user' && l.isStreaming) ? { ...l, isStreaming: false } : l);
                               const lastLog = fixedPrev[fixedPrev.length - 1];
-                              // Append to current streaming model message
                               if (lastLog && lastLog.type === 'model' && lastLog.isStreaming) {
                                   return [...fixedPrev.slice(0, -1), { ...lastLog, text: lastLog.text + outputTranscript }];
                               }
-                              // Start new model message
                               return [...fixedPrev, { 
                                   id: crypto.randomUUID(), 
                                   type: 'model', 
@@ -358,28 +360,20 @@ const App: React.FC = () => {
                           });
                       }
 
-                      // 4. Handle Turn Complete
                       if (msg.serverContent?.turnComplete) {
                            setLogs(prev => {
                               const lastLog = prev[prev.length - 1];
-                              // If model was streaming, finalize it
-                              if (lastLog && lastLog.type === 'model' && lastLog.isStreaming) {
-                                  return [...prev.slice(0, -1), { ...lastLog, isStreaming: false }];
-                              }
-                              // Also finalize user if they were streaming (edge case)
-                              if (lastLog && lastLog.type === 'user' && lastLog.isStreaming) {
+                              if (lastLog && (lastLog.type === 'model' || lastLog.type === 'user') && lastLog.isStreaming) {
                                   return [...prev.slice(0, -1), { ...lastLog, isStreaming: false }];
                               }
                               return prev;
                            });
                       }
 
-                      // 5. Handle Interruption
                       if (msg.serverContent?.interrupted) {
                           sourcesRef.current.forEach(s => s.stop());
                           sourcesRef.current.clear();
                           nextStartTimeRef.current = 0;
-                          
                           setLogs(prev => {
                               const lastLog = prev[prev.length - 1];
                               if (lastLog && lastLog.isStreaming) {
@@ -389,8 +383,6 @@ const App: React.FC = () => {
                           });
                       }
                       
-                      // 6. Handle Fallback Text (e.g. Tool Outputs)
-                      // Only if transcription didn't handle it
                       if (!outputTranscript && msg.serverContent?.modelTurn?.parts?.[0]?.text) {
                           const text = msg.serverContent.modelTurn.parts[0].text;
                           setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'model', text: text, timestamp: Date.now() }]);
@@ -407,9 +399,7 @@ const App: React.FC = () => {
                   }
               }
           });
-          
           sessionPromiseRef.current = sessionPromise;
-
       } catch (e) {
           console.error(e);
           setConnectionState(ConnectionState.ERROR);
@@ -422,7 +412,6 @@ const App: React.FC = () => {
       inputContextRef.current = null;
       audioContextRef.current = null;
       
-      // Stop Camera
       if (videoRef.current && videoRef.current.srcObject) {
           const tracks = (videoRef.current.srcObject as MediaStream).getTracks();
           tracks.forEach(t => t.stop());
@@ -438,27 +427,152 @@ const App: React.FC = () => {
 
   const handleSendText = async () => {
       if (!inputText.trim() || !sessionPromiseRef.current) return;
-      
       const text = inputText;
       setInputText('');
       setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'user', text: text, timestamp: Date.now() }]);
-
       try {
           const session = await sessionPromiseRef.current;
-          // Send as clientContent (Text Injection)
           await session.send({
-              clientContent: {
-                  turns: [{ role: 'user', parts: [{ text }] }],
-                  turnComplete: true
-              }
+              clientContent: { turns: [{ role: 'user', parts: [{ text }] }], turnComplete: true }
           });
       } catch (e) {
           console.error("Failed to send text", e);
       }
   };
 
+  // --- PAPERCLIP UPLOAD LOGIC ---
+  const handlePaperclipClick = () => {
+      if (paperclipInputRef.current) {
+          paperclipInputRef.current.click();
+      }
+  };
+
+  const handlePaperclipUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const files = e.target.files;
+      if (!files || files.length === 0) return;
+
+      const file = files[0];
+      let type: MediaAsset['type'] = 'image';
+      const lowerName = file.name.toLowerCase();
+
+      if (file.type.includes('pdf')) type = 'pdf';
+      else if (file.type.includes('video')) type = 'video';
+      else if (file.type.includes('audio')) type = 'audio';
+      else if (
+          file.type.includes('text') || 
+          lowerName.endsWith('.md') || 
+          lowerName.endsWith('.json') ||
+          lowerName.endsWith('.js') ||
+          lowerName.endsWith('.ts') ||
+          lowerName.endsWith('.tsx') ||
+          lowerName.endsWith('.jsx') ||
+          lowerName.endsWith('.py') ||
+          lowerName.endsWith('.html') ||
+          lowerName.endsWith('.css') ||
+          lowerName.endsWith('.sh') ||
+          lowerName.endsWith('.yml') ||
+          lowerName.endsWith('.yaml')
+      ) {
+          type = 'text';
+      }
+      else if (!file.type.startsWith('image/')) {
+          alert('Unsupported file type. Use Image, Video, Audio, PDF, Text, or Code.');
+          return;
+      }
+
+      // 1. Read File
+      const reader = new FileReader();
+      reader.onload = async (evt) => {
+          const res = evt.target?.result as string;
+          let data = res;
+          if ((type === 'image' || type === 'video' || type === 'audio' || type === 'pdf') && res.includes('base64,')) {
+              data = res.split(',')[1];
+          }
+
+          // 2. Save to Gallery (Persistence)
+          const asset: MediaAsset = {
+              id: NumMarkX_GenerateID(type === 'image' ? 'IMG' : (type === 'video' ? 'VID' : (type === 'audio' ? 'AUD' : (type === 'text' ? 'CODE' : 'DOC')))),
+              type: type,
+              data: data,
+              prompt: file.name,
+              agentId: 'USER',
+              timestamp: Date.now(),
+              tags: ['CHAT_UPLOAD', type.toUpperCase()]
+          };
+          await saveMediaAsset(asset);
+
+          // 3. Add to Chat Logs (Visual)
+          setLogs(prev => [...prev, {
+              id: crypto.randomUUID(),
+              type: 'user',
+              text: `[Attached ${type.toUpperCase()}: ${file.name}]`,
+              timestamp: Date.now(),
+              attachment: data,
+              attachmentType: type
+          }]);
+
+          // 4. Send to Connected Session (Context)
+          if (sessionPromiseRef.current) {
+              const session = await sessionPromiseRef.current;
+              
+              if (type === 'image') {
+                  // Send Image Frame
+                  session.sendRealtimeInput({
+                      media: { mimeType: file.type, data: data }
+                  });
+              } else if (type === 'text') {
+                  // Send Text Content
+                  session.send({
+                      clientContent: { turns: [{ role: 'user', parts: [{ text: `[USER UPLOADED TEXT/CODE FILE: ${file.name}]\n${data}` }] }], turnComplete: true }
+                  });
+                  
+                  // --- AUTO-INGEST TEXT TO DB ---
+                  const apiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY;
+                  if (apiKey) {
+                      IngestionService.ingestText(data, file.name, currentAgentId, apiKey)
+                        .then(count => {
+                            if (count > 0) {
+                                setLogs(prev => [...prev, {
+                                    id: crypto.randomUUID(),
+                                    type: 'system',
+                                    text: `[SYSTEM] Auto-ingested ${count} chunks from ${file.name} into Knowledge Base.`,
+                                    timestamp: Date.now()
+                                }]);
+                            }
+                        })
+                        .catch(err => console.error("Auto-ingest failed", err));
+                  }
+
+              } else if (type === 'pdf') {
+                  // Notify Model of PDF
+                  session.send({
+                      clientContent: { turns: [{ role: 'user', parts: [{ text: `[USER UPLOADED PDF: ${file.name} to Media Gallery]` }] }], turnComplete: true }
+                  });
+              } else if (type === 'video') {
+                  // Notify Model of Video
+                  session.send({
+                      clientContent: { turns: [{ role: 'user', parts: [{ text: `[USER UPLOADED VIDEO: ${file.name} to Media Gallery. Please analyze the context if possible.]` }] }], turnComplete: true }
+                  });
+              } else if (type === 'audio') {
+                  // Notify Model of Audio Upload
+                  session.send({
+                      clientContent: { turns: [{ role: 'user', parts: [{ text: `[USER UPLOADED AUDIO: ${file.name} to Media Gallery. Please analyze audio content if able.]` }] }], turnComplete: true }
+                  });
+              }
+          }
+      };
+
+      if (type === 'text') {
+          reader.readAsText(file);
+      } else {
+          reader.readAsDataURL(file);
+      }
+      
+      // Reset input
+      if(paperclipInputRef.current) paperclipInputRef.current.value = '';
+  };
+
   // --- LAYOUT STYLES ---
-  
   const visualizerStyle: React.CSSProperties = {
       flex: (layoutMode === 'AUDIO' || layoutMode === 'HYBRID' || layoutMode === 'VIDEO') ? '1 1 0' : '0 0 auto',
       height: layoutMode === 'CHAT' ? '0px' : 'auto',
@@ -479,12 +593,23 @@ const App: React.FC = () => {
   };
 
   const currentAgent = AGENTS.find(a => a.id === currentAgentId);
-
   const closeSidePanel = () => setActiveSidePanel(null);
+
+  // Helper for toggle buttons
+  const renderTriggerBtn = (panelId: string, icon: React.ReactNode, title: string) => (
+      <button 
+          onClick={() => setActiveSidePanel(panelId)}
+          className={`btn btn-secondary btn-icon ${activeSidePanel === panelId ? 'active' : ''}`}
+          title={title}
+          style={activeSidePanel === panelId ? {borderColor: '#facc15', color: '#facc15'} : {}}
+      >
+          {icon}
+      </button>
+  );
 
   return (
     <div className="app-container">
-      {/* HEADER */}
+      {/* HEADER - Renders Only Triggers */}
       <header className="app-header">
         <div className="flex-group">
             <span className="logo-text">MYTHOS</span>
@@ -500,7 +625,7 @@ const App: React.FC = () => {
                     ))}
                 </select>
             ) : (
-                <span className="status-indicator" style={{ color: '#38bdf8', borderColor: '#38bdf8' }}>MULTI-AGENT COUNCIL</span>
+                <span className="status-indicator" style={{ color: '#38bdf8', borderColor: '#38bdf8' }}>COMMS HUB</span>
             )}
         </div>
 
@@ -509,65 +634,38 @@ const App: React.FC = () => {
                 {connectionState}
             </div>
             
-            <VoiceCommandList 
-                isOpen={activeSidePanel === 'VOICE'}
-                onOpen={() => setActiveSidePanel('VOICE')}
-                onClose={closeSidePanel}
-            />
-            <RoomFocusConfig 
-                isOpen={activeSidePanel === 'FOCUS'}
-                onOpen={() => setActiveSidePanel('FOCUS')}
-                onClose={closeSidePanel}
-            />
-            <McpManager 
-                isOpen={activeSidePanel === 'MCP'}
-                onOpen={() => setActiveSidePanel('MCP')}
-                onClose={closeSidePanel}
-            />
-            <KnowledgeManager 
-                onUpdate={() => {}} 
-                currentAgentId={currentAgentId} 
-                isOpen={activeSidePanel === 'KNOWLEDGE'}
-                onOpen={() => setActiveSidePanel('KNOWLEDGE')}
-                onClose={closeSidePanel}
-            />
-            <ChatHistoryManager 
-                currentLogs={logs} 
-                onLoadSession={setLogs} 
-                currentAgentId={currentAgentId}
-                onUpdateKnowledge={() => {}}
-                isOpen={activeSidePanel === 'HISTORY'}
-                onOpen={() => setActiveSidePanel('HISTORY')}
-                onClose={closeSidePanel}
-            />
-            <SettingsManager 
-                modelConfig={modelConfig}
-                setModelConfig={setModelConfig}
-                disabled={connectionState === ConnectionState.CONNECTED}
-                generalInstruction={generalInstructions}
-                setGeneralInstruction={setGeneralInstructions}
-                agentInstruction={agentInstructions}
-                setAgentInstruction={setAgentInstructions}
-                agentName={currentAgent?.handle || 'Unknown'}
-                agentId={currentAgentId}
-                agentAccessLevel={accessLevel}
-                selectedVoice={selectedVoice}
-                onVoiceChange={setSelectedVoice}
-                onSave={handleSettingsSave}
-                isOpen={activeSidePanel === 'SETTINGS'}
-                onOpen={() => setActiveSidePanel('SETTINGS')}
-                onClose={closeSidePanel}
-            />
+            {/* MANUAL TRIGGERS FOR SIDE PANELS */}
+            {renderTriggerBtn('VOICE', <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>, "Voice Commands")}
+            
+            {renderTriggerBtn('FOCUS', <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>, "Room Focus")}
+            
+            {renderTriggerBtn('MEDIA', <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect><line x1="7" y1="2" x2="7" y2="22"></line><line x1="17" y1="2" x2="17" y2="22"></line><line x1="2" y1="12" x2="22" y2="12"></line><line x1="2" y1="7" x2="7" y2="7"></line><line x1="2" y1="17" x2="7" y2="17"></line><line x1="17" y1="17" x2="22" y2="17"></line><line x1="17" y1="7" x2="22" y2="7"></line></svg>, "Media Gallery")}
+            
+            {renderTriggerBtn('MCP', <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>, "MCP Tools")}
+            
+            {renderTriggerBtn('KNOWLEDGE', <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>, "Knowledge Base")}
+            
+            {renderTriggerBtn('HISTORY', <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>, "Chat History")}
+            
+            {renderTriggerBtn('SETTINGS', <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>, "Settings")}
         </div>
       </header>
 
       {/* MAIN VIEWPORT */}
       <main className="main-viewport">
+        {/* Render Side Panels Here - They are absolutely positioned relative to viewport */}
+        {activeSidePanel === 'VOICE' && <VoiceCommandList isOpen={true} onOpen={()=>{}} onClose={closeSidePanel} />}
+        {activeSidePanel === 'FOCUS' && <RoomFocusConfig isOpen={true} onOpen={()=>{}} onClose={closeSidePanel} />}
+        {activeSidePanel === 'MEDIA' && <MediaGallery isOpen={true} onOpen={()=>{}} onClose={closeSidePanel} currentAgentId={currentAgentId} />}
+        {activeSidePanel === 'MCP' && <McpManager isOpen={true} onOpen={()=>{}} onClose={closeSidePanel} />}
+        {activeSidePanel === 'KNOWLEDGE' && <KnowledgeManager isOpen={true} onOpen={()=>{}} onClose={closeSidePanel} onUpdate={()=>{}} currentAgentId={currentAgentId} />}
+        {activeSidePanel === 'HISTORY' && <ChatHistoryManager isOpen={true} onOpen={()=>{}} onClose={closeSidePanel} currentLogs={logs} onLoadSession={setLogs} currentAgentId={currentAgentId} onUpdateKnowledge={()=>{}} />}
+        {activeSidePanel === 'SETTINGS' && <SettingsManager isOpen={true} onOpen={()=>{}} onClose={closeSidePanel} modelConfig={modelConfig} setModelConfig={setModelConfig} disabled={connectionState === ConnectionState.CONNECTED} generalInstruction={generalInstructions} setGeneralInstruction={setGeneralInstructions} agentInstruction={agentInstructions} setAgentInstruction={setAgentInstructions} agentName={currentAgent?.handle || 'Unknown'} agentId={currentAgentId} agentAccessLevel={accessLevel} selectedVoice={selectedVoice} onVoiceChange={setSelectedVoice} onSave={handleSettingsSave} />}
+
         {currentView === 'COUNCIL' ? (
             <MultiAgentConsole onExit={() => setCurrentView('ORCHESTRATOR')} />
         ) : (
             <>
-                {/* ORCHESTRATOR / LIVE VIEW */}
                 <div style={visualizerStyle}>
                     <div className="panel-overlay top-left">
                         <span className="overlay-label">
@@ -575,11 +673,7 @@ const App: React.FC = () => {
                         </span>
                     </div>
                     <canvas ref={canvasRef} className="hidden" />
-                    <div style={{ 
-                        position: 'absolute', bottom: '10px', right: '10px', width: '160px', height: '120px', 
-                        background: '#000', border: '1px solid #4ade80', display: isCameraOn ? 'block' : 'none', 
-                        zIndex: 30, boxShadow: '0 0 10px rgba(0,0,0,0.5)'
-                    }}>
+                    <div style={{ position: 'absolute', bottom: '10px', right: '10px', width: '160px', height: '120px', background: '#000', border: '1px solid #4ade80', display: isCameraOn ? 'block' : 'none', zIndex: 30, boxShadow: '0 0 10px rgba(0,0,0,0.5)' }}>
                         <video ref={videoRef} autoPlay playsInline muted style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                     </div>
                     <Visualizer analyser={analyserRef.current} isActive={connectionState === ConnectionState.CONNECTED} />
@@ -599,6 +693,26 @@ const App: React.FC = () => {
                                     <span className="log-sender">{log.type.toUpperCase()}</span>
                                     <span className="log-timestamp">{new Date(log.timestamp).toLocaleTimeString()}</span>
                                 </div>
+                                
+                                {log.attachment && (
+                                    <div style={{ margin: '0.5rem 0', borderRadius: '4px', overflow: 'hidden', border: '1px solid #333', maxWidth: '300px' }}>
+                                        {log.attachmentType === 'image' && (
+                                            <img src={`data:image/jpeg;base64,${log.attachment}`} style={{ width: '100%', display: 'block' }} />
+                                        )}
+                                        {log.attachmentType === 'video' && (
+                                            <video controls src={`data:video/mp4;base64,${log.attachment}`} style={{ width: '100%', display: 'block' }} />
+                                        )}
+                                        {log.attachmentType === 'audio' && (
+                                            <audio controls src={`data:audio/wav;base64,${log.attachment}`} style={{ width: '100%', display: 'block' }} />
+                                        )}
+                                        {(log.attachmentType === 'text' || log.attachmentType === 'pdf') && (
+                                            <div style={{ padding: '1rem', fontSize: '0.8rem', background: '#111', color: log.attachmentType === 'pdf' ? '#f87171' : '#eee' }}>
+                                                {log.attachmentType === 'pdf' ? '📄 PDF Document' : '📝 Text File'}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+
                                 <span className="log-text">{log.text}</span>
                                 {log.isStreaming && <span className="animate-pulse">_</span>}
                             </div>
@@ -610,34 +724,42 @@ const App: React.FC = () => {
         )}
       </main>
 
-      {/* COMMAND DECK (Footer) - Hidden in Council Mode */}
-      <footer className={`command-deck ${activeSidePanel ? 'minimized' : ''} ${currentView === 'COUNCIL' ? 'hidden' : ''}`}>
-          {/* TRAY */}
+      {/* COMMAND DECK (Footer) - Sticky/Fixed at Bottom */}
+      <footer className={`command-deck ${currentView === 'COUNCIL' ? 'hidden' : ''}`}>
           <div className="tray-controls">
               <div className="flex-group">
-                  <button 
-                    onClick={() => setIsMicOn(!isMicOn)} 
-                    className={`btn btn-icon ${isMicOn ? 'active-green' : 'btn-danger'}`}
-                    title={isMicOn ? "Microphone Active" : "Microphone Muted"}
-                  >
-                      {isMicOn ? (
-                          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>
-                      ) : (
-                          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="1" y1="1" x2="23" y2="23"></line><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"></path><path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>
-                      )}
+                  <button onClick={() => setIsMicOn(!isMicOn)} className={`btn btn-icon ${isMicOn ? 'active-green' : 'btn-danger'}`} title={isMicOn ? "Microphone Active" : "Microphone Muted"}>
+                      {isMicOn ? <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg> : <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="1" y1="1" x2="23" y2="23"></line><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"></path><path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>}
                   </button>
-                  <button 
-                    onClick={toggleCamera} 
-                    className={`btn btn-icon ${isCameraOn ? 'active-green' : ''}`}
-                    title="Toggle Camera"
-                  >
+                  <button onClick={toggleCamera} className={`btn btn-icon ${isCameraOn ? 'active-green' : ''}`} title="Toggle Camera">
                       <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
                   </button>
+                  <button className="btn btn-icon" title="Streaming Video Player (Placeholder)">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M23 7l-7 5 7 5V7z"></path>
+                          <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+                      </svg>
+                  </button>
               </div>
-
+              
               <div className="flex-group">
                   <button onClick={() => setCurrentView('COUNCIL')} className="btn btn-xs" title="Open Multi-Agent Console">COUNCIL</button>
                   <button onClick={() => setIsTerminalOpen(!isTerminalOpen)} className="btn btn-xs" title="Open Terminal">TERM (~)</button>
+              </div>
+
+              {/* MODEL MODE SELECTOR - RESTORED IN FOOTER */}
+              <div className="mode-selector">
+                  {['STD', 'DEEP', 'EXT'].map(m => (
+                      <button
+                          key={m}
+                          onClick={() => setModelMode(m as ModelMode)}
+                          disabled={connectionState === ConnectionState.CONNECTED}
+                          className={modelMode === m ? `active ${m.toLowerCase()}` : ''}
+                          title={m === 'DEEP' ? "Pro Reasoning (Thinking)" : (m === 'EXT' ? "External Tools (Routing)" : "Standard Mode")}
+                      >
+                          {m}
+                      </button>
+                  ))}
               </div>
 
               <div className="flex-group">
@@ -647,37 +769,27 @@ const App: React.FC = () => {
                   <button onClick={() => setLayoutMode('CHAT')} className={`btn btn-xs ${layoutMode === 'CHAT' ? 'active' : ''}`}>CHAT</button>
               </div>
           </div>
-
-          {/* INPUT: Text & Actions */}
           <div className="input-bar">
+              {/* HIDDEN FILE INPUT FOR PAPERCLIP */}
               <input 
-                  type="text" 
-                  className="main-input"
-                  placeholder={connectionState === ConnectionState.CONNECTED ? "Type message to agent..." : "Connect to start conversation..."}
-                  value={inputText}
-                  onChange={(e) => setInputText(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleSendText()}
-                  disabled={connectionState !== ConnectionState.CONNECTED}
+                  type="file" 
+                  ref={paperclipInputRef} 
+                  className="hidden" 
+                  accept="image/*,video/*,audio/*,.pdf,.txt,.md,.json,.js,.ts,.tsx,.jsx,.py,.html,.css,.xml,.yaml,.yml,.sh"
+                  onChange={handlePaperclipUpload}
               />
-              {connectionState === ConnectionState.CONNECTED ? (
-                 <button onClick={disconnect} className="btn btn-danger" style={{ fontWeight: 'bold' }}>STOP</button>
-              ) : (
-                 <button onClick={connect} className="btn btn-primary" disabled={connectionState === ConnectionState.CONNECTING}>
-                     {connectionState === ConnectionState.CONNECTING ? '...' : 'START'}
-                 </button>
-              )}
-              <button onClick={handleSendText} className="btn btn-secondary" disabled={!inputText.trim() || connectionState !== ConnectionState.CONNECTED}>SEND</button>
+              <button onClick={handlePaperclipClick} className="btn btn-icon btn-lg" style={{ marginRight: '0.5rem', flexShrink: 0 }} title="Attach File (Image, Video, Audio, Text, PDF, Code)">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
+                  </svg>
+              </button>
+              <input type="text" className="main-input" placeholder={connectionState === ConnectionState.CONNECTED ? "Type message to agent..." : "Connect to start conversation..."} value={inputText} onChange={(e) => setInputText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendText()} disabled={connectionState !== ConnectionState.CONNECTED} />
+              {connectionState === ConnectionState.CONNECTED ? <button onClick={disconnect} className="btn btn-danger btn-lg" style={{ fontWeight: 'bold' }}>STOP</button> : <button onClick={connect} className="btn btn-primary btn-lg" disabled={connectionState === ConnectionState.CONNECTING}>{connectionState === ConnectionState.CONNECTING ? '...' : 'START'}</button>}
+              <button onClick={handleSendText} className="btn btn-secondary btn-lg" disabled={!inputText.trim() || connectionState !== ConnectionState.CONNECTED}>SEND</button>
           </div>
       </footer>
 
-      {/* OVERLAYS */}
-      <Terminal 
-        isOpen={isTerminalOpen} 
-        onClose={() => setIsTerminalOpen(false)} 
-        onSwitchAgent={handleAgentChange}
-        currentAgentHandle={currentAgent?.handle || 'guest'}
-      />
-
+      <Terminal isOpen={isTerminalOpen} onClose={() => setIsTerminalOpen(false)} onSwitchAgent={handleAgentChange} currentAgentHandle={currentAgent?.handle || 'guest'} />
     </div>
   );
 };

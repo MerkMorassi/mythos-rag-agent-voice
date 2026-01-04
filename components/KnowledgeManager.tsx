@@ -1,13 +1,16 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { GoogleGenAI } from '@google/genai';
-import { KnowledgeDoc, CloudFile } from '../types';
+import { KnowledgeDoc, CloudFile, LorePack } from '../types';
 import { 
   addDocument, 
   getDocumentsByAgentId, 
   deleteDocument, 
-  bulkAddDocuments,
-  deleteDocumentsByAgentId
+  bulkAddDocuments, 
+  deleteDocumentsByAgentId,
+  saveLorePack,
+  getLorePacksByAgentId,
+  deleteLorePack
 } from '../services/db';
 import { uploadCloudFile, listCloudFiles, deleteCloudFile } from '../services/googleFiles';
 import { IngestionService } from '../services/ingestion';
@@ -25,7 +28,7 @@ const ITEMS_PER_PAGE = 5;
 
 // --- ICONS ---
 const FileIcon = ({ typeStr }: { typeStr: string }) => {
-  const t = typeStr.toLowerCase();
+  const t = (typeStr || '').toLowerCase();
   const style = { width: '20px', height: '20px', strokeWidth: 1.5, flexShrink: 0 };
   
   if (t.includes('image') || t.endsWith('.png') || t.endsWith('.jpg') || t.endsWith('.jpeg') || t.endsWith('.webp')) {
@@ -55,13 +58,17 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
     onOpen,
     onClose
 }) => {
-  const [activeTab, setActiveTab] = useState<'local' | 'cloud'>('local');
+  const [activeTab, setActiveTab] = useState<'local' | 'library' | 'cloud'>('local');
   
   // Local DB State
   const [docs, setDocs] = useState<KnowledgeDoc[]>([]);
   const [filterQuery, setFilterQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   
+  // Library State
+  const [savedPacks, setSavedPacks] = useState<LorePack[]>([]);
+  const [packName, setPackName] = useState('');
+
   // Ingestion State
   const [isStreamingImport, setIsStreamingImport] = useState(false);
   const [streamedDocsCount, setStreamedDocsCount] = useState(0);
@@ -92,6 +99,11 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
     }
   };
 
+  const fetchSavedPacks = async () => {
+      const packs = await getLorePacksByAgentId(currentAgentId);
+      setSavedPacks(packs);
+  };
+
   const fetchCloudFiles = async () => {
     try {
       setIsProcessing(true);
@@ -107,12 +119,9 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
 
   useEffect(() => {
     if (isOpen) {
-      if (activeTab === 'local') {
-          setDocs([]); 
-          fetchDocs();
-      } else {
-          fetchCloudFiles();
-      }
+      if (activeTab === 'local') fetchDocs();
+      if (activeTab === 'library') fetchSavedPacks();
+      if (activeTab === 'cloud') fetchCloudFiles();
       setStatusMsg(null);
     }
   }, [isOpen, currentAgentId, activeTab]);
@@ -128,34 +137,25 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
       }
   };
 
+  // ... (keeping all handler logic identical) ...
   const handleExportLorePack = async () => {
       if (docs.length === 0) {
           showStatus("No documents to export.", 'error');
           return;
       }
-      
       try {
           const exportDocs = docs.map(d => ({
               ...d,
               numMarkId: d.numMarkId || NumMarkX_GenerateSigil(d.content)
           }));
-
-          const header = NumMarkX_GenerateHeader(
-              currentAgentId, 
-              currentAgentId,
-              "Exported via Knowledge Manager"
-          );
-
+          const header = NumMarkX_GenerateHeader(currentAgentId, currentAgentId, "Exported via Knowledge Manager");
           const blob = IngestionService.exportLorePack(header, exportDocs);
-          
           const url = URL.createObjectURL(blob);
           const a = document.createElement('a');
           a.href = url;
           a.download = `${currentAgentId}_LOREPACK_${new Date().toISOString().slice(0,10)}.json`;
           a.click();
-          
           setTimeout(() => URL.revokeObjectURL(url), 5000);
-          
           showStatus(`Exported ${exportDocs.length} nodes to LorePack.`, 'success');
       } catch (e: any) {
           console.error("Export failed", e);
@@ -163,16 +163,39 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
       }
   };
 
+  const handleSaveToLibrary = async () => {
+      if (docs.length === 0) return showStatus("No active memory to bundle.", 'error');
+      if (!packName.trim()) return showStatus("Pack Name required.", 'error');
+      const header = NumMarkX_GenerateHeader(currentAgentId, currentAgentId, packName);
+      header.name = packName; 
+      const pack: LorePack = { id: header.id, header: header, sacred_archive: docs };
+      await saveLorePack(pack);
+      setPackName('');
+      showStatus("Saved LorePack to Library.", 'success');
+  };
+
+  const handleLoadFromLibrary = async (pack: LorePack, mode: 'append' | 'replace') => {
+      if (mode === 'replace') {
+          if(!window.confirm("Replace ALL active memory with this pack?")) return;
+          await deleteDocumentsByAgentId(currentAgentId);
+      }
+      const newDocs = pack.sacred_archive.map(d => ({ ...d, agentId: currentAgentId, timestamp: Date.now() }));
+      await bulkAddDocuments(newDocs);
+      showStatus(`Loaded ${newDocs.length} nodes from "${pack.header.name || 'LorePack'}".`, 'success');
+      setActiveTab('local');
+  };
+
+  const handleDeletePack = async (id: string) => {
+      if(!window.confirm("Delete this saved LorePack?")) return;
+      await deleteLorePack(id);
+      fetchSavedPacks();
+  };
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
-
     const apiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY;
-    if (!apiKey) {
-        showStatus("API Key Missing. Configure in Settings.", 'error');
-        return;
-    }
-
+    if (!apiKey) { showStatus("API Key Missing. Configure in Settings.", 'error'); return; }
     setIsProcessing(true);
     setStatusMsg(null);
     try {
@@ -181,10 +204,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
         const file = files[i];
         await new Promise(resolve => setTimeout(resolve, 0));
         const text = await file.text();
-        
-        // Use the new Recursive Chunker
         const chunks = IngestionService.chunkText(text);
-        
         const startTime = Date.now();
         setUploadProgress({ fileName: file.name, current: 0, total: chunks.length, startTime });
         const BATCH_SIZE = 100;
@@ -202,7 +222,6 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                     const embedding = embeddings?.[k]?.values;
                     const chunkContent = batchChunks[k];
                     const sigil = NumMarkX_GenerateSigil(chunkContent);
-
                     await addDocument({
                         id: crypto.randomUUID(),
                         agentId: currentAgentId,
@@ -218,7 +237,6 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                 for (let k = 0; k < batchChunks.length; k++) {
                     const chunkContent = batchChunks[k];
                     const sigil = NumMarkX_GenerateSigil(chunkContent);
-                    
                     await addDocument({
                          id: crypto.randomUUID(),
                          agentId: currentAgentId,
@@ -254,16 +272,13 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
   const handleSelectLorePack = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    
     setIsProcessing(true);
     setIsStreamingImport(true);
     setStreamedDocsCount(0);
-
     const BATCH_SIZE = 150;
     let batch: KnowledgeDoc[] = [];
     let count = 0;
     let foundHeader = null;
-
     try {
         for await (const obj of IngestionService.streamLorePack(file)) {
             if (obj.schema === 'MYTHOS.LOREPACK.v1' || (obj.agentId && obj.handle)) {
@@ -272,7 +287,6 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                 const doc = IngestionService.normalizeNode(obj, currentAgentId, count);
                 batch.push(doc);
                 count++;
-                
                 if (batch.length >= BATCH_SIZE) {
                     await bulkAddDocuments(batch);
                     batch = [];
@@ -281,12 +295,10 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                 }
             }
         }
-        
         if (batch.length > 0) {
             await bulkAddDocuments(batch);
             setStreamedDocsCount(count);
         }
-
         if (count === 0) {
              showStatus("Warning: No valid nodes found in stream. Check JSON format.", 'error');
         } else {
@@ -298,7 +310,6 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
              await fetchDocs();
              onUpdate();
         }
-
     } catch (err: any) {
         console.error(err);
         showStatus(`Streaming Failed: ${err.message}`, 'error');
@@ -381,21 +392,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
   const totalPages = Math.ceil(filteredDocs.length / ITEMS_PER_PAGE);
   const paginatedDocs = filteredDocs.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
 
-  if (!isOpen) {
-    return (
-      <button 
-        onClick={onOpen}
-        className="btn btn-secondary btn-icon"
-        title="Knowledge Database"
-      >
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
-            <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path>
-            <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
-        </svg>
-      </button>
-    );
-  }
+  if (!isOpen) return null;
 
   return (
     <div className="modal-overlay">
@@ -410,6 +407,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
           </button>
         </div>
 
+        {/* ... (Keep existing body logic, ensure it's inside .modal-body-area) ... */}
         {isStreamingImport ? (
             <div style={{ padding: '2rem', flex: 1, display: 'flex', flexDirection: 'column', gap: '1.5rem', justifyContent: 'center', alignItems: 'center', height: '100%', animation: 'fadeIn 0.3s' }}>
                 <div style={{ textAlign: 'center' }}>
@@ -427,7 +425,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
             </div>
         ) : (
             <>
-                <div style={{ display: 'flex', borderBottom: '1px solid #333', padding: '0 1rem' }}>
+                <div style={{ display: 'flex', borderBottom: '1px solid #333', padding: '0 1rem', background: '#0a0a0a' }}>
                     <button 
                         onClick={() => setActiveTab('local')}
                         style={{ 
@@ -442,7 +440,23 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                             flex: 1
                         }}
                     >
-                        LOCAL VECTORS (RAG)
+                        ACTIVE MEMORY
+                    </button>
+                    <button 
+                        onClick={() => setActiveTab('library')}
+                        style={{ 
+                            padding: '0.75rem 1rem', 
+                            background: 'none', 
+                            border: 'none', 
+                            borderBottom: activeTab === 'library' ? '2px solid #facc15' : 'none',
+                            color: activeTab === 'library' ? '#eee' : '#666',
+                            cursor: 'pointer',
+                            fontWeight: 'bold',
+                            fontSize: '0.75rem',
+                            flex: 1
+                        }}
+                    >
+                        LORE LIBRARY
                     </button>
                     <button 
                         onClick={() => setActiveTab('cloud')}
@@ -458,7 +472,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                             flex: 1
                         }}
                     >
-                        CLOUD FILES (CONTEXT)
+                        CLOUD CONTEXT
                     </button>
                 </div>
 
@@ -470,7 +484,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                     </div>
                 )}
 
-                {activeTab === 'local' ? (
+                {activeTab === 'local' && (
                     <>
                         <div className="flex-col">
                             <span className="section-header-title" style={{color: '#4ade80'}}>INGEST ({currentAgentId})</span>
@@ -504,6 +518,20 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                                     <div style={{ textAlign: 'right', fontSize: '0.7rem', color: '#666' }}>ETA: {calculateETA()}</div>
                                 </div>
                             )}
+                        </div>
+
+                        {/* BUNDLE TO LIBRARY */}
+                        <div className="section-panel" style={{ padding: '0.75rem', borderColor: '#facc15', borderStyle: 'dashed' }}>
+                            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                                <input 
+                                    className="form-input" 
+                                    placeholder="Bundle Name (e.g. Project Apollo)" 
+                                    value={packName}
+                                    onChange={e => setPackName(e.target.value)}
+                                    style={{ fontSize: '0.8rem' }}
+                                />
+                                <button onClick={handleSaveToLibrary} className="btn btn-secondary" style={{ color: '#facc15', borderColor: '#facc15' }}>SAVE TO LIB</button>
+                            </div>
                         </div>
 
                         <div className="flex-col">
@@ -555,7 +583,40 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                             )}
                         </div>
                     </>
-                ) : (
+                )}
+
+                {activeTab === 'library' && (
+                    <div className="flex-col">
+                        <span className="section-header-title" style={{color: '#facc15'}}>LORE LIBRARY ({savedPacks.length})</span>
+                        <div className="section-panel" style={{ padding: '1rem', marginBottom: '1rem' }}>
+                            <p style={{ fontSize: '0.75rem', color: '#ccc' }}>
+                                LorePacks are frozen snapshots of knowledge. Load them to restore memory state.
+                            </p>
+                        </div>
+
+                        {savedPacks.length === 0 ? (
+                            <div className="empty-state" style={{ padding: '2rem' }}>NO SAVED PACKS</div>
+                        ) : (
+                            savedPacks.map(pack => (
+                                <div key={pack.id} className="section-panel" style={{ padding: '0.75rem' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                        <div>
+                                            <div style={{ fontWeight: 'bold', color: '#facc15' }}>{pack.header.name || pack.header.handle}</div>
+                                            <div style={{ fontSize: '0.65rem', color: '#666' }}>{new Date(pack.header.timestamp).toLocaleString()} • {pack.sacred_archive.length} Docs</div>
+                                        </div>
+                                        <button onClick={() => handleDeletePack(pack.id)} style={{ color: '#f87171', background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem' }}>×</button>
+                                    </div>
+                                    <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
+                                        <button onClick={() => handleLoadFromLibrary(pack, 'append')} className="btn btn-secondary btn-xs" style={{ flex: 1 }}>APPEND</button>
+                                        <button onClick={() => handleLoadFromLibrary(pack, 'replace')} className="btn btn-secondary btn-xs" style={{ flex: 1, borderColor: '#facc15', color: '#facc15' }}>REPLACE ALL</button>
+                                    </div>
+                                </div>
+                            ))
+                        )}
+                    </div>
+                )}
+
+                {activeTab === 'cloud' && (
                     <>
                         <div className="flex-col">
                             <span className="section-header-title" style={{ color: '#a78bfa' }}>UPLOAD TO GOOGLE CLOUD</span>
@@ -615,7 +676,9 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                     </>
                 )}
                 </div>
-            </div>
-        </div>
-    );
+            </>
+        )}
+      </div>
+    </div>
+  );
 };

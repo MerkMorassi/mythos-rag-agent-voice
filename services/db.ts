@@ -1,5 +1,5 @@
 
-import { KnowledgeDoc, ChatSession, LogMessage, AgentConfig, ModelConfig, DEFAULT_MODEL_CONFIG } from '../types';
+import { KnowledgeDoc, ChatSession, LogMessage, AgentConfig, ModelConfig, DEFAULT_MODEL_CONFIG, LorePack, MediaAsset, CanonBlock } from '../types';
 
 const DB_NAME = 'gemini_rag_db';
 const STORE_NAME = 'documents';
@@ -7,7 +7,10 @@ const CHAT_STORE_NAME = 'chat_sessions';
 const ACTIVE_CHAT_STORE_NAME = 'active_chats'; 
 const CONFIG_STORE_NAME = 'config';
 const PROMPT_STORE_NAME = 'saved_prompts';
-const DB_VERSION = 7;
+const LORE_PACK_STORE = 'lore_packs';
+const MEDIA_STORE = 'media_assets';
+const CANON_STORE = 'production_blocks'; // New Store for AnimAgents
+const DB_VERSION = 10; // Increment version
 
 // --- PORTABILITY INTERFACE ---
 export interface IVectorStore {
@@ -84,6 +87,24 @@ export const initDB = (): Promise<IDBDatabase> => {
         const promptStore = db.createObjectStore(PROMPT_STORE_NAME, { keyPath: 'id' });
         promptStore.createIndex('agentId', 'agentId', { unique: false });
       }
+
+      if (!db.objectStoreNames.contains(LORE_PACK_STORE)) {
+          const lpStore = db.createObjectStore(LORE_PACK_STORE, { keyPath: 'id' });
+          lpStore.createIndex('agentId', 'header.agentId', { unique: false });
+      }
+
+      if (!db.objectStoreNames.contains(MEDIA_STORE)) {
+          const mStore = db.createObjectStore(MEDIA_STORE, { keyPath: 'id' });
+          mStore.createIndex('agentId', 'agentId', { unique: false });
+          mStore.createIndex('timestamp', 'timestamp', { unique: false });
+      }
+
+      // AnimAgents Store
+      if (!db.objectStoreNames.contains(CANON_STORE)) {
+          const cStore = db.createObjectStore(CANON_STORE, { keyPath: 'id' });
+          cStore.createIndex('stage', 'stage', { unique: false });
+          cStore.createIndex('status', 'status', { unique: false });
+      }
     };
 
     request.onsuccess = (event) => {
@@ -92,12 +113,51 @@ export const initDB = (): Promise<IDBDatabase> => {
   });
 };
 
+// --- CANON BLOCKS (ANIMAGENTS) ---
+
+export const saveCanonBlock = async (block: CanonBlock): Promise<void> => {
+    const db = await initDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction([CANON_STORE], 'readwrite');
+        const store = tx.objectStore(CANON_STORE);
+        store.put(block).onsuccess = () => resolve();
+        tx.onerror = () => reject(tx.error);
+    });
+};
+
+export const getCanonBlocks = async (): Promise<CanonBlock[]> => {
+    const db = await initDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction([CANON_STORE], 'readonly');
+        const store = tx.objectStore(CANON_STORE);
+        const req = store.getAll();
+        req.onsuccess = () => {
+             const results = req.result as CanonBlock[];
+             // Sort by timestamp asc (story order usually)
+             results.sort((a,b) => a.timestamp - b.timestamp);
+             resolve(results);
+        };
+        req.onerror = () => reject(req.error);
+    });
+};
+
+export const deleteCanonBlock = async (id: string): Promise<void> => {
+    const db = await initDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction([CANON_STORE], 'readwrite');
+        const store = tx.objectStore(CANON_STORE);
+        store.delete(id).onsuccess = () => resolve();
+        tx.onerror = () => reject(tx.error);
+    });
+};
+
+// --- DOCUMENTS ---
+
 export const addDocument = async (doc: KnowledgeDoc): Promise<void> => {
   const db = await initDB();
   return new Promise((resolve, reject) => {
     const transaction = db.transaction([STORE_NAME], 'readwrite');
     const store = transaction.objectStore(STORE_NAME);
-    // Default UNIX permission for files if not set: 644 (rw-r--r--)
     if (!doc.permissions) doc.permissions = '644';
     const request = store.put(doc);
     request.onsuccess = () => resolve();
@@ -110,19 +170,13 @@ export const updateDocumentContent = async (id: string, newContent: string): Pro
     return new Promise((resolve, reject) => {
         const transaction = db.transaction([STORE_NAME], 'readwrite');
         const store = transaction.objectStore(STORE_NAME);
-        
         const getReq = store.get(id);
         getReq.onsuccess = () => {
             const doc = getReq.result as KnowledgeDoc;
-            if (!doc) {
-                reject("Document not found");
-                return;
-            }
+            if (!doc) { reject("Document not found"); return; }
             doc.content = newContent;
             doc.timestamp = Date.now(); 
-            const putReq = store.put(doc);
-            putReq.onsuccess = () => resolve();
-            putReq.onerror = () => reject(putReq.error);
+            store.put(doc).onsuccess = () => resolve();
         };
         getReq.onerror = () => reject(getReq.error);
     });
@@ -133,18 +187,12 @@ export const updateDocumentPermissions = async (id: string, permissions: string)
     return new Promise((resolve, reject) => {
         const transaction = db.transaction([STORE_NAME], 'readwrite');
         const store = transaction.objectStore(STORE_NAME);
-        
         const getReq = store.get(id);
         getReq.onsuccess = () => {
             const doc = getReq.result as KnowledgeDoc;
-            if (!doc) {
-                reject("Document not found");
-                return;
-            }
+            if (!doc) { reject("Document not found"); return; }
             doc.permissions = permissions;
-            const putReq = store.put(doc);
-            putReq.onsuccess = () => resolve();
-            putReq.onerror = () => reject(putReq.error);
+            store.put(doc).onsuccess = () => resolve();
         };
         getReq.onerror = () => reject(getReq.error);
     });
@@ -247,17 +295,95 @@ export const getDocumentCountByAgentId = async (agentId: string): Promise<number
   });
 };
 
-export const findDocumentBySigil = async (sigil: string): Promise<KnowledgeDoc | null> => {
-  const db = await initDB();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction([STORE_NAME], 'readonly');
-    const store = transaction.objectStore(STORE_NAME);
-    const index = store.index('numMarkId');
-    const request = index.get(sigil);
-    request.onsuccess = () => { resolve(request.result || null); };
-    request.onerror = () => reject(request.error);
-  });
+// --- LORE PACKS ---
+
+export const saveLorePack = async (pack: LorePack): Promise<void> => {
+    const db = await initDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction([LORE_PACK_STORE], 'readwrite');
+        const store = tx.objectStore(LORE_PACK_STORE);
+        store.put(pack).onsuccess = () => resolve();
+        tx.onerror = () => reject(tx.error);
+    });
 };
+
+export const getLorePacksByAgentId = async (agentId: string): Promise<LorePack[]> => {
+    const db = await initDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction([LORE_PACK_STORE], 'readonly');
+        const store = tx.objectStore(LORE_PACK_STORE);
+        const index = store.index('agentId');
+        // Because agentId is inside header, we indexed header.agentId
+        const req = index.getAll(agentId);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+    });
+};
+
+export const deleteLorePack = async (id: string): Promise<void> => {
+    const db = await initDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction([LORE_PACK_STORE], 'readwrite');
+        const store = tx.objectStore(LORE_PACK_STORE);
+        store.delete(id).onsuccess = () => resolve();
+        tx.onerror = () => reject(tx.error);
+    });
+};
+
+// --- MEDIA ASSETS ---
+
+export const saveMediaAsset = async (asset: MediaAsset): Promise<void> => {
+    const db = await initDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction([MEDIA_STORE], 'readwrite');
+        const store = tx.objectStore(MEDIA_STORE);
+        store.put(asset).onsuccess = () => resolve();
+        tx.onerror = () => reject(tx.error);
+    });
+};
+
+export const updateMediaAsset = async (id: string, updates: Partial<MediaAsset>): Promise<void> => {
+    const db = await initDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction([MEDIA_STORE], 'readwrite');
+        const store = tx.objectStore(MEDIA_STORE);
+        const req = store.get(id);
+        req.onsuccess = () => {
+            const asset = req.result as MediaAsset;
+            if (!asset) { reject("Asset not found"); return; }
+            const updated = { ...asset, ...updates };
+            store.put(updated).onsuccess = () => resolve();
+        };
+        req.onerror = () => reject(req.error);
+    });
+};
+
+export const getAllMediaAssets = async (): Promise<MediaAsset[]> => {
+    const db = await initDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction([MEDIA_STORE], 'readonly');
+        const store = tx.objectStore(MEDIA_STORE);
+        const req = store.getAll();
+        req.onsuccess = () => {
+            const results = req.result as MediaAsset[];
+            results.sort((a,b) => b.timestamp - a.timestamp);
+            resolve(results);
+        };
+        req.onerror = () => reject(req.error);
+    });
+};
+
+export const deleteMediaAsset = async (id: string): Promise<void> => {
+    const db = await initDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction([MEDIA_STORE], 'readwrite');
+        const store = tx.objectStore(MEDIA_STORE);
+        store.delete(id).onsuccess = () => resolve();
+        tx.onerror = () => reject(tx.error);
+    });
+};
+
+// --- CHAT SESSIONS & CONFIG (Existing) ---
 
 export const saveChatSession = async (session: ChatSession): Promise<void> => {
   const db = await initDB();

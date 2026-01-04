@@ -3,6 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { ModelConfig, DEFAULT_MODEL_CONFIG } from '../types';
 import { getSavedPromptsByAgentId, SavedPrompt, deleteSavedPrompt, getAgentConfig } from '../services/db';
 import { AccessControl } from '../services/accessControl';
+import { ChatterboxService } from '../services/chatterbox';
 
 // PREBUILT VOICES LIST
 const PREBUILT_VOICES = ["Puck", "Kore", "Fenrir", "Zephyr", "Aoede", "Callirrhoe", "Leda"];
@@ -67,8 +68,10 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
   const [voiceBase64, setVoiceBase64] = useState<string | undefined>(undefined);
   const [voiceSpeed, setVoiceSpeed] = useState<number>(1.0);
   const [voicePitch, setVoicePitch] = useState<number>(0); // Semitones
+  const [isCloning, setIsCloning] = useState(false);
   
   const voiceInputRef = useRef<HTMLInputElement>(null);
+  const audioPreviewRef = useRef<HTMLAudioElement>(null);
   
   // API Credentials State
   const [geminiKey, setGeminiKey] = useState('');
@@ -139,6 +142,32 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
       }
   };
 
+  const handleTestClone = async () => {
+      if (!voiceBase64) {
+          alert("Please upload a reference audio file first.");
+          return;
+      }
+      setIsCloning(true);
+      try {
+          const buffer = await ChatterboxService.synthesize({
+              text: `Greetings. I am ${agentName}. This is a test of the Chatterbox cloning protocol.`,
+              audioRef: voiceBase64
+          });
+          
+          const blob = new Blob([buffer], { type: 'audio/wav' });
+          const url = URL.createObjectURL(blob);
+          
+          if (audioPreviewRef.current) {
+              audioPreviewRef.current.src = url;
+              audioPreviewRef.current.play();
+          }
+      } catch (e: any) {
+          alert(`Cloning Failed: ${e.message}`);
+      } finally {
+          setIsCloning(false);
+      }
+  };
+
   const handleAccessChange = (val: string) => {
       setLocalAccessLevel(val);
       if (onDirty) onDirty();
@@ -169,20 +198,7 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
 
   const accessDesc = AccessControl.getDescription(localAccessLevel);
 
-  if (!isOpen) {
-    return (
-      <button 
-        onClick={onOpen}
-        className="btn btn-secondary btn-icon"
-        title="Settings & System Configuration"
-      >
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="3"></circle>
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-        </svg>
-      </button>
-    );
-  }
+  if (!isOpen) return null;
 
   return (
     <div className="modal-overlay">
@@ -318,7 +334,8 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
                     />
                 </div>
 
-                <div style={{ marginTop: '0.5rem' }}>
+                <div style={{ marginTop: '0.5rem', border: '1px dashed #333', padding: '1rem', borderRadius: '4px' }}>
+                    <label className="form-label" style={{ color: '#a78bfa', marginBottom: '0.5rem' }}>CHATTERBOX: VOICE CLONING REFERENCE</label>
                     <input 
                         type="file" 
                         accept="audio/*" 
@@ -329,15 +346,31 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
                     <div 
                         onClick={() => voiceInputRef.current?.click()}
                         className="btn btn-secondary"
-                        style={{ borderStyle: 'dashed', textAlign: 'center', cursor: 'pointer', padding: '1rem', height: 'auto' }}
+                        style={{ textAlign: 'center', cursor: 'pointer', padding: '0.75rem', height: 'auto', marginBottom: '0.5rem' }}
                     >
-                        {voiceFile ? `SELECTED: ${voiceFile.name}` : (voiceBase64 ? "REPLACE REFERENCE AUDIO" : "UPLOAD REFERENCE AUDIO (WAV/MP3)")}
+                        {voiceFile ? `SELECTED: ${voiceFile.name}` : (voiceBase64 ? "CHANGE REFERENCE AUDIO" : "UPLOAD SAMPLE (WAV/MP3)")}
                     </div>
+                    
+                    <div className="flex-group">
+                        <button 
+                            type="button"
+                            onClick={handleTestClone}
+                            disabled={!voiceBase64 || isCloning}
+                            className="btn btn-accent btn-sm"
+                            style={{ flex: 1, borderColor: '#a78bfa', color: '#a78bfa' }}
+                        >
+                            {isCloning ? 'SYNTHESIZING...' : 'TEST CLONE (CHATTERBOX)'}
+                        </button>
+                    </div>
+                    
                     {voiceBase64 && (
                         <div style={{ marginTop: '0.5rem' }}>
+                            <div style={{ fontSize: '0.65rem', color: '#666', marginBottom: '2px' }}>REFERENCE AUDIO:</div>
                             <audio src={voiceBase64} controls style={{ width: '100%', height: '2rem' }} />
                         </div>
                     )}
+                    
+                    <audio ref={audioPreviewRef} className="hidden" />
                 </div>
             </div>
 

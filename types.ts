@@ -27,7 +27,7 @@ export interface LogMessage {
   isStreaming?: boolean; // Tracks if the message is currently being generated
   feedback?: 'up' | 'down';
   attachment?: string; // Base64 image data or Video URI
-  attachmentType?: 'image' | 'video' | 'text' | 'audio';
+  attachmentType?: 'image' | 'video' | 'text' | 'audio' | 'pdf';
 }
 
 export interface ChatSession {
@@ -70,17 +70,30 @@ export interface CloudFile {
   uri: string;
 }
 
-// SOMA PERMISSION TYPES
-export type SomaPermission = 
-  | 'READ_LORE'      // 400
-  | 'WRITE_LORE'     // 200
-  | 'MODIFY_LORE'    // 100
-  | 'EXECUTE_CODE'   // 040
-  | 'ROUTE_EXTERNAL' // 020
-  | 'GENERATE_MEDIA' // 010
-  | 'ADMIN_OVERRIDE' // 004
-  | 'BROADCAST_COUNCIL' // 002
-  | 'SELF_UPDATE';   // 001
+// --- SOMA PERMISSION ARCHITECTURE ---
+// Sector 1: MNEMOSYNE (Memory)
+export type PermMemory = 'READ_LORE' | 'WRITE_LORE' | 'MODIFY_LORE';
+// Sector 2: TECHNE (Tools)
+export type PermTools = 'EXECUTE_CODE' | 'ROUTE_EXTERNAL' | 'GENERATE_MEDIA';
+// Sector 3: METRON (System)
+export type PermSystem = 'ADMIN_OVERRIDE' | 'BROADCAST_COUNCIL' | 'SELF_UPDATE' | 'WRITE_CANON';
+
+export type SomaPermission = PermMemory | PermTools | PermSystem;
+
+export enum SomaActionType {
+    // Memory
+    QUERY_DB = 'QUERY_DB',
+    INGEST_DATA = 'INGEST_DATA',
+    DELETE_DATA = 'DELETE_DATA',
+    // Tools
+    EXEC_CODE = 'EXEC_CODE',
+    ROUTE_REQUEST = 'ROUTE_REQUEST',
+    CREATE_IMAGE = 'CREATE_IMAGE',
+    // System
+    SYSTEM_ADMIN = 'SYSTEM_ADMIN',
+    BROADCAST = 'BROADCAST',
+    PUBLISH_CANON = 'PUBLISH_CANON'
+}
 
 export interface Agent {
   id: string;
@@ -103,11 +116,24 @@ export interface LorePackHeader {
   version: number;
   timestamp: number;
   description?: string;
+  name?: string; // User friendly name
 }
 
 export interface LorePack {
+  id: string; // DB Key
   header: LorePackHeader;
   sacred_archive: KnowledgeDoc[];
+}
+
+// --- MEDIA ASSET ---
+export interface MediaAsset {
+    id: string;
+    type: 'image' | 'video' | 'audio' | 'text' | 'pdf';
+    data: string; // Base64 or URI or Text Content
+    prompt: string;
+    agentId: string;
+    timestamp: number;
+    tags?: string[];
 }
 
 // --- MULTI-AGENT TYPES (ENVELOPE PROTOCOL) ---
@@ -126,4 +152,34 @@ export interface MultiAgentMessage {
     isThinking?: boolean;
     attachment?: string;
     meta?: Record<string, any>; // Provenance, confidence, tokens, etc.
+}
+
+// --- ANIMAGENTS PIPELINE TYPES ---
+
+export enum ProductionStage {
+    IDEATION = 'IDEATION',   // Divergent (Brainstorm)
+    SCRIPT = 'SCRIPT',       // Convergent (Scribe)
+    DESIGN = 'DESIGN',       // Visual Style (VisDev)
+    ART = 'ART'              // High Fidelity (Lumiere)
+}
+
+export enum ApprovalStatus {
+    DRAFT = 'DRAFT',
+    PENDING = 'PENDING',
+    APPROVED = 'APPROVED',
+    REJECTED = 'REJECTED'
+}
+
+export interface CanonBlock {
+    id: string;
+    parentId?: string; // Lineage tracking
+    stage: ProductionStage;
+    title: string;
+    content: string; // Text content or Image Prompts
+    mediaRef?: string; // ID of MediaAsset if applicable
+    agentId: string; // Creator
+    timestamp: number;
+    status: ApprovalStatus;
+    version: number;
+    feedback?: string; // Director's notes
 }
