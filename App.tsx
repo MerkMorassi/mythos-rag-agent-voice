@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { GoogleGenAI, LiveServerMessage, Modality } from "@google/genai";
+import { GoogleGenAI, LiveServerMessage, Modality, Tool } from "@google/genai";
 import { AGENTS } from './agents';
 import { 
   LogMessage, 
@@ -25,7 +25,9 @@ import {
   saveAgentConfig,
   getGeneralInstructions,
   saveGeneralInstructions,
-  saveMediaAsset
+  saveMediaAsset,
+  getGraphContext,
+  searchDocuments
 } from './services/db';
 import {
   base64ToUint8Array,
@@ -266,6 +268,23 @@ const App: React.FC = () => {
               modeInstruction = "\n\n[OPERATIONAL MODE: VISUALIZER]\nACTIVATE 'Image Generation' PROTOCOL.\n- You are a visual artist and observer.\n- Prioritize visual descriptions and imagery.\n- Use 'routeRequest' with target='FLUX_IMAGE' when asked to generate, show, or create an image.\n- If a scene is described, offer to visualize it.";
           }
 
+          // --- TOOLS CONFIGURATION ---
+          const retrievalTool: Tool = {
+              functionDeclarations: [
+                  {
+                      name: "retrieve_knowledge",
+                      description: "Access the MythOS Knowledge Graph. Use this tool whenever the user asks about past events, specific lore, project details, definitions, or uploaded documents.",
+                      parameters: {
+                          type: "OBJECT",
+                          properties: {
+                              query: { type: "STRING", description: "The search query/topic." }
+                          },
+                          required: ["query"]
+                      }
+                  }
+              ]
+          };
+
           const config = {
               responseModalities: [Modality.AUDIO],
               speechConfig: {
@@ -277,7 +296,8 @@ const App: React.FC = () => {
               topP: modelConfig.topP,
               topK: modelConfig.topK,
               inputAudioTranscription: {}, 
-              outputAudioTranscription: {}, 
+              outputAudioTranscription: {},
+              tools: [retrievalTool] // Add GraphRAG tool
           };
 
           const sessionPromise = ai.live.connect({
@@ -312,6 +332,59 @@ const App: React.FC = () => {
                       }
                   },
                   onmessage: async (msg: LiveServerMessage) => {
+                      // --- TOOL HANDLING (GraphRAG) ---
+                      if (msg.toolCall) {
+                          const responses = [];
+                          for (const fc of msg.toolCall.functionCalls) {
+                              if (fc.name === 'retrieve_knowledge') {
+                                  const query = (fc.args as any).query;
+                                  
+                                  // Visual Feedback
+                                  setLogs(prev => [...prev, { 
+                                      id: crypto.randomUUID(), 
+                                      type: 'system', 
+                                      text: `[GRAPH ACCESS] Traversal: "${query}"`, 
+                                      timestamp: Date.now() 
+                                  }]);
+
+                                  try {
+                                      // 1. Generate Embedding for Semantic Search
+                                      const embedAi = new GoogleGenAI({ apiKey: keyToUse });
+                                      const embedRes = await embedAi.models.embedContent({
+                                          model: 'text-embedding-004',
+                                          contents: [{ parts: [{ text: query }] }]
+                                      });
+                                      const vec = embedRes.embeddings?.[0]?.values;
+
+                                      // 2. Hybrid Retrieval (Graph + Vector)
+                                      const graphText = await getGraphContext(query, vec, currentAgentId);
+                                      const vectorDocs = await searchDocuments(query, vec, currentAgentId);
+                                      
+                                      const combinedContext = `### KNOWLEDGE GRAPH ###\n${graphText || "No direct graph connections found."}\n\n### RELEVANT DOCUMENTS ###\n${vectorDocs.map(d => `- ${d.content.substring(0,400)}...`).join('\n')}`;
+
+                                      responses.push({
+                                          id: fc.id,
+                                          name: fc.name,
+                                          response: { result: combinedContext }
+                                      });
+                                  } catch(e: any) {
+                                      console.error("Retrieval Failed", e);
+                                      responses.push({
+                                          id: fc.id,
+                                          name: fc.name,
+                                          response: { result: `Error accessing knowledge base: ${e.message}` }
+                                      });
+                                  }
+                              }
+                          }
+                          
+                          if (responses.length > 0) {
+                              sessionPromise.then(session => {
+                                  session.sendToolResponse({ functionResponses: responses });
+                              });
+                          }
+                      }
+
                       const audioData = msg.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
                       if (audioData && audioContextRef.current && analyserRef.current) {
                           const ctx = audioContextRef.current;

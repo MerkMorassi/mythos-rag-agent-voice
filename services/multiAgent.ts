@@ -6,8 +6,8 @@ import { RetrievalGate } from "./retrievalGate";
 import { ExternalRouter } from "./externalRouter";
 import { SomaKernel } from "./soma"; // Import Kernel
 
-// Standard model for text chat
-const CHAT_MODEL = "gemini-3-flash-preview"; 
+// Standard model for text chat - Upgraded to Pro for best reasoning
+const CHAT_MODEL = "gemini-3-pro-preview"; 
 
 export interface AgentResponse {
     agentId: string;

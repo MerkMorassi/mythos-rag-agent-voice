@@ -1,6 +1,6 @@
 {
   "name": "MythOS RAG Agent Voice",
-  "description": "Real-time voice conversation with Gemini 2.0, grounded in your own local knowledge base and visual input.",
+  "description": "Real-time voice conversation powered by Gemini 2.5 Native Audio (Interface) and Gemini 3.0 Pro (Cognition), grounded in your own local knowledge base.",
   "requestFramePermissions": [
     "camera",
     "microphone"

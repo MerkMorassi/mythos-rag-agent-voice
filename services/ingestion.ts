@@ -180,8 +180,9 @@ export class IngestionService {
         `;
 
         try {
+            // Upgraded to Pro for better entity extraction
             const result = await ai.models.generateContent({
-                model: 'gemini-3-flash-preview',
+                model: 'gemini-3-pro-preview',
                 contents: [{ parts: [{ text: prompt }] }],
                 config: {
                     responseMimeType: "application/json"
