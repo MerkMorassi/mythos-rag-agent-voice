@@ -70,6 +70,38 @@ export interface CloudFile {
   uri: string;
 }
 
+// --- GRAPH MAGRAG ARCHITECTURE ---
+export interface GraphNode {
+  id: string; // Normalized Entity Name (e.g. "ZEUS") or UUID
+  label: string; // Type: "PERSON", "LOCATION", "CONCEPT", "EVENT"
+  name: string; // Display Name
+  description: string; // Summarized description
+  sourceDocIds: string[]; // Provenance links to KnowledgeDoc
+  embedding?: number[]; // Vector of the description
+  agentId: string;
+  timestamp: number;
+}
+
+export interface GraphEdge {
+  id: string;
+  source: string; // Node ID
+  target: string; // Node ID
+  relation: string; // e.g. "MARRIED_TO", "LOCATED_IN"
+  description?: string;
+  agentId: string;
+  timestamp: number;
+}
+
+export interface CommunitySummary {
+  id: string;
+  title: string;
+  summary: string; // High level summary of the cluster
+  embedding?: number[];
+  agentId: string;
+  nodeIds: string[]; // Nodes in this community
+  level: number; // Hierarchical level (0 = granular)
+}
+
 // --- SOMA PERMISSION ARCHITECTURE ---
 // Sector 1: MNEMOSYNE (Memory)
 export type PermMemory = 'READ_LORE' | 'WRITE_LORE' | 'MODIFY_LORE';

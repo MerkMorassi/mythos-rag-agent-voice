@@ -8,7 +8,7 @@
 export interface GateResult {
     shouldRetrieve: boolean;
     reason: string;
-    strategy: 'TELEPORT' | 'RCI' | 'NONE'; // RCI = Retrieval Augmented Context Injection
+    strategy: 'TELEPORT' | 'RCI' | 'GRAPH_LOCAL' | 'GRAPH_GLOBAL' | 'NONE'; 
 }
 
 export const RetrievalGate = {
@@ -17,7 +17,6 @@ export const RetrievalGate = {
         const wordCount = q.split(/\s+/).length;
 
         // 1. IDENTITY GATE (Short greetings/phatic)
-        // If it's very short and not a question, assume it's conversational filler.
         if (wordCount < 3 && !q.includes('?')) {
              const commands = ['log', 'status', 'report', 'explain', 'search', 'find'];
              if (commands.some(w => q.includes(w))) {
@@ -33,18 +32,25 @@ export const RetrievalGate = {
             'earlier', 'myth', 'search', 'lookup'
         ];
         
+        // 3. GRAPH INTENT (Deep Connections)
+        // Questions that imply relationships or specific entity connections benefit from Graph Search
+        const graphTriggers = ['how is', 'connected', 'related', 'relationship', 'link', 'between'];
+        
+        if (graphTriggers.some(t => q.includes(t))) {
+            return { shouldRetrieve: true, strategy: 'GRAPH_LOCAL', reason: 'Graph Relation Query' };
+        }
+        
         if (recallTriggers.some(t => q.includes(t))) {
-            return { shouldRetrieve: true, strategy: 'RCI', reason: 'Explicit Intent' };
+            // Default to Graph Local for better context if available
+            return { shouldRetrieve: true, strategy: 'GRAPH_LOCAL', reason: 'Explicit Intent' };
         }
 
-        // 3. PERSONA GATE
-        // Archivists and Memory Proxies always check records.
+        // 4. PERSONA GATE
         if (['CLIO', 'ARCHIVAX', 'POLYHYMNIA', 'MERKOS'].includes(agentId)) {
-            return { shouldRetrieve: true, strategy: 'RCI', reason: 'Role Mandate: Historian/Memory' };
+            return { shouldRetrieve: true, strategy: 'GRAPH_LOCAL', reason: 'Role Mandate: Historian/Memory' };
         }
 
-        // 4. COMPLEXITY HEURISTIC
-        // Long queries imply a need for grounding.
+        // 5. COMPLEXITY HEURISTIC
         if (wordCount > 8) {
             return { shouldRetrieve: true, strategy: 'RCI', reason: 'Complexity Heuristic' };
         }

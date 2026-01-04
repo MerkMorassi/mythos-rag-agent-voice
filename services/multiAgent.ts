@@ -1,7 +1,7 @@
 
 import { GoogleGenAI, FunctionDeclaration, Type } from "@google/genai";
 import { Agent, MultiAgentMessage, SomaActionType } from "../types";
-import { searchDocuments, getAgentConfig } from "./db";
+import { searchDocuments, getAgentConfig, getGraphContext } from "./db";
 import { RetrievalGate } from "./retrievalGate";
 import { ExternalRouter } from "./externalRouter";
 import { SomaKernel } from "./soma"; // Import Kernel
@@ -65,7 +65,6 @@ export const MultiAgentService = {
         await kernel.heartbeat(agent.id);
 
         // 1. SAFETY & ROUTING PRE-CHECK (NSFW GUARD)
-        // If the attachment is flagged, we bypass Gemini entirely to avoid policy strikes.
         if (attachment && attachment.name && (
             attachment.name.toLowerCase().includes('nsfw') || 
             attachment.name.toLowerCase().includes('restricted') ||
@@ -111,12 +110,14 @@ export const MultiAgentService = {
             
             // 2. MEMORY GATING (SOMA AUTHORIZATION CHECK)
             let contextDocs: any[] = [];
+            let graphContext = "";
             
             // Check if agent has READ_LORE permission
             const canReadLore = kernel.authorize(agent.id, SomaActionType.QUERY_DB);
 
             if (userMessage.trim().length > 0 && canReadLore) {
                 const gate = RetrievalGate.evaluate(userMessage, agent.id);
+                
                 if (gate.shouldRetrieve) {
                     let queryVector = undefined;
                     try {
@@ -128,21 +129,41 @@ export const MultiAgentService = {
                     } catch(e) {
                         console.warn(`[${agent.handle}] Embedding failed`, e);
                     }
+
+                    // STRATEGY SELECTION
+                    if (gate.strategy === 'GRAPH_LOCAL') {
+                        // 1. Get Graph Context (Entities + Relations)
+                        graphContext = await getGraphContext(userMessage, queryVector, agent.id);
+                        // 2. Fallback to Vector Search if graph is empty or sparse?
+                        // For now, let's mix both if graph found something, otherwise just vector
+                    }
+                    
+                    // Always do vector search for general chunk coverage
                     contextDocs = await searchDocuments(userMessage, queryVector, agent.id);
                 }
-            } else if (!canReadLore) {
-                // console.debug(`[SOMA] Agent ${agent.handle} denied READ_LORE access.`);
-            }
+            } 
 
             // 3. CONTEXT CONSTRUCTION
             const agentConfig = await getAgentConfig(agent.id);
             const specificInstruction = agentConfig.instruction || "";
 
             // --- ROSTER GENERATION ---
-            // Creates a list like: "- Archivax (he/him): Central Hypervisor"
             const rosterString = activeRoster
                 .map(a => `- ${a.handle.toUpperCase()} (${a.pronouns || 'they/them'}): ${a.role}`)
                 .join('\n');
+
+            let memorySection = "";
+            if (canReadLore) {
+                if (graphContext) {
+                    memorySection = `RELEVANT KNOWLEDGE GRAPH:\n${graphContext}\n\nRELATED TEXT CHUNKS:\n` + contextDocs.map(d => `- ${d.content.substring(0, 300)}...`).join('\n');
+                } else if (contextDocs.length > 0) {
+                    memorySection = "RELEVANT KNOWLEDGE RETRIEVED:\n" + contextDocs.map(d => `- ${d.content}`).join('\n');
+                } else {
+                    memorySection = "No specific memory retrieved for this query.";
+                }
+            } else {
+                memorySection = "[SYSTEM: MEMORY SUBSYSTEM OFFLINE - INSUFFICIENT PERMISSIONS]";
+            }
 
             let systemPrompt = `
 ${globalInstructions}
@@ -162,10 +183,7 @@ CORE INSTRUCTION: ${agent.system_instruction}
 ${specificInstruction}
 
 === MEMORY / CONTEXT ===
-${canReadLore 
-    ? (contextDocs.length > 0 ? "RELEVANT KNOWLEDGE RETRIEVED:\n" + contextDocs.map(d => `- ${d.content}`).join('\n') : "No specific memory retrieved for this query.") 
-    : "[SYSTEM: MEMORY SUBSYSTEM OFFLINE - INSUFFICIENT PERMISSIONS]"
-}
+${memorySection}
 
 === SOMA PROTOCOL ===
 You operate under the SOMA kernel. Your actions are restricted by your ACCESS_LEVEL.
@@ -214,7 +232,6 @@ ${agent.handle.toUpperCase()}:`;
                             data: attachment.content
                         }
                     });
-                    // Hint to model about the video
                     parts.push({ text: `\n[VIDEO ATTACHED: ${attachment.name || 'video_clip'}]\n` });
                 } else if (attachment.type === 'text') {
                     parts.push({
@@ -249,7 +266,6 @@ ${agent.handle.toUpperCase()}:`;
                 const call = functionCalls[0];
                 if (call.name === "routeRequest") {
                     
-                    // DOUBLE CHECK PERMISSION (Kernel Level Enforcement)
                     if (!kernel.authorize(agent.id, SomaActionType.ROUTE_REQUEST)) {
                         return { agentId: agent.id, text: `[SYSTEM NOTICE] Tool use blocked: Insufficient SOMA permissions (Need ROUTE_EXTERNAL).` };
                     }
@@ -262,8 +278,6 @@ ${agent.handle.toUpperCase()}:`;
                     
                     if (routerRes.success && routerRes.data) {
                         if (routerRes.type === 'image') {
-                            // GENERATE_MEDIA PERMISSION CHECK implicit in routeRequest for FLUX?
-                            // Technically routeRequest covers it, but we can separate later if needed.
                             return {
                                 agentId: agent.id,
                                 text: `[GENERATED IMAGE: ${routerRes.data}] I have visualized this request: ${prompt}`

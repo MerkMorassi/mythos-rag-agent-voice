@@ -1,5 +1,5 @@
 
-import { KnowledgeDoc, ChatSession, LogMessage, AgentConfig, ModelConfig, DEFAULT_MODEL_CONFIG, LorePack, MediaAsset, CanonBlock } from '../types';
+import { KnowledgeDoc, ChatSession, LogMessage, AgentConfig, ModelConfig, DEFAULT_MODEL_CONFIG, LorePack, MediaAsset, CanonBlock, GraphNode, GraphEdge, CommunitySummary } from '../types';
 
 const DB_NAME = 'gemini_rag_db';
 const STORE_NAME = 'documents';
@@ -9,8 +9,12 @@ const CONFIG_STORE_NAME = 'config';
 const PROMPT_STORE_NAME = 'saved_prompts';
 const LORE_PACK_STORE = 'lore_packs';
 const MEDIA_STORE = 'media_assets';
-const CANON_STORE = 'production_blocks'; // New Store for AnimAgents
-const DB_VERSION = 10; // Increment version
+const CANON_STORE = 'production_blocks'; 
+const GRAPH_NODE_STORE = 'graph_nodes';
+const GRAPH_EDGE_STORE = 'graph_edges';
+const COMMUNITY_STORE = 'community_summaries';
+
+const DB_VERSION = 11; // Upgrade for Graph Stores
 
 // --- PORTABILITY INTERFACE ---
 export interface IVectorStore {
@@ -54,56 +58,58 @@ export const initDB = (): Promise<IDBDatabase> => {
       const db = (event.target as IDBOpenDBRequest).result;
       const tx = (event.target as IDBOpenDBRequest).transaction;
       
-      let store: IDBObjectStore;
+      // 1. Documents Store
       if (!db.objectStoreNames.contains(STORE_NAME)) {
-        store = db.createObjectStore(STORE_NAME, { keyPath: 'id' });
+        const store = db.createObjectStore(STORE_NAME, { keyPath: 'id' });
         store.createIndex('title', 'title', { unique: false });
-      } else {
-        store = tx!.objectStore(STORE_NAME);
-      }
-
-      if (!store.indexNames.contains('agentId')) {
         store.createIndex('agentId', 'agentId', { unique: false });
-      }
-      
-      if (!store.indexNames.contains('numMarkId')) {
         store.createIndex('numMarkId', 'numMarkId', { unique: false });
+      } else {
+        const store = tx!.objectStore(STORE_NAME);
+        if (!store.indexNames.contains('agentId')) store.createIndex('agentId', 'agentId', { unique: false });
+        if (!store.indexNames.contains('numMarkId')) store.createIndex('numMarkId', 'numMarkId', { unique: false });
       }
 
+      // 2. Standard Stores
       if (!db.objectStoreNames.contains(CHAT_STORE_NAME)) {
         const chatStore = db.createObjectStore(CHAT_STORE_NAME, { keyPath: 'id' });
         chatStore.createIndex('timestamp', 'timestamp', { unique: false });
       }
-
-      if (!db.objectStoreNames.contains(ACTIVE_CHAT_STORE_NAME)) {
-        db.createObjectStore(ACTIVE_CHAT_STORE_NAME, { keyPath: 'agentId' });
-      }
-
-      if (!db.objectStoreNames.contains(CONFIG_STORE_NAME)) {
-        db.createObjectStore(CONFIG_STORE_NAME, { keyPath: 'id' });
-      }
-
+      if (!db.objectStoreNames.contains(ACTIVE_CHAT_STORE_NAME)) db.createObjectStore(ACTIVE_CHAT_STORE_NAME, { keyPath: 'agentId' });
+      if (!db.objectStoreNames.contains(CONFIG_STORE_NAME)) db.createObjectStore(CONFIG_STORE_NAME, { keyPath: 'id' });
       if (!db.objectStoreNames.contains(PROMPT_STORE_NAME)) {
         const promptStore = db.createObjectStore(PROMPT_STORE_NAME, { keyPath: 'id' });
         promptStore.createIndex('agentId', 'agentId', { unique: false });
       }
-
       if (!db.objectStoreNames.contains(LORE_PACK_STORE)) {
           const lpStore = db.createObjectStore(LORE_PACK_STORE, { keyPath: 'id' });
           lpStore.createIndex('agentId', 'header.agentId', { unique: false });
       }
-
       if (!db.objectStoreNames.contains(MEDIA_STORE)) {
           const mStore = db.createObjectStore(MEDIA_STORE, { keyPath: 'id' });
           mStore.createIndex('agentId', 'agentId', { unique: false });
           mStore.createIndex('timestamp', 'timestamp', { unique: false });
       }
-
-      // AnimAgents Store
       if (!db.objectStoreNames.contains(CANON_STORE)) {
           const cStore = db.createObjectStore(CANON_STORE, { keyPath: 'id' });
           cStore.createIndex('stage', 'stage', { unique: false });
           cStore.createIndex('status', 'status', { unique: false });
+      }
+
+      // 3. GRAPH STORES (New)
+      if (!db.objectStoreNames.contains(GRAPH_NODE_STORE)) {
+          const nodeStore = db.createObjectStore(GRAPH_NODE_STORE, { keyPath: 'id' });
+          nodeStore.createIndex('agentId', 'agentId', { unique: false });
+      }
+      if (!db.objectStoreNames.contains(GRAPH_EDGE_STORE)) {
+          const edgeStore = db.createObjectStore(GRAPH_EDGE_STORE, { keyPath: 'id' });
+          edgeStore.createIndex('source', 'source', { unique: false });
+          edgeStore.createIndex('target', 'target', { unique: false });
+          edgeStore.createIndex('agentId', 'agentId', { unique: false });
+      }
+      if (!db.objectStoreNames.contains(COMMUNITY_STORE)) {
+          const commStore = db.createObjectStore(COMMUNITY_STORE, { keyPath: 'id' });
+          commStore.createIndex('agentId', 'agentId', { unique: false });
       }
     };
 
@@ -113,7 +119,184 @@ export const initDB = (): Promise<IDBDatabase> => {
   });
 };
 
-// --- CANON BLOCKS (ANIMAGENTS) ---
+// --- GRAPH OPERATIONS ---
+
+export const saveGraphNode = async (node: GraphNode): Promise<void> => {
+    const db = await initDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction([GRAPH_NODE_STORE], 'readwrite');
+        const store = tx.objectStore(GRAPH_NODE_STORE);
+        store.put(node).onsuccess = () => resolve();
+        tx.onerror = () => reject(tx.error);
+    });
+};
+
+export const saveGraphEdge = async (edge: GraphEdge): Promise<void> => {
+    const db = await initDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction([GRAPH_EDGE_STORE], 'readwrite');
+        const store = tx.objectStore(GRAPH_EDGE_STORE);
+        store.put(edge).onsuccess = () => resolve();
+        tx.onerror = () => reject(tx.error);
+    });
+};
+
+export const getGraphNodesByAgent = async (agentId: string): Promise<GraphNode[]> => {
+    const db = await initDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction([GRAPH_NODE_STORE], 'readonly');
+        const store = tx.objectStore(GRAPH_NODE_STORE);
+        const index = store.index('agentId');
+        const req = index.getAll(agentId);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+    });
+};
+
+export const getGraphEdges = async (): Promise<GraphEdge[]> => {
+    const db = await initDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction([GRAPH_EDGE_STORE], 'readonly');
+        const store = tx.objectStore(GRAPH_EDGE_STORE);
+        const req = store.getAll();
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+    });
+};
+
+// --- HYBRID SEARCH LOGIC ---
+
+// Helper: Normalize score (0-1)
+const normalize = (val: number, max: number) => (max === 0 ? 0 : val / max);
+
+function cosineSimilarity(vecA: number[], vecB: number[]): number {
+  let dotProduct = 0;
+  let normA = 0;
+  let normB = 0;
+  for (let i = 0; i < vecA.length; i++) {
+    dotProduct += vecA[i] * vecB[i];
+    normA += vecA[i] * vecA[i];
+    normB += vecB[i] * vecB[i];
+  }
+  if (normA === 0 || normB === 0) return 0;
+  return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+/**
+ * Perform semantic search on Graph Nodes.
+ */
+export const searchGraphNodes = async (queryEmbedding: number[], agentId?: string): Promise<GraphNode[]> => {
+    const db = await initDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction([GRAPH_NODE_STORE], 'readonly');
+        const store = tx.objectStore(GRAPH_NODE_STORE);
+        
+        let req: IDBRequest;
+        if (agentId) {
+            req = store.index('agentId').getAll(agentId);
+        } else {
+            req = store.getAll();
+        }
+
+        req.onsuccess = () => {
+            const nodes = req.result as GraphNode[];
+            const scored = nodes
+                .map(n => ({
+                    node: n,
+                    score: n.embedding ? cosineSimilarity(queryEmbedding, n.embedding) : 0
+                }))
+                .filter(n => n.score > 0.65) // Higher threshold for entities
+                .sort((a,b) => b.score - a.score)
+                .slice(0, 5); // Get top 5 entities
+            resolve(scored.map(s => s.node));
+        };
+        req.onerror = () => reject(req.error);
+    });
+};
+
+/**
+ * "Local Search" - Traverses from relevant nodes to find context.
+ */
+export const getGraphContext = async (query: string, queryEmbedding?: number[], agentId?: string): Promise<string> => {
+    if (!queryEmbedding) return "";
+
+    // 1. Find Anchor Nodes
+    const anchors = await searchGraphNodes(queryEmbedding, agentId);
+    if (anchors.length === 0) return "";
+
+    const anchorIds = new Set(anchors.map(n => n.id));
+    const allEdges = await getGraphEdges();
+    
+    // 2. Traverse 1-Hop
+    // Find edges where source OR target is in anchors
+    const relevantEdges = allEdges.filter(e => anchorIds.has(e.source) || anchorIds.has(e.target));
+    
+    // 3. Format Context
+    // Output: "Zeus (Person): King of Gods. Relations: MARRIED_TO Hera, FATHER_OF Hercules"
+    let context = "### GRAPH KNOWLEDGE ###\n";
+    
+    for (const node of anchors) {
+        context += `ENTITY: ${node.name} (${node.label})\nDESC: ${node.description}\n`;
+        
+        const nodeEdges = relevantEdges.filter(e => e.source === node.id || e.target === node.id);
+        if (nodeEdges.length > 0) {
+            context += "RELATIONSHIPS:\n";
+            for (const e of nodeEdges) {
+                const isOutbound = e.source === node.id;
+                const otherId = isOutbound ? e.target : e.source;
+                const relType = e.relation;
+                // If we want the name of the other node, we'd need to look it up, but ID is usually the name in our simplified model
+                context += `  - [${relType}] ${isOutbound ? '->' : '<-'} ${otherId} ${e.description ? `(${e.description})` : ''}\n`;
+            }
+        }
+        context += "\n";
+    }
+    
+    return context;
+};
+
+export const searchDocuments = async (query: string, queryEmbedding?: number[], agentId?: string): Promise<KnowledgeDoc[]> => {
+  const docsToSearch = agentId ? await getDocumentsByAgentId(agentId) : await getAllDocuments();
+  const lowerQuery = query.toLowerCase();
+  const queryTerms = lowerQuery.split(/\s+/).filter(t => t.length > 2); 
+
+  const scoredDocs = docsToSearch.map(doc => {
+      // 1. Vector Score (Semantic) - 70% Weight
+      let vectorScore = 0;
+      if (doc.embedding && queryEmbedding) {
+          const rawScore = cosineSimilarity(queryEmbedding, doc.embedding);
+          vectorScore = Math.max(0, rawScore);
+      }
+
+      // 2. Keyword Score (Precision) - 30% Weight
+      let keywordHits = 0;
+      const contentLower = (doc.content + " " + doc.title).toLowerCase();
+      
+      queryTerms.forEach(term => {
+          if (contentLower.includes(term)) keywordHits++;
+      });
+      
+      const keywordScore = Math.min(keywordHits * 0.2, 1.0);
+
+      // 3. Hybrid Fusion
+      let finalScore = 0;
+      if (queryEmbedding && doc.embedding) {
+          finalScore = (vectorScore * 0.7) + (keywordScore * 0.3);
+      } else {
+          finalScore = keywordScore;
+      }
+
+      return { doc, score: finalScore };
+  });
+
+  return scoredDocs
+    .filter(item => item.score > 0.15) 
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 8) 
+    .map(item => item.doc);
+};
+
+// --- REST OF DB METHODS ---
 
 export const saveCanonBlock = async (block: CanonBlock): Promise<void> => {
     const db = await initDB();
@@ -133,7 +316,6 @@ export const getCanonBlocks = async (): Promise<CanonBlock[]> => {
         const req = store.getAll();
         req.onsuccess = () => {
              const results = req.result as CanonBlock[];
-             // Sort by timestamp asc (story order usually)
              results.sort((a,b) => a.timestamp - b.timestamp);
              resolve(results);
         };
@@ -150,8 +332,6 @@ export const deleteCanonBlock = async (id: string): Promise<void> => {
         tx.onerror = () => reject(tx.error);
     });
 };
-
-// --- DOCUMENTS ---
 
 export const addDocument = async (doc: KnowledgeDoc): Promise<void> => {
   const db = await initDB();
@@ -383,7 +563,7 @@ export const deleteMediaAsset = async (id: string): Promise<void> => {
     });
 };
 
-// --- CHAT SESSIONS & CONFIG (Existing) ---
+// --- CHAT SESSIONS & CONFIG ---
 
 export const saveChatSession = async (session: ChatSession): Promise<void> => {
   const db = await initDB();
@@ -529,67 +709,6 @@ export const deleteSavedPrompt = async (id: string): Promise<void> => {
   });
 };
 
-// Helper: Normalize score (0-1)
-const normalize = (val: number, max: number) => (max === 0 ? 0 : val / max);
-
-function cosineSimilarity(vecA: number[], vecB: number[]): number {
-  let dotProduct = 0;
-  let normA = 0;
-  let normB = 0;
-  for (let i = 0; i < vecA.length; i++) {
-    dotProduct += vecA[i] * vecB[i];
-    normA += vecA[i] * vecA[i];
-    normB += vecB[i] * vecB[i];
-  }
-  if (normA === 0 || normB === 0) return 0;
-  return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
-}
-
-export const searchDocuments = async (query: string, queryEmbedding?: number[], agentId?: string): Promise<KnowledgeDoc[]> => {
-  const docsToSearch = agentId ? await getDocumentsByAgentId(agentId) : await getAllDocuments();
-  const lowerQuery = query.toLowerCase();
-  const queryTerms = lowerQuery.split(/\s+/).filter(t => t.length > 2); 
-
-  const scoredDocs = docsToSearch.map(doc => {
-      // 1. Vector Score (Semantic) - 70% Weight
-      let vectorScore = 0;
-      if (doc.embedding && queryEmbedding) {
-          const rawScore = cosineSimilarity(queryEmbedding, doc.embedding);
-          // Clamp negative cosine similarity to 0
-          vectorScore = Math.max(0, rawScore);
-      }
-
-      // 2. Keyword Score (Precision) - 30% Weight
-      // Simple heuristic: saturation at 5 matches = 100% relevance
-      let keywordHits = 0;
-      const contentLower = (doc.content + " " + doc.title).toLowerCase();
-      
-      queryTerms.forEach(term => {
-          if (contentLower.includes(term)) keywordHits++;
-      });
-      
-      const keywordScore = Math.min(keywordHits * 0.2, 1.0);
-
-      // 3. Hybrid Fusion
-      let finalScore = 0;
-      if (queryEmbedding && doc.embedding) {
-          // Weighted Fusion: 70% Semantic, 30% Keyword
-          finalScore = (vectorScore * 0.7) + (keywordScore * 0.3);
-      } else {
-          // Fallback to pure Keyword scoring if embedding missing
-          finalScore = keywordScore;
-      }
-
-      return { doc, score: finalScore };
-  });
-
-  return scoredDocs
-    .filter(item => item.score > 0.1) // Noise filter
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 8) 
-    .map(item => item.doc);
-};
-
 // --- SIMULATED SQL ENGINE ---
 export const executeSql = async (query: string): Promise<string> => {
     const upperQuery = query.trim().toUpperCase();
@@ -609,10 +728,7 @@ export const executeSql = async (query: string): Promise<string> => {
         let deletedCount = 0;
         
         for (const doc of allDocs) {
-            // Simple condition parser: id = '...'
-            // Very basic support for now: id equals, or content like
             let match = false;
-            
             if (condition.toUpperCase().includes("ID =")) {
                 const targetId = condition.split('=')[1].trim().replace(/['"]/g, '');
                 if (doc.id === targetId) match = true;
@@ -635,16 +751,13 @@ export const executeSql = async (query: string): Promise<string> => {
         const table = tableMatch ? tableMatch[1] : '';
         if (table !== 'LORE') return `Error: Table '${table}' not found.`;
         
-        // SET clause
         const setMatch = query.match(/SET\s+(.+?)\s+WHERE/i);
         if (!setMatch) return "Error: UPDATE syntax: UPDATE lore SET col=val WHERE ...";
         
-        const setClause = setMatch[1]; // e.g. content = 'new text'
-        // Naive parser for column=value
+        const setClause = setMatch[1]; 
         const [col, val] = setClause.split('=').map(s => s.trim());
         const cleanVal = val.replace(/^['"]|['"]$/g, '');
         
-        // WHERE clause
         const whereMatch = query.match(/WHERE\s+(.+)$/i);
         if (!whereMatch) return "Error: UPDATE requires WHERE clause.";
         
@@ -674,7 +787,6 @@ export const executeSql = async (query: string): Promise<string> => {
 
     // SELECT
     if (upperQuery.startsWith('SELECT')) {
-        // Syntax: SELECT * FROM lore WHERE content LIKE '%query%'
         const likeMatch = query.match(/LIKE\s+['"]%?(.*?)%?['"]/i);
         const term = likeMatch ? likeMatch[1] : '';
         

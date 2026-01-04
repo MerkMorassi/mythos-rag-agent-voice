@@ -1,8 +1,8 @@
 
-import { KnowledgeDoc, LorePack, LorePackHeader } from '../types';
+import { KnowledgeDoc, LorePack, LorePackHeader, GraphNode, GraphEdge } from '../types';
 import { NumMarkX_GenerateHeader, NumMarkX_GenerateID, NumMarkX_GenerateSigil } from '../patterns/NumMarkX';
-import { GoogleGenAI } from "@google/genai";
-import { addDocument } from "./db";
+import { GoogleGenAI, Type } from "@google/genai";
+import { addDocument, saveGraphNode, saveGraphEdge } from "./db";
 
 export interface IngestionResult {
     success: boolean;
@@ -83,8 +83,7 @@ export class IngestionService {
     }
 
     /**
-     * AUTO-INGESTION FOR CHAT FILES
-     * Chunks and Embeds text without NumMark-X Sigils.
+     * AUTO-INGESTION FOR CHAT FILES + GRAPH EXTRACTION (GraphMAGRAG Lite)
      */
     static async ingestText(
         text: string, 
@@ -96,14 +95,14 @@ export class IngestionService {
         if (chunks.length === 0) return 0;
 
         const ai = new GoogleGenAI({ apiKey });
-        const BATCH_SIZE = 10; // Reduced batch size
+        const BATCH_SIZE = 10; 
         let savedCount = 0;
 
         for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
             const batch = chunks.slice(i, i + BATCH_SIZE);
             
+            // 1. Generate Embeddings & Save Docs
             try {
-                // Generate Embeddings
                 const batchResult = await ai.models.embedContent({
                     model: 'text-embedding-004',
                     contents: batch.map(c => ({ parts: [{ text: c }] })),
@@ -113,9 +112,10 @@ export class IngestionService {
                 const embeddings = batchResult.embeddings;
 
                 // Save Documents
-                const savePromises = batch.map((chunk, k) => {
+                const savePromises = batch.map(async (chunk, k) => {
+                    const docId = crypto.randomUUID();
                     const doc: KnowledgeDoc = {
-                        id: crypto.randomUUID(),
+                        id: docId,
                         agentId: agentId,
                         title: `${filename} (Part ${i + k + 1})`,
                         content: chunk,
@@ -123,7 +123,13 @@ export class IngestionService {
                         timestamp: Date.now(),
                         tags: ['AUTO_INGEST', 'CHAT_UPLOAD']
                     };
-                    return addDocument(doc);
+                    await addDocument(doc);
+                    
+                    // --- GRAPH EXTRACTION (For every 2nd chunk to save tokens/time) ---
+                    // "Lite" Mode: We don't extract every single chunk to keep it fast.
+                    if ((i + k) % 2 === 0) {
+                       this.extractAndSaveGraph(chunk, docId, agentId, ai).catch(e => console.warn("Graph extract failed", e));
+                    }
                 });
 
                 await Promise.all(savePromises);
@@ -148,6 +154,88 @@ export class IngestionService {
             }
         }
         return savedCount;
+    }
+
+    /**
+     * EXTRACT ENTITIES AND RELATIONSHIPS
+     * Uses Gemini to parse text into Graph Nodes and Edges
+     */
+    static async extractAndSaveGraph(text: string, sourceDocId: string, agentId: string, ai: GoogleGenAI) {
+        const prompt = `
+        EXTRACT KNOWLEDGE GRAPH DATA.
+        Analyze the text below. Identify key ENTITIES (Person, Location, Organization, Event, Concept) and RELATIONSHIPS.
+        
+        Output strictly JSON:
+        {
+          "entities": [
+            { "name": "Exact Name", "label": "TYPE", "description": "Brief summary" }
+          ],
+          "relationships": [
+            { "source": "Entity Name 1", "target": "Entity Name 2", "relation": "ACTION_OR_LINK", "description": "Context" }
+          ]
+        }
+        
+        TEXT:
+        ${text.substring(0, 2000)}
+        `;
+
+        try {
+            const result = await ai.models.generateContent({
+                model: 'gemini-3-flash-preview',
+                contents: [{ parts: [{ text: prompt }] }],
+                config: {
+                    responseMimeType: "application/json"
+                }
+            });
+
+            const raw = result.text;
+            if(!raw) return;
+            const data = JSON.parse(raw);
+
+            // Save Nodes
+            if (data.entities) {
+                for (const e of data.entities) {
+                    // ID Normalization: UPPERCASE_UNDERSCORE
+                    const id = e.name.trim().toUpperCase().replace(/[^A-Z0-9]/g, '_');
+                    
+                    // Check if we need embedding for node (Lite mode: skip node embeddings for speed, rely on text lookup)
+                    // If we want node embeddings, we'd batch call embedContent here.
+                    
+                    const node: GraphNode = {
+                        id: id,
+                        label: e.label?.toUpperCase() || 'CONCEPT',
+                        name: e.name,
+                        description: e.description || '',
+                        sourceDocIds: [sourceDocId],
+                        agentId: agentId,
+                        timestamp: Date.now()
+                    };
+                    await saveGraphNode(node);
+                }
+            }
+
+            // Save Edges
+            if (data.relationships) {
+                for (const r of data.relationships) {
+                    const sourceId = r.source.trim().toUpperCase().replace(/[^A-Z0-9]/g, '_');
+                    const targetId = r.target.trim().toUpperCase().replace(/[^A-Z0-9]/g, '_');
+                    
+                    const edge: GraphEdge = {
+                        id: `${sourceId}-${r.relation}-${targetId}`,
+                        source: sourceId,
+                        target: targetId,
+                        relation: r.relation?.toUpperCase().replace(/\s+/g, '_') || 'RELATED_TO',
+                        description: r.description,
+                        agentId: agentId,
+                        timestamp: Date.now()
+                    };
+                    await saveGraphEdge(edge);
+                }
+            }
+
+        } catch (e) {
+            // console.warn("Graph Extraction Failed (Non-fatal)", e);
+        }
     }
 
     /**
