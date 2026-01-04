@@ -2,8 +2,13 @@
 import React, { useState } from 'react';
 import { McpClient } from '../services/mcpClient';
 
-export const McpManager: React.FC = () => {
-    const [isOpen, setIsOpen] = useState(false);
+interface McpManagerProps {
+    isOpen: boolean;
+    onOpen: () => void;
+    onClose: () => void;
+}
+
+export const McpManager: React.FC<McpManagerProps> = ({ isOpen, onOpen, onClose }) => {
     const [serverName, setServerName] = useState('filesystem');
     const [toolName, setToolName] = useState('read_file');
     const [argsJson, setArgsJson] = useState('{\n  "path": "README.md"\n}');
@@ -32,7 +37,7 @@ export const McpManager: React.FC = () => {
     if (!isOpen) {
         return (
             <button 
-                onClick={() => setIsOpen(true)}
+                onClick={onOpen}
                 className="btn btn-secondary btn-icon"
                 title="MCP Tool Bridge"
                 style={{ borderColor: '#38bdf8', color: '#38bdf8' }}
@@ -54,7 +59,9 @@ export const McpManager: React.FC = () => {
                     <div className="flex-group">
                         <span className="modal-section-title" style={{ color: '#38bdf8' }}>MODEL CONTEXT PROTOCOL (MCP)</span>
                     </div>
-                    <button onClick={() => setIsOpen(false)} className="close-btn">[ESC]</button>
+                    <button onClick={onClose} className="close-btn">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    </button>
                 </div>
 
                 <div className="modal-body-area">
@@ -97,10 +104,9 @@ export const McpManager: React.FC = () => {
                     </div>
 
                     <button 
-                        className="btn btn-primary" 
+                        className="btn btn-cyan" 
                         onClick={handleExecute} 
                         disabled={isLoading}
-                        style={{ borderColor: '#38bdf8', color: '#38bdf8' }}
                     >
                         {isLoading ? 'EXECUTING ON SERVER...' : 'RUN MCP TOOL'}
                     </button>

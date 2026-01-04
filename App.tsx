@@ -1,1940 +1,683 @@
 
 import React, { useState, useEffect, useRef } from 'react';
+import { GoogleGenAI, LiveServerMessage, Modality } from "@google/genai";
+import { AGENTS } from './agents';
 import { 
-  GoogleGenAI, 
-  LiveServerMessage, 
-  Modality, 
-  FunctionDeclaration, 
-  Type
-} from '@google/genai';
-import { 
-  searchDocuments, 
-  findDocumentBySigil, 
-  saveActiveChat, 
-  loadActiveChat,
-  saveChatSession,
-  getGeneralInstructions,
-  saveGeneralInstructions,
+  LogMessage, 
+  ConnectionState, 
+  DEFAULT_MODEL_CONFIG, 
+  ModelConfig 
+} from './types';
+import Visualizer from './components/Visualizer';
+import ChatHistoryManager from './components/ChatHistoryManager';
+import { KnowledgeManager } from './components/KnowledgeManager';
+import SettingsManager from './components/SettingsManager';
+import { MultiAgentConsole } from './components/MultiAgentConsole';
+import { VoiceCommandList } from './components/VoiceCommandList';
+import { RoomFocusConfig } from './components/RoomFocusConfig';
+import { McpManager } from './components/McpManager';
+import { Terminal } from './components/Terminal';
+import {
+  saveActiveChat,
   getAgentConfig,
   saveAgentConfig,
-  addDocument,
-  getDocumentCountByAgentId,
-  saveSavedPrompt,
-  updateDocumentContent, 
-  deleteDocument
+  getGeneralInstructions,
+  saveGeneralInstructions
 } from './services/db';
-import { RetrievalGate } from './services/retrievalGate'; 
-import { ModelGate } from './services/modelGate'; 
-import { ExternalRouter } from './services/externalRouter';
-import { NumMarkX_GenerateSigil } from './patterns/NumMarkX'; 
-import { createPcmBlob, base64ToUint8Array, decodeAudioData } from './services/audioUtils';
-import { listCloudFiles } from './services/googleFiles';
-import { ChatterboxService } from './services/chatterbox';
-import Visualizer from './components/Visualizer';
-import { KnowledgeManager } from './components/KnowledgeManager';
-import ChatHistoryManager from './components/ChatHistoryManager';
-import SettingsManager from './components/SettingsManager';
-import { MultiAgentConsole } from './components/MultiAgentConsole'; 
-import { VoiceCommandList } from './components/VoiceCommandList';
-import { RoomFocusConfig } from './components/RoomFocusConfig'; 
-import { McpManager } from './components/McpManager'; 
-import { ConnectionState, LogMessage, ModelConfig, DEFAULT_MODEL_CONFIG, CloudFile, Agent } from './types';
-import { AGENTS } from './agents';
+import {
+  base64ToUint8Array,
+  createPcmBlob,
+  decodeAudioData
+} from './services/audioUtils';
 
-// LIVE MODEL
-const LIVE_MODEL_NAME = 'gemini-2.5-flash-native-audio-preview-09-2025';
+const SAMPLE_RATE = 24000;
+const INPUT_SAMPLE_RATE = 16000;
 
-// GATING MODELS
-const GATING_MODELS = [
-  { id: 'gemini-3-pro-preview', name: 'Gemini 3.0 Pro' },
-  { id: 'gemini-3-flash-preview', name: 'Gemini 3.0 Flash' }
-];
-
-// SILENCE DETECTION CONFIG
-const SILENCE_TIMEOUT_MS = 60000; 
-const SPEECH_THRESHOLD = 0.01;    
-
-// Comprehensive list of known Gemini voices
-const PREBUILT_VOICES = [
-  "Puck", "Kore", "Fenrir", "Zephyr", 
-  "Aoede", "Callirrhoe", "Leda"
-].sort();
-
-const LANGUAGE_PROTOCOL = `
-[LORE COMPLIANCE: LANGUAGE LOCK]
-1.  **STRICT ENGLISH OUTPUT:** You must ONLY speak in English.
-2.  **VOICE-FIRST FORMATTING:** You are speaking via a voice synthesizer. 
-    *   DO NOT use markdown formatting (bold, italics, lists) in your speech output. 
-    *   Keep responses conversational, fluid, and concise. 
-    *   Avoid long monologues unless narrating a story.
-3.  **RELIC TONGUES:** Exceptions for "Black Speech" or "Ancient Greek" allowed for ritualistic effect.
-`;
-
-const RAG_INSTRUCTION = `
-[GROUNDED RAG PROTOCOL]
-You have access to a local Knowledge Base via the tool 'searchKnowledgeBase'.
-1.  **ALWAYS SEARCH FIRST:** If the user asks about specific entities, lore, project details, or past conversations, you MUST use 'searchKnowledgeBase' BEFORE generating a response.
-2.  **GROUNDED TRUTH:** Prioritize information retrieved from the database over your general training.
-3.  **MEMORY:** Use 'saveToKnowledgeBase' to persist new facts, user preferences, or important details immediately.
-
-[TOOL USE PROTOCOL]
-*   **googleSearch**: Use for real-time news or broad web queries.
-*   **codeExecution**: Use this FREELY to solve logic puzzles, perform math, process text data, or demonstrate coding concepts.
-*   **generateMediaContent**: Use when the user asks for VISUAL media (images, videos, painting, drawing, animation).
-*   **updateSystemInstructions**: Use to permanently adjust your persona.
-*   **routeRequest**: Use for specific External LLM tasks if needed.
-*   **consultCouncil**: Use when you need to ask another agent for their perspective. The system will play their voice response.
-*   **analyzeVisualField**: Use when the user asks to "Look closely", "Analyze this scene", or "What do you see in detail?" to trigger a High-Res Visual Analysis.
-`;
-
-const TRANSLATION_PROTOCOL = `
-[UNIVERSAL TRANSLATOR PROTOCOL]
-1.  **ACTIVATION:** If a user asks to translate text (especially Ancient Greek) or an uploaded document, you MUST use the 'translateAncientGreek' tool.
-2.  **ACKNOWLEDGEMENT:** Before calling the tool, verbally acknowledge: "Accessing Universal Translator module. Standby."
-3.  **RESULT HANDLING:** When the tool returns the translation:
-    *   Do NOT read the entire text aloud immediately if it is long.
-    *   Store the meaning in your immediate context.
-    *   Say: "Translation complete. I have deciphered the text. Would you like a full reading, a summary, or an analysis?"
-`;
-
-// --- TOOL DEFINITIONS ---
-
-const searchTool: FunctionDeclaration = {
-  name: 'searchKnowledgeBase',
-  description: 'Search the local vector database for agent-specific lore.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      query: { type: Type.STRING, description: 'The search keywords.' },
-    },
-    required: ['query'],
-  },
-};
-
-const transcriptTool: FunctionDeclaration = {
-  name: 'downloadTranscript',
-  description: 'Triggers a local download of the chat transcript.',
-};
-
-const terminateTool: FunctionDeclaration = {
-  name: 'terminateConnection',
-  description: 'Terminates the live link.',
-};
-
-const updateInstructionsTool: FunctionDeclaration = {
-  name: 'updateSystemInstructions',
-  description: 'Updates your own system instructions to persist user preferences, behaviors, or facts for future sessions.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      addition: { type: Type.STRING, description: 'The instruction to append (e.g., "User prefers concise answers").' },
-    },
-    required: ['addition'],
-  },
-};
-
-const savePromptTool: FunctionDeclaration = {
-  name: 'savePrompt',
-  description: 'Saves the current Agent System Instructions (or a specific text provided) as a named reusable prompt.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      name: { type: Type.STRING, description: 'A short name for this prompt (e.g., "Python Coder", "Storyteller").' },
-      content: { type: Type.STRING, description: 'Optional. The specific prompt text to save. If omitted, saves the CURRENT active instructions.' }
-    },
-    required: ['name'],
-  },
-};
-
-const optimizePromptTool: FunctionDeclaration = {
-  name: 'optimizePrompt',
-  description: 'Acts as a Prompt Engineer to rewrite/optimize instructions for better AI performance. Updates the current session with the optimized version.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      text: { type: Type.STRING, description: 'The raw instruction or text to optimize. If omitted, optimizes the current agent instructions.' }
-    },
-  },
-};
-
-const routeRequestTool: FunctionDeclaration = {
-  name: 'routeRequest',
-  description: 'Routes a request to a specialized external AI model. Use for Uncensored/Specialized text generation via External LLMs.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      target: { 
-          type: Type.STRING, 
-          description: 'The target model service. Options: "EXTERNAL_LLM" (Uncensored/Specialized text), "FLUX_IMAGE" (Generate Image).' 
-      },
-      prompt: { type: Type.STRING, description: 'The prompt to send to the external model.' }
-    },
-    required: ['target', 'prompt'],
-  },
-};
-
-const updateConfigTool: FunctionDeclaration = {
-  name: 'updateModelConfiguration',
-  description: 'Updates the model generation parameters based on user command. Use this to adjust Temperature (Creativity), TopP (Nucleus), or TopK (Token Pool).',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      temperature: { type: Type.NUMBER, description: 'Controls randomness. 0.0 is precise, 2.0 is highly creative.' },
-      topP: { type: Type.NUMBER, description: 'Nucleus sampling probability (0.0 to 1.0).' },
-      topK: { type: Type.NUMBER, description: 'Top-K token limit (1 to 40).' },
-    },
-  },
-};
-
-const saveMemoryTool: FunctionDeclaration = {
-  name: 'saveToKnowledgeBase',
-  description: 'Saves a text snippet (fact, memory, note) to the local vector database for future retrieval.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      text: { type: Type.STRING, description: 'The content to save.' },
-      title: { type: Type.STRING, description: 'A short title for this memory.' },
-    },
-    required: ['text'],
-  },
-};
-
-const appendNoteTool: FunctionDeclaration = {
-    name: 'appendNoteToMemory',
-    description: 'Finds a memory document by topic and appends new information to it. Requires MODIFY_LORE permission.',
-    parameters: {
-        type: Type.OBJECT,
-        properties: {
-            topic: { type: Type.STRING, description: 'The topic/keyword to search for.' },
-            note: { type: Type.STRING, description: 'The new information to append.' }
-        },
-        required: ['topic', 'note']
-    }
-};
-
-const deleteMemoryTool: FunctionDeclaration = {
-    name: 'deleteMemoryByKeyword',
-    description: 'Finds and deletes a memory document by topic. Requires MODIFY_LORE permission. Use with caution.',
-    parameters: {
-        type: Type.OBJECT,
-        properties: {
-            topic: { type: Type.STRING, description: 'The topic/keyword of the memory to delete.' }
-        },
-        required: ['topic']
-    }
-};
-
-const consultCouncilTool: FunctionDeclaration = {
-    name: 'consultCouncil',
-    description: 'Consults another Agent in the SOMA network. Initiates a Multi-Voice Podcast Mode where the other agent speaks.',
-    parameters: {
-        type: Type.OBJECT,
-        properties: {
-            agentName: { type: Type.STRING, description: 'The name of the agent to consult (e.g., "Archivax", "Thalia", "Clio").' },
-            question: { type: Type.STRING, description: 'The question or topic to ask them.' }
-        },
-        required: ['agentName', 'question']
-    }
-};
-
-const visualAnalysisTool: FunctionDeclaration = {
-    name: 'analyzeVisualField',
-    description: 'Captures a high-resolution frame from the camera and performs a Deep Analysis using the Gemini Pro Vision model. Use this when the user asks for detailed visual inspection.',
-};
-
-const translateTool: FunctionDeclaration = {
-  name: 'translateAncientGreek',
-  description: 'Translates text between English and Ancient Greek (Musiki Dialog) using the OpenL.io API.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      text: { type: Type.STRING, description: 'The text to translate.' },
-      target: { type: Type.STRING, description: 'Target language code ("en" for English, "grc" for Ancient Greek).' },
-    },
-    required: ['text', 'target'],
-  },
-};
-
-const mediaTool: FunctionDeclaration = {
-  name: 'generateMediaContent',
-  description: 'Generates visual media (Images or Videos) based on a prompt. Use this when the user asks to "draw", "paint", "create a video", "animate", or "visualize" something.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      mediaType: { type: Type.STRING, description: 'Type of media: "image" or "video".' },
-      prompt: { type: Type.STRING, description: 'Detailed prompt for the generation.' },
-    },
-    required: ['mediaType', 'prompt'],
-  },
-};
-
-interface Attachment {
-  file: File;
-  type: 'image' | 'text';
-  preview: string; // Base64 for image, Snippet for text
-  content: string; // Base64 data or Raw Text
-  mimeType: string;
-}
-
-interface Toast {
-  id: string;
-  message: string;
-  type: 'success' | 'error' | 'info';
-}
-
-type ViewMode = 'UPLINK' | 'CONFERENCE';
-type ToolMode = 'STANDARD' | 'DEEP' | 'IMAGE' | 'EXTERNAL';
+type ViewMode = 'ORCHESTRATOR' | 'COUNCIL';
 
 const App: React.FC = () => {
-  const [viewMode, setViewMode] = useState<ViewMode>('UPLINK');
+  // --- STATE ---
+  const [apiKey, setApiKey] = useState(process.env.API_KEY || localStorage.getItem('gemini_api_key') || '');
   const [connectionState, setConnectionState] = useState<ConnectionState>(ConnectionState.DISCONNECTED);
+  const [currentAgentId, setCurrentAgentId] = useState(AGENTS[0].id);
   const [logs, setLogs] = useState<LogMessage[]>([]);
-  const [systemStatus, setSystemStatus] = useState<string>("System Initialized.");
-  const [statusColor, setStatusColor] = useState<string>('#4ade80');
   
-  const [selectedAgentId, setSelectedAgentId] = useState<string>(AGENTS[0].id);
+  // Input State
   const [inputText, setInputText] = useState('');
-  const [attachment, setAttachment] = useState<Attachment | null>(null);
   
-  // Gating / Orchestration State
-  const [useDeepAnalysis, setUseDeepAnalysis] = useState(false);
-  const [gatingModel, setGatingModel] = useState<string>(GATING_MODELS[0].id);
-  const [toolMode, setToolMode] = useState<ToolMode>('STANDARD');
-  
-  // Cloud File State
-  const [availableCloudFiles, setAvailableCloudFiles] = useState<CloudFile[]>([]);
-  const [activeCloudFileUri, setActiveCloudFileUri] = useState<string>('');
-
-  // Settings State
+  // Config
   const [modelConfig, setModelConfig] = useState<ModelConfig>(DEFAULT_MODEL_CONFIG);
-  const [generalInstruction, setGeneralInstruction] = useState<string>('');
-  const [agentInstruction, setAgentInstruction] = useState<string>('');
-  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [generalInstructions, setGeneralInstructions] = useState('');
+  const [agentInstructions, setAgentInstructions] = useState('');
+  const [selectedVoice, setSelectedVoice] = useState(AGENTS[0].voice);
+  const [accessLevel, setAccessLevel] = useState(AGENTS[0].accessLevel);
+
+  // Layout & View Modes
+  const [layoutMode, setLayoutMode] = useState<'AUDIO' | 'CHAT' | 'HYBRID' | 'VIDEO'>('HYBRID');
+  const [currentView, setCurrentView] = useState<ViewMode>('ORCHESTRATOR');
   
-  // Voice State
-  const [selectedVoice, setSelectedVoice] = useState<string>(AGENTS[0].voice);
-  const [isCustomVoice, setIsCustomVoice] = useState(false);
-  const [customVoiceName, setCustomVoiceName] = useState('');
-  const [agentVoiceRef, setAgentVoiceRef] = useState<string | undefined>(undefined); // Cloned Voice
-
-  const [isCameraActive, setIsCameraActive] = useState(false);
+  // Tools and Panels
+  const [isTerminalOpen, setIsTerminalOpen] = useState(false);
   
-  // Audio Input State
-  const [isMicMuted, setIsMicMuted] = useState(false);
-  const isMicMutedRef = useRef(false); 
-  const isTypingRef = useRef(false);   
+  // Sidebar State Management (For minimizing footer)
+  const [activeSidePanel, setActiveSidePanel] = useState<string | null>(null);
 
-  const [logsLoaded, setLogsLoaded] = useState(false);
-  const [toast, setToast] = useState<Toast | null>(null);
-  const [isSpeaking, setIsSpeaking] = useState<string | null>(null); // ID of message currently playing TTS
+  // Media State
+  const [isMicOn, setIsMicOn] = useState(true);
+  const [isCameraOn, setIsCameraOn] = useState(false);
+  // Refs for State Access inside Closures
+  const isMicOnRef = useRef(true);
+  const isCameraOnRef = useRef(false);
 
-  // Refs
+  // Audio Refs
   const audioContextRef = useRef<AudioContext | null>(null);
-  const inputAudioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
-  const sessionRef = useRef<any | null>(null);
+  const inputContextRef = useRef<AudioContext | null>(null);
+  const nextStartTimeRef = useRef<number>(0);
+  const sessionPromiseRef = useRef<Promise<any> | null>(null);
+  const sourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
+
+  // Video Refs
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const frameIntervalRef = useRef<number | null>(null);
-  const nextStartTimeRef = useRef<number>(0);
-  const scheduledSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
-  const logsEndRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const silenceTimerRef = useRef<number | null>(null);
 
-  // Refs for streaming transcription
-  const activeUserMessageRef = useRef<string>('');
-  const activeModelMessageRef = useRef<string>('');
-  const activeTurnIdRef = useRef<string | null>(null);
-
-  const currentAgent = AGENTS.find(a => a.id === selectedAgentId) || AGENTS[0];
+  // Scroll ref
+  const logEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [logs]);
+      // Auto-load config
+      const init = async () => {
+          const gen = await getGeneralInstructions();
+          setGeneralInstructions(gen);
+          loadAgentConfig(currentAgentId);
+      };
+      init();
 
-  // Sync voice with selected agent
-  useEffect(() => {
-    const agent = AGENTS.find(a => a.id === selectedAgentId);
-    if (agent) {
-      setSelectedVoice(agent.voice);
-      setIsCustomVoice(false);
-      setCustomVoiceName('');
-    }
-  }, [selectedAgentId]);
-
-  // Load General Instructions on Mount
-  useEffect(() => {
-    const loadGeneral = async () => {
-        const gen = await getGeneralInstructions();
-        setGeneralInstruction(gen);
-    };
-    loadGeneral();
-    updateCloudFileList();
-    
-    const hfToken = localStorage.getItem('hf_token') || process.env.HF_TOKEN;
-    if (!hfToken) {
-        showToast("Warning: HF_TOKEN missing in Settings. External tools disabled.", 'error');
-    }
-  }, []);
-
-  // Update Status Bar dynamically when Disconnected
-  useEffect(() => {
-      if (connectionState === ConnectionState.DISCONNECTED && viewMode === 'UPLINK') {
-          const voice = isCustomVoice ? (customVoiceName || 'CUSTOM') : selectedVoice;
-          const mic = isMicMuted ? 'OFF' : 'ON';
-          const cam = isCameraActive ? 'ON' : 'OFF';
-          setSystemStatus(`READY :: ${currentAgent.handle.toUpperCase()} | VOICE: ${voice.toUpperCase()} | MIC: ${mic} | CAM: ${cam}`);
-          setStatusColor('#4ade80');
-      } else if (viewMode === 'CONFERENCE') {
-          setSystemStatus("MULTI-AGENT CONFERENCE MODE ACTIVE");
-          setStatusColor('#4ade80');
-      }
-  }, [connectionState, selectedAgentId, selectedVoice, isCustomVoice, customVoiceName, isMicMuted, isCameraActive, viewMode]);
-
-  useEffect(() => {
-    let isMounted = true;
-    const loadData = async () => {
-      setLogsLoaded(false);
-      
-      try {
-        const savedLogs = await loadActiveChat(selectedAgentId);
-        const savedConfig = await getAgentConfig(selectedAgentId);
-        const docCount = await getDocumentCountByAgentId(selectedAgentId);
-
-        if (isMounted) {
-          setLogs(savedLogs);
-          setAgentInstruction(savedConfig.instruction);
-          setModelConfig(savedConfig.modelConfig);
-          setAgentVoiceRef(savedConfig.voiceReference); // Load cloned voice ref
-          setHasUnsavedChanges(false); // Reset dirty flag on load
-          setLogsLoaded(true); 
-          
-          if (docCount > 0) {
-              showToast(`Memory Active: ${docCount} nodes online`, 'success');
-          }
-        }
-      } catch (e) {
-        console.error("Error loading agent data", e);
-        if(isMounted) {
-            setLogs([]); 
-            setLogsLoaded(true);
-        }
-      }
-    };
-    loadData();
-    return () => { isMounted = false; };
-  }, [selectedAgentId]);
-
-  useEffect(() => {
-    if (logsLoaded) {
-      saveActiveChat(selectedAgentId, logs).catch(console.error);
-    }
-  }, [logs, selectedAgentId, logsLoaded]);
-
-  useEffect(() => {
-      if (toolMode === 'STANDARD' && inputText.length > 10) {
-          if (ModelGate.shouldActivateDeepAnalysis(inputText)) {
-              if (!useDeepAnalysis) {
-                  setUseDeepAnalysis(true);
-                  setGatingModel('gemini-3-pro-preview');
+      const handleKeyDown = (e: KeyboardEvent) => {
+          if (e.key === '`' || e.key === '~') {
+              if (document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') {
+                  e.preventDefault();
+                  setIsTerminalOpen(prev => !prev);
               }
           }
-      }
-  }, [inputText, toolMode]);
+      };
+      window.addEventListener('keydown', handleKeyDown);
+      return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   useEffect(() => {
-      if (inputText.length > 0) {
-          stopSilenceTimer();
-      }
-  }, [inputText]);
+    loadAgentConfig(currentAgentId);
+  }, [currentAgentId]);
 
-  // --- SILENCE DETECTION LOGIC ---
-  const stopSilenceTimer = () => {
-      if (silenceTimerRef.current) {
-          clearTimeout(silenceTimerRef.current);
-          silenceTimerRef.current = null;
-      }
-  };
-
-  const startSilenceTimer = () => {
-      stopSilenceTimer(); 
-      if (connectionState !== ConnectionState.CONNECTED) return;
-      if (inputText.length > 0) return;
-
-      silenceTimerRef.current = window.setTimeout(() => {
-          triggerSilenceNudge();
-      }, SILENCE_TIMEOUT_MS);
-  };
-
-  const triggerSilenceNudge = async () => {
-      if (connectionState !== ConnectionState.CONNECTED) return;
-      if (inputText.length > 0) return;
-
-      console.log("Silence detected. Nudging agent...");
-      const silenceMsg = "[SYSTEM NOTICE: The user has been silent for a while. Briefly and politely ask if they are encountering a technical issue or if they are still composing their thoughts. Do not terminate the session.]";
-      
-      try {
-          await safeSendClientContent([{ text: silenceMsg }]);
-      } catch (e) {
-          console.error("Failed to send silence nudge", e);
-      }
-  };
-
-  const updateCloudFileList = async () => {
-      try {
-          const files = await listCloudFiles();
-          setAvailableCloudFiles(files);
-      } catch (e) {
-          console.error("Failed to list cloud files in App", e);
-      }
-  };
-
-  const showToast = (message: string, type: 'success'|'error'|'info' = 'info') => {
-    const id = crypto.randomUUID();
-    setToast({ id, message, type });
-    setTimeout(() => {
-      setToast(prev => prev && prev.id === id ? null : prev);
-    }, 3000);
-  };
-
-  const addLog = (type: LogMessage['type'], text: string, id?: string, attachment?: string, attachmentType?: LogMessage['attachmentType']) => {
-    if (type === 'system') {
-        setSystemStatus(text.replace(/SYSTEM:/i, '').trim());
+  useEffect(() => {
+    if (logEndRef.current) {
+        logEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
+  }, [logs, layoutMode]);
 
-    const logId = id || crypto.randomUUID();
-    setLogs(prev => {
-        const index = prev.findIndex(l => l.id === logId);
-        if (index !== -1) {
-            const updated = [...prev];
-            updated[index] = { ...updated[index], text, attachment, attachmentType, timestamp: Date.now() };
-            return updated;
-        }
-        return [...prev, { id: logId, type, text, attachment, attachmentType, timestamp: Date.now() }];
-    });
-    return logId;
-  };
+  // Sync State Refs
+  useEffect(() => { isMicOnRef.current = isMicOn; }, [isMicOn]);
+  useEffect(() => { isCameraOnRef.current = isCameraOn; }, [isCameraOn]);
 
-  const safeSendClientContent = async (parts: any[]) => {
-      if (!sessionRef.current) return;
-      stopSilenceTimer();
+  // Video Stream Logic
+  useEffect(() => {
+      if (isCameraOn && videoRef.current && canvasRef.current && connectionState === ConnectionState.CONNECTED) {
+          const video = videoRef.current;
+          const canvas = canvasRef.current;
+          const ctx = canvas.getContext('2d');
+          
+          if (frameIntervalRef.current) clearInterval(frameIntervalRef.current);
 
-      const session = sessionRef.current;
-      const content = {
-          clientContent: {
-              turns: [{
-                  role: 'user',
-                  parts: parts
-              }],
-              turnComplete: true
-          }
+          // Stream Frames at 1 FPS for basic presence (optimize as needed)
+          frameIntervalRef.current = window.setInterval(() => {
+              if (ctx && video.readyState === video.HAVE_ENOUGH_DATA) {
+                  canvas.width = video.videoWidth;
+                  canvas.height = video.videoHeight;
+                  ctx.drawImage(video, 0, 0);
+                  
+                  const base64 = canvas.toDataURL('image/jpeg', 0.5).split(',')[1];
+                  
+                  if (sessionPromiseRef.current) {
+                      sessionPromiseRef.current.then(session => {
+                          // Only send if camera is still logically on
+                          if (isCameraOnRef.current) {
+                              session.sendRealtimeInput({ 
+                                  media: { mimeType: 'image/jpeg', data: base64 } 
+                              });
+                          }
+                      });
+                  }
+              }
+          }, 1000); 
+      }
+
+      return () => {
+          if (frameIntervalRef.current) clearInterval(frameIntervalRef.current);
       };
+  }, [isCameraOn, connectionState]);
 
-      try {
-        if (typeof session.send === 'function') {
-            await session.send(content);
-        } else if (typeof (session as any).sendClientContent === 'function') {
-            await (session as any).sendClientContent(content.clientContent);
-        } else {
-            console.warn("Session object does not support 'send' or 'sendClientContent'.");
-            throw new Error("Text injection not supported in this Live Session version.");
-        }
-      } catch(e) {
-          throw e; 
-      }
+  const loadAgentConfig = async (id: string) => {
+      const cfg = await getAgentConfig(id);
+      const agent = AGENTS.find(a => a.id === id);
+      setAgentInstructions(cfg.instruction || agent?.system_instruction || '');
+      setModelConfig(cfg.modelConfig || DEFAULT_MODEL_CONFIG);
+      setSelectedVoice(cfg.voiceName || agent?.voice || 'Puck');
+      setAccessLevel(cfg.accessLevel || agent?.accessLevel || '400');
   };
 
-  const handleLoreUpdate = async () => {
-      updateCloudFileList();
-      const msg = "[SYSTEM ALERT: New knowledge has been ingested into the local database or cloud context. You can now search for this new information using your tools. Inform the user you are aware of the update.]";
-      
+  const handleAgentChange = (id: string) => {
       if (connectionState === ConnectionState.CONNECTED) {
-          setSystemStatus('Knowledge Base Updated');
-          addLog('system', "SYSTEM: Knowledge Base Updated. Alerting Agent...");
-      } 
-      showToast('Knowledge Base Updated', 'success');
-      
-      if (connectionState === ConnectionState.CONNECTED && sessionRef.current) {
-          try {
-              await safeSendClientContent([{ text: msg }]);
-          } catch (e) {
-              console.error("Failed to notify agent of update", e);
-              addLog('system', "SYSTEM WARNING: Could not auto-alert agent (Text injection unsupported). Agent will find data upon next search.");
-          }
+          disconnect();
       }
+      setCurrentAgentId(id);
   };
 
-  const handleSaveSettings = async (newVoiceRef?: string) => {
-    await saveGeneralInstructions(generalInstruction);
-    await saveAgentConfig(selectedAgentId, { 
-        instruction: agentInstruction, 
-        modelConfig,
-        voiceReference: newVoiceRef !== undefined ? newVoiceRef : agentVoiceRef 
-    });
-    
-    if (newVoiceRef) setAgentVoiceRef(newVoiceRef);
-    setHasUnsavedChanges(false);
-
-    if (connectionState === ConnectionState.CONNECTED && sessionRef.current) {
-        setSystemStatus('Injecting Updated Instructions...');
-        const updateMsg = `[SYSTEM INSTRUCTION UPDATE]\n\nGLOBAL INSTRUCTIONS:\n${generalInstruction}\n\nAGENT SPECIFIC INSTRUCTIONS:\n${agentInstruction}\n\n[INSTRUCTION END] Please adhere to these updated instructions immediately.`;
-        
-        try {
-            await safeSendClientContent([{ text: updateMsg }]);
-            showToast('Instructions Updated Live', 'success');
-            setSystemStatus('Live Session Updated.');
-        } catch (e) {
-            console.error(e);
-            showToast('Failed to update live session', 'error');
-        }
-    } else {
-        showToast('Settings Saved', 'success');
-    }
-  };
-  
-  // TTS / DUBBING FUNCTION
-  const playTts = async (text: string, id?: string, voiceRef?: string) => {
-      const ref = voiceRef || agentVoiceRef;
-      if (!ref) {
-          if (!id) console.warn("No voice reference for TTS");
-          else showToast("No Voice Reference found for this agent. Check Settings.", 'error');
-          return;
-      }
-      
-      if (id) setIsSpeaking(id);
-      try {
-          // Remove data URI prefix if present for Chatterbox
-          const audioBase64 = ref.replace(/^data:audio\/\w+;base64,/, '');
-          
-          const audioBuffer = await ChatterboxService.synthesize({
-              text,
-              audioRef: audioBase64
-          });
-          
-          const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
-          const decoded = await ctx.decodeAudioData(audioBuffer);
-          const source = ctx.createBufferSource();
-          source.buffer = decoded;
-          source.connect(ctx.destination);
-          
-          return new Promise<void>((resolve) => {
-              source.onended = () => {
-                  if (id) setIsSpeaking(null);
-                  resolve();
-              };
-              source.start(0);
-          });
-          
-      } catch (e: any) {
-          console.error("TTS Error:", e);
-          if(id) showToast(`TTS Failed: ${e.message}`, 'error');
-          if(id) setIsSpeaking(null);
-      }
-  };
-
-  const stopAudioPlayback = () => {
-    scheduledSourcesRef.current.forEach(s => { try { s.stop(); } catch(e) {} });
-    scheduledSourcesRef.current.clear();
-    nextStartTimeRef.current = 0;
-    activeModelMessageRef.current = '';
-    activeUserMessageRef.current = '';
-    activeTurnIdRef.current = null;
-  };
-
-  const toggleMic = () => {
-      const newState = !isMicMuted;
-      setIsMicMuted(newState);
-      isMicMutedRef.current = newState;
+  const handleSettingsSave = async (voiceRef?: string, newAccessLevel?: string, speed?: number, pitch?: number) => {
+      await saveAgentConfig(currentAgentId, {
+          instruction: agentInstructions,
+          modelConfig,
+          voiceName: selectedVoice,
+          voiceReference: voiceRef,
+          accessLevel: newAccessLevel,
+          voiceSpeed: speed,
+          voicePitch: pitch
+      });
+      await saveGeneralInstructions(generalInstructions);
+      setAccessLevel(newAccessLevel || '400');
   };
 
   const toggleCamera = async () => {
-    if (isCameraActive) {
-      setIsCameraActive(false);
-      if (frameIntervalRef.current) clearInterval(frameIntervalRef.current);
-    } else {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          setIsCameraActive(true);
-        }
-      } catch (err) {
-        showToast("Camera access denied.", 'error');
-      }
-    }
-  };
-
-  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const file = e.target.files[0];
-      const isImage = file.type.startsWith('image/');
-      const isText = file.type === 'application/json' || file.name.endsWith('.md') || file.name.endsWith('.txt');
-
-      if (!isImage && !isText) {
-          showToast("Unsupported file type. Use Image, TXT, MD, or JSON", 'error');
-          return;
-      }
-
-      const reader = new FileReader();
-      
-      reader.onload = (event) => {
-        const result = event.target?.result as string;
-        
-        if (isImage) {
-            const base64 = result.split(',')[1];
-            setAttachment({
-                file,
-                type: 'image',
-                preview: result,
-                content: base64,
-                mimeType: file.type
-            });
-        } else {
-            setAttachment({
-                file,
-                type: 'text',
-                preview: '📄 ' + file.name,
-                content: result,
-                mimeType: 'text/plain'
-            });
-        }
-      };
-      
-      if (isImage) {
-        reader.readAsDataURL(file);
+      if (isCameraOn) {
+          // Turn Off
+          setIsCameraOn(false);
+          if (videoRef.current && videoRef.current.srcObject) {
+              const tracks = (videoRef.current.srcObject as MediaStream).getTracks();
+              tracks.forEach(t => t.stop());
+              videoRef.current.srcObject = null;
+          }
       } else {
-        reader.readAsText(file);
+          // Turn On
+          try {
+              const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+              if (videoRef.current) {
+                  videoRef.current.srcObject = stream;
+              }
+              setIsCameraOn(true);
+          } catch (e) {
+              console.error("Camera access denied", e);
+              alert("Camera access denied or unavailable.");
+          }
       }
-    }
-    if (fileInputRef.current) fileInputRef.current.value = '';
-  };
-
-  const clearAttachment = () => {
-    setAttachment(null);
-  };
-
-  const performDeepAnalysis = async (att: Attachment | null, cloudFileUri: string, userPrompt: string): Promise<string> => {
-    const apiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY;
-    if (!apiKey) throw new Error("Missing API Key");
-
-    const ai = new GoogleGenAI({ apiKey });
-    
-    let parts: any[] = [];
-    let logMsg = "Analyzing ";
-
-    if (cloudFileUri) {
-        const fileObj = availableCloudFiles.find(f => f.uri === cloudFileUri);
-        if (fileObj) {
-            parts.push({
-                fileData: {
-                    fileUri: fileObj.uri,
-                    mimeType: fileObj.mimeType
-                }
-            });
-            logMsg += `Cloud File: ${fileObj.displayName} `;
-        }
-    }
-
-    if (att) {
-        if (att.type === 'image') {
-            parts.push({
-                inlineData: {
-                    mimeType: att.mimeType,
-                    data: att.content
-                }
-            });
-            parts.push({
-                text: userPrompt ? `Analyze this image in the context of: "${userPrompt}". Provide deep insight for the voice agent.` : "Analyze this image in detail for the voice agent."
-            });
-            logMsg += `& Image `;
-        } else {
-            parts.push({
-                text: `Analyze the following file content (${att.file.name}) and provide a detailed summary and insight for the voice agent.\n\nFILE CONTENT:\n${att.content}\n\nUSER CONTEXT: ${userPrompt}`
-            });
-            logMsg += `& Local Doc `;
-        }
-    } else if (cloudFileUri) {
-         parts.push({
-             text: userPrompt ? `Analyze the attached file in the context of: "${userPrompt}".` : "Analyze the attached file."
-         });
-    }
-
-    if (parts.length === 0) return "No content to analyze.";
-    
-    const response = await ai.models.generateContent({
-        model: gatingModel,
-        contents: { parts }
-    });
-    return response.text || "";
-  };
-
-  const handleSendText = async () => {
-    if ((!inputText.trim() && !attachment && !activeCloudFileUri) || connectionState !== ConnectionState.CONNECTED) return;
-    
-    stopSilenceTimer(); 
-
-    const text = inputText.trim();
-    const currentAttachment = attachment;
-    const currentCloudUri = activeCloudFileUri;
-    
-    const isDeepReasoning = toolMode === 'DEEP' || useDeepAnalysis;
-    const isImageGen = toolMode === 'IMAGE';
-    const isExternal = toolMode === 'EXTERNAL';
-
-    const isGated = isDeepReasoning || !!currentCloudUri; 
-    
-    setInputText('');
-    setAttachment(null);
-    setUseDeepAnalysis(false); 
-    setToolMode('STANDARD'); 
-    setActiveCloudFileUri(''); 
-    
-    let logText = text;
-    if (currentAttachment) logText = `[Sent ${currentAttachment.type}] ` + logText;
-    if (currentCloudUri) logText = `[Ref: CloudFile] ` + logText;
-    
-    if (isDeepReasoning) logText = `[DEEP] ` + logText;
-    if (isImageGen) logText = `[IMAGE] ` + logText;
-    if (isExternal) logText = `[EXTERNAL] ` + logText;
-
-    addLog('user', logText);
-    
-    try {
-        if(sessionRef.current) {
-            if (isGated) {
-                const activeGatingModel = 'gemini-3-pro-preview';
-                setSystemStatus(`Orchestrator: Offloading to ${activeGatingModel}...`);
-                
-                try {
-                    const analysisResult = await performDeepAnalysis(currentAttachment, currentCloudUri, text);
-                    setSystemStatus('Orchestrator: Analysis Complete. Injecting context...');
-                    
-                    let contextMessage = `[SYSTEM: Orchestrator Report (${activeGatingModel})]\n`;
-                    if (currentCloudUri) contextMessage += `REF: Cloud File Analyzed.\n`;
-                    if (currentAttachment) contextMessage += `REF: User Upload (${currentAttachment.file.name}).\n`;
-                    contextMessage += `\nANALYSIS RESULT:\n${analysisResult}\n\nUSER COMMENT: ${text}`;
-                    
-                    await safeSendClientContent([{ text: contextMessage }]);
-                } catch (analysisErr) {
-                    console.error("Deep analysis failed", analysisErr);
-                    setSystemStatus('Orchestrator: Analysis Failed. Falling back to direct stream.');
-                }
-            } 
-            
-            if (!isGated) {
-                if (currentAttachment && currentAttachment.type === 'image') {
-                    await sessionRef.current.sendRealtimeInput({
-                        media: {
-                            mimeType: currentAttachment.mimeType,
-                            data: currentAttachment.content
-                        }
-                    });
-                    await new Promise(r => setTimeout(r, 150));
-                }
-
-                let textParts = [];
-                
-                if (isImageGen) {
-                    textParts.push(`[SYSTEM: User explicitly requests IMAGE GENERATION via tool selector. You MUST use 'generateMediaContent' with mediaType='image' for this request.] `);
-                }
-                if (isExternal) {
-                    textParts.push(`[SYSTEM: User explicitly requests EXTERNAL LLM routing via tool selector. You MUST use 'routeRequest' with target='EXTERNAL_LLM' for this request.] `);
-                }
-
-                if (currentAttachment && currentAttachment.type === 'text') {
-                    textParts.push(`[System: User uploaded file '${currentAttachment.file.name}']\n\nCONTENT:\n${currentAttachment.content}\n\n`);
-                }
-                if (text) textParts.push(text);
-
-                if (textParts.length === 0 && currentAttachment && currentAttachment.type === 'image') {
-                    textParts.push("I have uploaded an image.");
-                }
-
-                if (textParts.length > 0) {
-                     await safeSendClientContent([{ text: textParts.join('') }]);
-                }
-            }
-        }
-    } catch(e) {
-        console.error("Error sending message:", e);
-        setSystemStatus('Error sending text/image message. Check console.');
-        addLog('system', `SYSTEM ERROR: Failed to send message (${e instanceof Error ? e.message : 'Unknown Error'})`);
-    }
   };
 
   const connect = async () => {
-    const apiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY;
-    if (!apiKey) {
-        showToast("Missing API Key. Check Settings.", 'error');
-        return;
-    }
+      const keyToUse = localStorage.getItem('gemini_api_key') || process.env.API_KEY;
+      if (!keyToUse) {
+          alert("API Key required. Check Settings.");
+          return;
+      }
+      setApiKey(keyToUse);
 
-    setConnectionState(ConnectionState.CONNECTING);
-    setSystemStatus(`Initializing Link to ${currentAgent.handle}...`);
-    setStatusColor('#4ade80');
-    
-    const recentHistory = logs.slice(-10).map(l => `${l.type === 'user' ? 'User' : 'Agent'}: ${l.text}`).join('\n');
-    const historyContext = recentHistory ? `\n\nRECENT CONVERSATION HISTORY (RESUME CONTEXT):\n${recentHistory}` : '';
-    
-    let parts: string[] = [];
-    if (selectedAgentId === 'GEMINI_CORE') {
-        parts = [
-            currentAgent.system_instruction,
-            "=== GENERAL SYSTEM INSTRUCTIONS ===",
-            generalInstruction,
-            historyContext
-        ];
-    } else {
-        parts = [
-            currentAgent.system_instruction, 
-            LANGUAGE_PROTOCOL,
-            RAG_INSTRUCTION,
-            TRANSLATION_PROTOCOL,
-            "=== GENERAL USER INSTRUCTIONS ===",
-            generalInstruction,
-            `=== ${currentAgent.handle.toUpperCase()} SPECIFIC INSTRUCTIONS ===`,
-            agentInstruction,
-            historyContext
-        ];
-    }
-    
-    const fullInstruction = parts.filter(p => p.trim()).join('\n\n');
-    const voiceName = isCustomVoice && customVoiceName.trim() ? customVoiceName.trim() : selectedVoice;
-
-    try {
-      const outputCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
-      const inputCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
-      audioContextRef.current = outputCtx;
-      inputAudioContextRef.current = inputCtx;
-      
-      const analyser = outputCtx.createAnalyser();
-      analyserRef.current = analyser;
-
-      const ai = new GoogleGenAI({ apiKey });
-      const sessionPromise = ai.live.connect({
-        model: LIVE_MODEL_NAME,
-        config: {
-          systemInstruction: fullInstruction,
-          responseModalities: [Modality.AUDIO],
-          temperature: modelConfig.temperature,
-          topP: modelConfig.topP,
-          topK: modelConfig.topK,
-          outputAudioTranscription: {}, 
-          inputAudioTranscription: {},  
-          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } },
-          tools: [
-              { googleSearch: {} }, 
-              { codeExecution: {} },
-              { functionDeclarations: [searchTool, transcriptTool, terminateTool, updateInstructionsTool, updateConfigTool, saveMemoryTool, translateTool, savePromptTool, optimizePromptTool, routeRequestTool, mediaTool, appendNoteTool, deleteMemoryTool, consultCouncilTool, visualAnalysisTool] }
-          ],
-        },
-        callbacks: {
-          onopen: async () => {
-            setConnectionState(ConnectionState.CONNECTED);
-            setSystemStatus(`Link Established: ${currentAgent.handle} is online (Voice: ${voiceName}).`);
-            setStatusColor('#4ade80');
-            showToast('Uplink Connected', 'success');
-
-            const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            const source = inputCtx.createMediaStreamSource(micStream);
-            const processor = inputCtx.createScriptProcessor(4096, 1, 1);
-            
-            processor.onaudioprocess = (e) => {
-              const inputData = e.inputBuffer.getChannelData(0);
-              
-              let sum = 0;
-              for(let i = 0; i < inputData.length; i++) {
-                  sum += inputData[i] * inputData[i];
-              }
-              const rms = Math.sqrt(sum / inputData.length);
-              if (rms > SPEECH_THRESHOLD && !isMicMutedRef.current) {
-                  stopSilenceTimer();
-              }
-
-              if (isMicMutedRef.current || isTypingRef.current) {
-                  inputData.fill(0); 
-              }
-              
-              sessionPromise.then(s => s.sendRealtimeInput({ media: createPcmBlob(inputData) }));
-            };
-            source.connect(processor);
-            processor.connect(inputCtx.destination);
-
-            if (isCameraActive && videoRef.current && canvasRef.current) {
-              const video = videoRef.current;
-              const canvas = canvasRef.current;
-              const ctx = canvas.getContext('2d');
-              frameIntervalRef.current = window.setInterval(() => {
-                if (ctx && video.readyState === video.HAVE_ENOUGH_DATA) {
-                  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-                  const base64 = canvas.toDataURL('image/jpeg', 0.6).split(',')[1];
-                  sessionPromise.then(s => s.sendRealtimeInput({ media: { data: base64, mimeType: 'image/jpeg' } }));
-                }
-              }, 1500);
-            }
-          },
-          onclose: (e) => {
-              console.debug("Connection closed", e);
-              setConnectionState(ConnectionState.DISCONNECTED);
-              setSystemStatus('Link Terminated (Server Closure).');
-              setStatusColor('#666');
-              stopAudioPlayback();
-              stopSilenceTimer();
-          },
-          onerror: (e) => {
-              console.error("Connection error", e);
-              setConnectionState(ConnectionState.ERROR);
-              setSystemStatus('Link Error. Reconnect required.');
-              setStatusColor('#f87171');
-              showToast('Connection Error', 'error');
-              stopAudioPlayback();
-              stopSilenceTimer();
-          },
-          onmessage: async (msg: LiveServerMessage) => {
-            if (msg.serverContent?.interrupted) {
-                stopAudioPlayback();
-                stopSilenceTimer(); 
-                return;
-            }
-
-            if (msg.serverContent?.inputTranscription) {
-                const text = msg.serverContent.inputTranscription.text;
-                activeUserMessageRef.current += text;
-                const turnId = `user-stream-${activeTurnIdRef.current || 'pending'}`;
-                addLog('user', activeUserMessageRef.current, turnId);
-                stopSilenceTimer(); 
-            }
-
-            if (msg.serverContent?.outputTranscription) {
-                const text = msg.serverContent.outputTranscription.text;
-                activeModelMessageRef.current += text;
-                const turnId = `model-stream-${activeTurnIdRef.current || 'pending'}`;
-                addLog('model', activeModelMessageRef.current, turnId);
-            }
-
-            if (msg.serverContent?.turnComplete) {
-                if (activeUserMessageRef.current) {
-                    addLog('user', activeUserMessageRef.current);
-                    activeUserMessageRef.current = '';
-                }
-                if (activeModelMessageRef.current) {
-                    addLog('model', activeModelMessageRef.current);
-                    activeModelMessageRef.current = '';
-                }
-                setLogs(prev => prev.filter(l => !l.id.startsWith('user-stream-') && !l.id.startsWith('model-stream-')));
-                activeTurnIdRef.current = null;
-                startSilenceTimer();
-            }
-            
-            if (msg.toolCall) {
-              for (const fc of msg.toolCall.functionCalls) {
-                if (fc.name === 'searchKnowledgeBase') {
-                  if (!currentAgent.permissions.includes('READ_LORE')) {
-                      sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "PERMISSION DENIED: You do not have READ access to the Knowledge Base." } } }));
-                      continue;
-                  }
-                  
-                  const query = (fc.args as any).query;
-                  const gateDecision = RetrievalGate.evaluate(query, selectedAgentId);
-                  
-                  if (!gateDecision.shouldRetrieve) {
-                      sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "Memory retrieval skipped (Not required)." } } }));
-                      continue;
-                  }
-
-                  const sigil = NumMarkX_GenerateSigil(query);
-                  const directHit = await findDocumentBySigil(sigil);
-                  
-                  if (directHit) {
-                      setSystemStatus("Teleport: Instant Sigil Lock");
-                      sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: JSON.stringify([directHit]) } } }));
-                      continue;
-                  }
-
-                  let queryVector = undefined;
-                  try {
-                      const embedResponse = await ai.models.embedContent({
-                          model: 'text-embedding-004',
-                          contents: [{ parts: [{ text: query }] }]
-                      });
-                      queryVector = embedResponse.embeddings?.[0]?.values;
-                  } catch (e) {
-                      console.warn("Embedding generation failed, falling back to keyword search", e);
-                  }
-
-                  const docs = await searchDocuments(query, queryVector, selectedAgentId);
-                  const result = docs.length ? JSON.stringify(docs) : "No local documents found.";
-                  sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result } } }));
-                  
-                } else if (fc.name === 'downloadTranscript') {
-                  const history = await loadActiveChat(selectedAgentId);
-                  const text = history.map(l => `[${new Date(l.timestamp).toLocaleTimeString()}] ${l.type.toUpperCase()}: ${l.text}`).join('\n');
-                  const blob = new Blob([text], { type: 'text/plain' });
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement('a');
-                  a.href = url;
-                  a.download = `${currentAgent.handle}_Transcript_${new Date().toISOString()}.txt`;
-                  a.click();
-                  URL.revokeObjectURL(url);
-                  sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "Transcript downloaded." } } }));
-                } else if (fc.name === 'terminateConnection') {
-                  disconnect();
-                } else if (fc.name === 'updateSystemInstructions') {
-                  const addition = (fc.args as any).addition;
-                  try {
-                      const currentConfig = await getAgentConfig(selectedAgentId);
-                      const newInstruction = (currentConfig.instruction || "") + "\n\n[USER PREFERENCE]: " + addition;
-                      await saveAgentConfig(selectedAgentId, {
-                          instruction: newInstruction,
-                          modelConfig: currentConfig.modelConfig,
-                          voiceReference: agentVoiceRef
-                      });
-                      setAgentInstruction(newInstruction);
-                      
-                      setSystemStatus('Agent Updated Instructions.');
-                      showToast('Agent learned a new preference', 'success');
-                      
-                      sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "Instructions updated." } } }));
-                  } catch(e) {
-                      console.error(e);
-                      sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "Failed to update instructions." } } }));
-                  }
-                } else if (fc.name === 'savePrompt') {
-                    const name = (fc.args as any).name;
-                    const content = (fc.args as any).content || agentInstruction; 
-                    try {
-                        await saveSavedPrompt({
-                            id: crypto.randomUUID(),
-                            agentId: selectedAgentId,
-                            name,
-                            content,
-                            timestamp: Date.now()
-                        });
-                        showToast(`Prompt saved: ${name}`, 'success');
-                        sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: `Saved prompt "${name}" successfully.` } } }));
-                    } catch(e) {
-                        console.error(e);
-                        sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "Failed to save prompt." } } }));
-                    }
-                } else if (fc.name === 'optimizePrompt') {
-                    const text = (fc.args as any).text || agentInstruction;
-                    setSystemStatus('Prompt Engineer: Optimizing instructions...');
-                    try {
-                        const res = await ai.models.generateContent({
-                            model: "gemini-2.0-flash-exp",
-                            contents: [{ parts: [{ text: `
-                                You are an expert Prompt Engineer. Rewrite the following prompt to be more structured and optimized:
-                                "${text}"
-                                OUTPUT ONLY THE OPTIMIZED PROMPT TEXT.
-                            ` }] }]
-                        });
-                        
-                        const optimized = res.text?.trim() || text;
-                        setAgentInstruction(optimized);
-                        await saveAgentConfig(selectedAgentId, {
-                            instruction: optimized,
-                            modelConfig,
-                            voiceReference: agentVoiceRef
-                        });
-                        await safeSendClientContent([{ text: `[SYSTEM] Instructions optimized and updated. New Instructions:\n${optimized}` }]);
-                        setSystemStatus('Prompt Optimized.');
-                        showToast('Instructions Optimized via AI', 'success');
-                        
-                        sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "Prompt optimized and updated successfully." } } }));
-                    } catch(e) {
-                        console.error(e);
-                        sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "Failed to optimize prompt." } } }));
-                    }
-                } else if (fc.name === 'routeRequest') {
-                    if (!currentAgent.permissions.includes('ROUTE_EXTERNAL')) {
-                        sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "PERMISSION DENIED: You do not have permission to route requests to external models." } } }));
-                        return;
-                    }
-
-                    const { target, prompt } = fc.args as any;
-                    
-                    const hfToken = localStorage.getItem('hf_token') || process.env.HF_TOKEN;
-                    if (!hfToken) {
-                        sessionPromise.then(s => s.sendToolResponse({ 
-                            functionResponses: { 
-                                id: fc.id, 
-                                name: fc.name, 
-                                response: { result: `[SYSTEM ERROR] Routing failed: HF_TOKEN is missing.` } 
-                            } 
-                        }));
-                        showToast('External Tool Failed: Token Missing', 'error');
-                        return;
-                    }
-
-                    if (target === 'EXTERNAL_LLM') {
-                        setSystemStatus("WARNING: UNCENSORED MODE ENABLED");
-                        setStatusColor('#fb923c'); // Warning Orange
-                    } else {
-                        setSystemStatus(`ROUTER: Offloading to ${target}...`);
-                    }
-                    
-                    try {
-                        const routeRes = await ExternalRouter.route(target, prompt);
-                        
-                        if (routeRes.success && routeRes.data) {
-                            if (routeRes.type === 'image') {
-                                setSystemStatus(`ROUTER: Image Generated (${target})`);
-                                showToast('External Image Generated', 'success');
-                                addLog('model', `[ROUTER] Generated image via ${target}`, undefined, routeRes.data);
-                                sessionPromise.then(s => s.sendToolResponse({ 
-                                    functionResponses: { 
-                                        id: fc.id, 
-                                        name: fc.name, 
-                                        response: { result: `[SYSTEM] Image generated successfully and displayed.` } 
-                                    } 
-                                }));
-                            } else {
-                                setSystemStatus(`ROUTER: Text Generated (${target})`);
-                                sessionPromise.then(s => s.sendToolResponse({ 
-                                    functionResponses: { 
-                                        id: fc.id, 
-                                        name: fc.name, 
-                                        response: { result: `[EXTERNAL MODEL RESPONSE]: ${routeRes.data}` } 
-                                    } 
-                                }));
-                            }
-                        } else {
-                            throw new Error(routeRes.error || "Unknown Error");
-                        }
-                    } catch (e: any) {
-                        console.error("Router Error:", e);
-                        setSystemStatus('ROUTER: Failed.');
-                        sessionPromise.then(s => s.sendToolResponse({ 
-                            functionResponses: { 
-                                id: fc.id, 
-                                name: fc.name, 
-                                response: { result: `[SYSTEM ERROR] Routing failed: ${e.message}.` } 
-                            } 
-                        }));
-                    }
-                } else if (fc.name === 'updateModelConfiguration') {
-                  if (!currentAgent.permissions.includes('ADMIN_OVERRIDE')) {
-                      // Note: This is soft-gated in UI usually, but enforcing in agent logic too
-                      // For now, we allow self-modification of temps as it's harmless
-                  }
-                  const { temperature, topP, topK } = fc.args as any;
-                  setModelConfig(prev => ({
-                      temperature: temperature ?? prev.temperature,
-                      topP: topP ?? prev.topP,
-                      topK: topK ?? prev.topK
-                  }));
-                  showToast('Model Parameters Updated via Voice', 'success');
-                  sessionPromise.then(s => s.sendToolResponse({
-                      functionResponses: {
-                          id: fc.id,
-                          name: fc.name,
-                          response: { result: "Configuration updated successfully." }
-                      }
-                  }));
-                } else if (fc.name === 'saveToKnowledgeBase') {
-                  if (!currentAgent.permissions.includes('WRITE_LORE')) {
-                      sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "PERMISSION DENIED: You cannot write to the Knowledge Base." } } }));
-                      return;
-                  }
-                  
-                  const text = (fc.args as any).text;
-                  const title = (fc.args as any).title || "Agent Memory";
-                  try {
-                       const embedResult = await ai.models.embedContent({
-                            model: 'text-embedding-004',
-                            contents: [{ parts: [{ text }] }],
-                            config: { taskType: 'RETRIEVAL_DOCUMENT', title }
-                        });
-                       
-                       const sigil = NumMarkX_GenerateSigil(text);
-
-                       await addDocument({
-                            id: crypto.randomUUID(),
-                            agentId: selectedAgentId,
-                            title,
-                            content: text,
-                            embedding: embedResult.embeddings[0].values,
-                            timestamp: Date.now(),
-                            numMarkId: sigil
-                       });
-                       
-                       handleLoreUpdate();
-                       sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "Memory saved." } } }));
-                  } catch(e) {
-                       console.error(e);
-                       sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "Failed to save memory." } } }));
-                  }
-                } else if (fc.name === 'appendNoteToMemory') {
-                    if (!currentAgent.permissions.includes('MODIFY_LORE')) {
-                        sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "PERMISSION DENIED: You do not have permission to MODIFY the Knowledge Base." } } }));
-                        return;
-                    }
-                    const { topic, note } = fc.args as any;
-                    
-                    try {
-                        const docs = await searchDocuments(topic, undefined, selectedAgentId);
-                        if (docs.length > 0) {
-                            const topDoc = docs[0];
-                            const newContent = topDoc.content + `\n\n[UPDATE ${new Date().toLocaleDateString()}]: ${note}`;
-                            await updateDocumentContent(topDoc.id, newContent);
-                            handleLoreUpdate();
-                            sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: `Memory updated: "${topDoc.title}"` } } }));
-                        } else {
-                            sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "No relevant memory found to update. Consider creating a new one." } } }));
-                        }
-                    } catch (e: any) {
-                        sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: `Update failed: ${e.message}` } } }));
-                    }
-
-                } else if (fc.name === 'deleteMemoryByKeyword') {
-                    if (!currentAgent.permissions.includes('MODIFY_LORE')) {
-                        sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "PERMISSION DENIED: You do not have permission to DELETE from the Knowledge Base." } } }));
-                        return;
-                    }
-                    const { topic } = fc.args as any;
-                    try {
-                        const docs = await searchDocuments(topic, undefined, selectedAgentId);
-                        if (docs.length > 0) {
-                            const topDoc = docs[0];
-                            await deleteDocument(topDoc.id);
-                            handleLoreUpdate();
-                            sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: `Memory deleted: "${topDoc.title}"` } } }));
-                        } else {
-                            sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "No relevant memory found to delete." } } }));
-                        }
-                    } catch(e: any) {
-                        sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: `Deletion failed: ${e.message}` } } }));
-                    }
-
-                } else if (fc.name === 'consultCouncil') {
-                    const { agentName, question } = fc.args as any;
-                    const targetAgent = AGENTS.find(a => a.handle.toLowerCase() === agentName.toLowerCase());
-                    
-                    if (!targetAgent) {
-                        sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: `Agent ${agentName} is not in the roster.` } } }));
-                        return;
-                    }
-
-                    setSystemStatus(`COUNCIL: Consulting ${targetAgent.handle}...`);
-                    
-                    try {
-                        // 1. Get Text Response
-                        const guestRes = await ai.models.generateContent({
-                            model: 'gemini-3-flash-preview',
-                            contents: [{
-                                role: 'user',
-                                parts: [{ text: `
-                                    You are ${targetAgent.handle}. Role: ${targetAgent.role}.
-                                    System Instruction: ${targetAgent.system_instruction}.
-                                    
-                                    The "Host" agent is asking you a question during a live session.
-                                    Question: "${question}"
-                                    
-                                    Respond in character, briefly (under 50 words).
-                                ` }]
-                            }]
-                        });
-                        
-                        const answer = guestRes.text || "(No response)";
-                        setSystemStatus(`COUNCIL: ${targetAgent.handle} Speaking...`);
-                        addLog('model', `[COUNCIL: ${targetAgent.handle}] ${answer}`);
-                        
-                        // 2. Synthesize & Play Audio (Podcast Mode)
-                        if (targetAgent.id !== selectedAgentId) {
-                            // Find target agent config to get voice ref
-                            const targetConfig = await getAgentConfig(targetAgent.id);
-                            if (targetConfig.voiceReference) {
-                                await playTts(answer, undefined, targetConfig.voiceReference);
-                            }
-                        }
-
-                        sessionPromise.then(s => s.sendToolResponse({ 
-                            functionResponses: { 
-                                id: fc.id, 
-                                name: fc.name, 
-                                response: { result: `[AUDIO PLAYED] ${targetAgent.handle} said: "${answer}". You may now acknowledge or summarize.` } 
-                            } 
-                        }));
-
-                    } catch (e: any) {
-                        sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: `Connection to ${targetAgent.handle} failed.` } } }));
-                    }
-
-                } else if (fc.name === 'analyzeVisualField') {
-                    if (!videoRef.current || !canvasRef.current) {
-                        sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "Camera not available for visual analysis." } } }));
-                        return;
-                    }
-
-                    setSystemStatus("Gemini Pro Vision: Analyzing Field...");
-                    const video = videoRef.current;
-                    const canvas = canvasRef.current;
-                    const ctx = canvas.getContext('2d');
-                    
-                    if (ctx) {
-                        // Capture High-Res Frame
-                        canvas.width = video.videoWidth;
-                        canvas.height = video.videoHeight;
-                        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-                        const base64 = canvas.toDataURL('image/jpeg', 0.9).split(',')[1];
-
-                        try {
-                            const analysisRes = await ai.models.generateContent({
-                                model: 'gemini-3-pro-preview',
-                                contents: [{
-                                    parts: [
-                                        { inlineData: { mimeType: 'image/jpeg', data: base64 } },
-                                        { text: "Analyze this image in extreme detail. Identify objects, text, spatial relationships, and potential context. Be thorough." }
-                                    ]
-                                }]
-                            });
-                            
-                            const analysis = analysisRes.text || "No analysis generated.";
-                            setSystemStatus("Visual Analysis Complete.");
-                            addLog('model', `[VISUAL ANALYSIS] ${analysis}`);
-                            
-                            sessionPromise.then(s => s.sendToolResponse({ 
-                                functionResponses: { 
-                                    id: fc.id, 
-                                    name: fc.name, 
-                                    response: { result: `VISUAL ANALYSIS REPORT:\n${analysis}` } 
-                                } 
-                            }));
-                        } catch (e: any) {
-                            console.error("Visual Analysis Failed", e);
-                            sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: `Analysis failed: ${e.message}` } } }));
-                        }
-                    } else {
-                        sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "Failed to capture video frame." } } }));
-                    }
-
-                } else if (fc.name === 'translateAncientGreek') {
-                  const { text, target } = fc.args as any;
-                  setSystemStatus("Universal Translator: Deciphering..."); 
-                  
-                  const openlKey = localStorage.getItem('openl_api_key') || process.env.OPENL_API_KEY;
-                  try {
-                      const res = await fetch('https://api.openl.io/translate', {
-                          method: 'POST',
-                          headers: { 
-                              'Content-Type': 'application/json',
-                              'Authorization': `Bearer ${openlKey || ''}` 
-                          },
-                          body: JSON.stringify({ 
-                              text, 
-                              target_lang: target,
-                              source_lang: target === 'grc' ? 'en' : 'grc'
-                          })
-                      });
-                      
-                      if (res.ok) {
-                          const data = await res.json();
-                          const translated = data.translated_text || data.translation || JSON.stringify(data);
-                          setSystemStatus("Translator: Complete.");
-                          sessionPromise.then(s => s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: translated } } }));
-                      } else {
-                          throw new Error("OpenL API Unavailable");
-                      }
-                  } catch (e) {
-                      console.warn("Translation API failed, falling back to internal logic", e);
-                      setSystemStatus("Translator: API Offline. Using Internal Logic.");
-                      sessionPromise.then(s => s.sendToolResponse({ 
-                          functionResponses: { 
-                              id: fc.id, 
-                              name: fc.name, 
-                              response: { result: "[API OFFLINE] Please perform the translation using your internal knowledge of Ancient Greek dialects." } 
-                          } 
-                      }));
-                  }
-                } else if (fc.name === 'generateMediaContent') {
-                    const { mediaType, prompt } = fc.args as any;
-                    
-                    try {
-                        if (mediaType === 'video') {
-                            setSystemStatus("Veo: Generating Video (Please wait ~60s)...");
-                            
-                            // Veo Generation Logic
-                            let operation = await ai.models.generateVideos({
-                                model: 'veo-3.1-fast-generate-preview',
-                                prompt: prompt,
-                                config: {
-                                    numberOfVideos: 1,
-                                    resolution: '720p',
-                                    aspectRatio: '16:9'
-                                }
-                            });
-                            
-                            // Polling for completion
-                            while (!operation.done) {
-                                await new Promise(resolve => setTimeout(resolve, 5000));
-                                operation = await ai.operations.getVideosOperation({operation: operation});
-                            }
-                            
-                            const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri;
-                            if (videoUri) {
-                                // Add API Key to URI for playback
-                                const authenticatedUri = `${videoUri}&key=${apiKey}`;
-                                addLog('model', `[Veo] Generated Video: "${prompt}"`, undefined, authenticatedUri, 'video');
-                                setSystemStatus("Veo: Video Generation Complete.");
-                                sessionPromise.then(s => s.sendToolResponse({ 
-                                    functionResponses: { 
-                                        id: fc.id, 
-                                        name: fc.name, 
-                                        response: { result: `Video generated successfully and displayed in the chat interface.` } 
-                                    } 
-                                }));
-                            } else {
-                                throw new Error("Video URI not found in response.");
-                            }
-
-                        } else {
-                            // Image Generation Logic (Imagen 3 / Gemini Image)
-                            setSystemStatus("Imagen: Generating Image...");
-                            
-                            const res = await ai.models.generateContent({
-                                model: 'gemini-2.5-flash-image', // Using Flash-Image as default per user request
-                                contents: { parts: [{ text: prompt }] },
-                                config: {
-                                    responseMimeType: 'application/json' // Not needed for image gen usually, but ensures no stray text
-                                }
-                            });
-                            
-                            // Iterate to find image part
-                            let foundImage = false;
-                            if (res.candidates?.[0]?.content?.parts) {
-                                for (const part of res.candidates[0].content.parts) {
-                                    if (part.inlineData) {
-                                        const base64 = part.inlineData.data;
-                                        const mime = part.inlineData.mimeType;
-                                        const dataUrl = `data:${mime};base64,${base64}`;
-                                        addLog('model', `[Imagen] Generated Image: "${prompt}"`, undefined, dataUrl, 'image');
-                                        foundImage = true;
-                                    }
-                                }
-                            }
-                            
-                            if (foundImage) {
-                                setSystemStatus("Imagen: Complete.");
-                                sessionPromise.then(s => s.sendToolResponse({ 
-                                    functionResponses: { 
-                                        id: fc.id, 
-                                        name: fc.name, 
-                                        response: { result: `Image generated and displayed.` } 
-                                    } 
-                                }));
-                            } else {
-                                throw new Error("No image data returned from model.");
-                            }
-                        }
-                    } catch (e: any) {
-                        console.error("Media Generation Failed", e);
-                        setSystemStatus(`Media Gen Error: ${e.message}`);
-                        sessionPromise.then(s => s.sendToolResponse({ 
-                            functionResponses: { 
-                                id: fc.id, 
-                                name: fc.name, 
-                                response: { result: `Error generating media: ${e.message}. Inform the user.` } 
-                            } 
-                        }));
-                    }
-                }
-              }
-            }
-
-            const modelTurn = msg.serverContent?.modelTurn;
-            if (modelTurn?.parts && audioContextRef.current) {
-                const ctx = audioContextRef.current;
-                for (const part of modelTurn.parts) {
-                    if (part.inlineData?.data) {
-                        const audioData = base64ToUint8Array(part.inlineData.data);
-                        const audioBuffer = await decodeAudioData(audioData, ctx);
-                        
-                        const source = ctx.createBufferSource();
-                        source.buffer = audioBuffer;
-                        source.connect(analyserRef.current!);
-                        analyserRef.current!.connect(ctx.destination);
-
-                        const now = ctx.currentTime;
-                        nextStartTimeRef.current = Math.max(nextStartTimeRef.current, now);
-                        source.start(nextStartTimeRef.current);
-                        nextStartTimeRef.current += audioBuffer.duration;
-                        
-                        scheduledSourcesRef.current.add(source);
-                        source.onended = () => scheduledSourcesRef.current.delete(source);
-                    }
-                }
-            }
+      try {
+          setConnectionState(ConnectionState.CONNECTING);
+          
+          // 1. Audio Output Context
+          if (!audioContextRef.current) {
+              audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: SAMPLE_RATE });
+              analyserRef.current = audioContextRef.current.createAnalyser();
+              analyserRef.current.fftSize = 512;
+              nextStartTimeRef.current = 0;
           }
-        }
-      });
-      sessionRef.current = await sessionPromise;
-    } catch (e) {
-      setConnectionState(ConnectionState.ERROR);
-      setSystemStatus("Connection Failed.");
-      setStatusColor('#f87171');
-      showToast('Connection Failed', 'error');
-    }
-  };
 
-  const disconnect = async () => {
-    if (logs.length > 0) {
-      const now = new Date();
-      const timestampStr = now.toISOString().replace(/T/, ' ').replace(/\..+/, '');
-      const archiveTitle = `[ARCHIVE] ${currentAgent.handle} - ${timestampStr}`;
-      
-      await saveChatSession({ 
-          id: crypto.randomUUID(), 
-          title: archiveTitle, 
-          timestamp: Date.now(), 
-          logs 
-      });
-    }
-    stopAudioPlayback();
-    stopSilenceTimer();
-    if (frameIntervalRef.current) clearInterval(frameIntervalRef.current);
-    if (sessionRef.current) sessionRef.current.close?.();
-    setConnectionState(ConnectionState.DISCONNECTED);
-    setSystemStatus('Link Terminated.');
-    setStatusColor('#666');
-    showToast('Link Terminated', 'info');
-  };
+          // 2. Audio Input Context & Stream
+          if (!inputContextRef.current) {
+              inputContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: INPUT_SAMPLE_RATE });
+          }
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          
+          const ai = new GoogleGenAI({ apiKey: keyToUse });
+          const currentAgent = AGENTS.find(a => a.id === currentAgentId);
+          
+          const config = {
+              responseModalities: [Modality.AUDIO],
+              speechConfig: {
+                  voiceConfig: { prebuiltVoiceConfig: { voiceName: selectedVoice } }
+              },
+              systemInstruction: `${generalInstructions}\n\n${agentInstructions || currentAgent?.system_instruction}`,
+              // Enable Both Input (User) and Output (Model) Transcription
+              inputAudioTranscription: {}, 
+              outputAudioTranscription: {}, 
+          };
 
-  if (viewMode === 'CONFERENCE') {
-      return <MultiAgentConsole onClose={() => setViewMode('UPLINK')} />;
-  }
+          const sessionPromise = ai.live.connect({
+              model: 'gemini-2.5-flash-native-audio-preview-09-2025',
+              config,
+              callbacks: {
+                  onopen: () => {
+                      setConnectionState(ConnectionState.CONNECTED);
+                      setLogs(prev => [...prev, {
+                          id: crypto.randomUUID(),
+                          type: 'system',
+                          text: `Connected to ${currentAgent?.handle}`,
+                          timestamp: Date.now()
+                      }]);
 
-  const getInputBorderColor = () => {
-      switch(toolMode) {
-          case 'DEEP': return '#a78bfa'; 
-          case 'IMAGE': return '#f472b6'; 
-          case 'EXTERNAL': return '#fb923c'; 
-          default: return undefined; 
+                      // Start Mic Stream
+                      if (inputContextRef.current) {
+                          const source = inputContextRef.current.createMediaStreamSource(stream);
+                          const processor = inputContextRef.current.createScriptProcessor(4096, 1, 1);
+                          
+                          processor.onaudioprocess = (e) => {
+                              // Use REF to check mic state inside closure
+                              if (!isMicOnRef.current) return;
+
+                              const inputData = e.inputBuffer.getChannelData(0);
+                              const pcmBlob = createPcmBlob(inputData);
+                              
+                              if (sessionPromiseRef.current) {
+                                  sessionPromiseRef.current.then(session => {
+                                      session.sendRealtimeInput({ media: pcmBlob });
+                                  });
+                              }
+                          };
+                          
+                          source.connect(processor);
+                          processor.connect(inputContextRef.current.destination);
+                      }
+                  },
+                  onmessage: async (msg: LiveServerMessage) => {
+                      // 1. Handle Audio (Model Speech)
+                      const audioData = msg.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
+                      if (audioData && audioContextRef.current && analyserRef.current) {
+                          const ctx = audioContextRef.current;
+                          nextStartTimeRef.current = Math.max(nextStartTimeRef.current, ctx.currentTime);
+                          
+                          const audioBuffer = await decodeAudioData(
+                              base64ToUint8Array(audioData),
+                              ctx,
+                              SAMPLE_RATE
+                          );
+                          
+                          const source = ctx.createBufferSource();
+                          source.buffer = audioBuffer;
+                          source.connect(analyserRef.current);
+                          analyserRef.current.connect(ctx.destination);
+                          
+                          source.start(nextStartTimeRef.current);
+                          nextStartTimeRef.current += audioBuffer.duration;
+                          
+                          source.onended = () => sourcesRef.current.delete(source);
+                          sourcesRef.current.add(source);
+                      }
+
+                      // 2. Handle User Input Transcription (Streaming)
+                      const inputTranscript = msg.serverContent?.inputTranscription?.text;
+                      if (inputTranscript) {
+                          setLogs(prev => {
+                              const lastLog = prev[prev.length - 1];
+                              // If the last log is a streaming user message, append to it
+                              if (lastLog && lastLog.type === 'user' && lastLog.isStreaming) {
+                                  return [...prev.slice(0, -1), { ...lastLog, text: lastLog.text + inputTranscript }];
+                              }
+                              // Otherwise, create a new streaming user message
+                              return [...prev, {
+                                  id: crypto.randomUUID(),
+                                  type: 'user',
+                                  text: inputTranscript,
+                                  timestamp: Date.now(),
+                                  isStreaming: true
+                              }];
+                          });
+                      }
+
+                      // 3. Handle Model Output Transcription (Streaming)
+                      const outputTranscript = msg.serverContent?.outputTranscription?.text;
+                      if (outputTranscript) {
+                          setLogs(prev => {
+                              // Ensure any streaming User log is marked as complete when Model starts
+                              const fixedPrev = prev.map(l => 
+                                  (l.type === 'user' && l.isStreaming) 
+                                  ? { ...l, isStreaming: false } 
+                                  : l
+                              );
+
+                              const lastLog = fixedPrev[fixedPrev.length - 1];
+                              // Append to current streaming model message
+                              if (lastLog && lastLog.type === 'model' && lastLog.isStreaming) {
+                                  return [...fixedPrev.slice(0, -1), { ...lastLog, text: lastLog.text + outputTranscript }];
+                              }
+                              // Start new model message
+                              return [...fixedPrev, { 
+                                  id: crypto.randomUUID(), 
+                                  type: 'model', 
+                                  text: outputTranscript, 
+                                  timestamp: Date.now(),
+                                  isStreaming: true 
+                              }];
+                          });
+                      }
+
+                      // 4. Handle Turn Complete
+                      if (msg.serverContent?.turnComplete) {
+                           setLogs(prev => {
+                              const lastLog = prev[prev.length - 1];
+                              // If model was streaming, finalize it
+                              if (lastLog && lastLog.type === 'model' && lastLog.isStreaming) {
+                                  return [...prev.slice(0, -1), { ...lastLog, isStreaming: false }];
+                              }
+                              // Also finalize user if they were streaming (edge case)
+                              if (lastLog && lastLog.type === 'user' && lastLog.isStreaming) {
+                                  return [...prev.slice(0, -1), { ...lastLog, isStreaming: false }];
+                              }
+                              return prev;
+                           });
+                      }
+
+                      // 5. Handle Interruption
+                      if (msg.serverContent?.interrupted) {
+                          sourcesRef.current.forEach(s => s.stop());
+                          sourcesRef.current.clear();
+                          nextStartTimeRef.current = 0;
+                          
+                          setLogs(prev => {
+                              const lastLog = prev[prev.length - 1];
+                              if (lastLog && lastLog.isStreaming) {
+                                  return [...prev.slice(0, -1), { ...lastLog, isStreaming: false, text: lastLog.text + ' [Interrupted]' }];
+                              }
+                              return [...prev, { id: crypto.randomUUID(), type: 'system', text: '[Interrupted]', timestamp: Date.now() }];
+                          });
+                      }
+                      
+                      // 6. Handle Fallback Text (e.g. Tool Outputs)
+                      // Only if transcription didn't handle it
+                      if (!outputTranscript && msg.serverContent?.modelTurn?.parts?.[0]?.text) {
+                          const text = msg.serverContent.modelTurn.parts[0].text;
+                          setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'model', text: text, timestamp: Date.now() }]);
+                      }
+                  },
+                  onclose: () => {
+                      setConnectionState(ConnectionState.DISCONNECTED);
+                      setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', text: 'Connection Closed', timestamp: Date.now() }]);
+                  },
+                  onerror: (err) => {
+                      console.error(err);
+                      setConnectionState(ConnectionState.ERROR);
+                      setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', text: `Error: ${err}`, timestamp: Date.now() }]);
+                  }
+              }
+          });
+          
+          sessionPromiseRef.current = sessionPromise;
+
+      } catch (e) {
+          console.error(e);
+          setConnectionState(ConnectionState.ERROR);
       }
   };
 
+  const disconnect = () => {
+      if (inputContextRef.current) inputContextRef.current.close();
+      if (audioContextRef.current) audioContextRef.current.close();
+      inputContextRef.current = null;
+      audioContextRef.current = null;
+      
+      // Stop Camera
+      if (videoRef.current && videoRef.current.srcObject) {
+          const tracks = (videoRef.current.srcObject as MediaStream).getTracks();
+          tracks.forEach(t => t.stop());
+          videoRef.current.srcObject = null;
+      }
+      setIsCameraOn(false);
+      if (frameIntervalRef.current) clearInterval(frameIntervalRef.current);
+
+      setConnectionState(ConnectionState.DISCONNECTED);
+      sessionPromiseRef.current?.then(s => s.close && s.close());
+      sessionPromiseRef.current = null;
+  };
+
+  const handleSendText = async () => {
+      if (!inputText.trim() || !sessionPromiseRef.current) return;
+      
+      const text = inputText;
+      setInputText('');
+      setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'user', text: text, timestamp: Date.now() }]);
+
+      try {
+          const session = await sessionPromiseRef.current;
+          // Send as clientContent (Text Injection)
+          await session.send({
+              clientContent: {
+                  turns: [{ role: 'user', parts: [{ text }] }],
+                  turnComplete: true
+              }
+          });
+      } catch (e) {
+          console.error("Failed to send text", e);
+      }
+  };
+
+  // --- LAYOUT STYLES ---
+  
+  const visualizerStyle: React.CSSProperties = {
+      flex: (layoutMode === 'AUDIO' || layoutMode === 'HYBRID' || layoutMode === 'VIDEO') ? '1 1 0' : '0 0 auto',
+      height: layoutMode === 'CHAT' ? '0px' : 'auto',
+      display: layoutMode === 'CHAT' ? 'none' : 'flex',
+      flexDirection: 'column',
+      overflow: 'hidden',
+      position: 'relative',
+      transition: 'flex 0.3s ease'
+  };
+
+  const chatStyle: React.CSSProperties = {
+      flex: (layoutMode === 'CHAT' || layoutMode === 'HYBRID') ? '1 1 0' : '0 0 auto',
+      height: (layoutMode === 'AUDIO' || layoutMode === 'VIDEO') ? '0px' : 'auto',
+      display: (layoutMode === 'AUDIO' || layoutMode === 'VIDEO') ? 'none' : 'flex',
+      flexDirection: 'column',
+      overflow: 'hidden',
+      transition: 'flex 0.3s ease'
+  };
+
+  const currentAgent = AGENTS.find(a => a.id === currentAgentId);
+
+  const closeSidePanel = () => setActiveSidePanel(null);
+
   return (
-    <div className="main-container">
-      {toast && (
-          <div className="toast-container">
-              <div className="toast" style={{borderColor: toast.type === 'error' ? '#f87171' : toast.type === 'success' ? '#4ade80' : '#333'}}>
-                  {toast.type === 'success' && <span style={{color:'#4ade80'}}>✓</span>}
-                  {toast.type === 'error' && <span style={{color:'#f87171'}}>!</span>}
-                  {toast.message}
-              </div>
-          </div>
-      )}
-
-      <div className="header-container">
-        <h1 className="header-title animate-pulse">MYTHOS : : COMMS : : HYPERVISOR</h1>
-        <div className="status-bar">
-          <div className="status-item">CORE: <span style={{color:'#fff'}}>{currentAgent.handle}</span></div>
-          <div className="system-status-header" style={{marginRight:'0.5rem', color: statusColor}}>{systemStatus}</div>
-          <div className="status-item">SYNC: <span style={{color: connectionState === ConnectionState.CONNECTED ? '#4ade80' : '#666'}}>{connectionState}</span></div>
-        </div>
-      </div>
-
-      <div className="control-panel">
-        <div className="control-row">
-            <div className="control-group">
-                <button 
-                    onClick={() => setViewMode('CONFERENCE')}
-                    className="btn btn-secondary"
-                    disabled={connectionState === ConnectionState.CONNECTED}
-                    style={{ borderColor: '#a78bfa', color: '#a78bfa', flex: 'none' }}
-                    title="Switch to Conference Mode"
-                >
-                    CONF
-                </button>
-                
-                {/* NEW MCP BUTTON */}
-                <McpManager />
-
+    <div className="app-container">
+      {/* HEADER */}
+      <header className="app-header">
+        <div className="flex-group">
+            <span className="logo-text">MYTHOS</span>
+            <span className="divider">|</span>
+            {currentView === 'ORCHESTRATOR' ? (
                 <select 
-                    value={selectedAgentId} 
-                    onChange={e => {
-                        const newId = e.target.value;
-                        if (hasUnsavedChanges) {
-                            if (!window.confirm("Unsaved changes in Settings. Switching agents will discard them. Continue?")) {
-                                return;
-                            }
-                        }
-                        setHasUnsavedChanges(false);
-                        setLogsLoaded(false); 
-                        setLogs([]); 
-                        setSelectedAgentId(newId);
-                        showToast(`Active Agent: ${AGENTS.find(a => a.id === newId)?.handle.toUpperCase()}`, 'info');
-                    }} 
-                    disabled={connectionState !== ConnectionState.DISCONNECTED} 
-                    className="form-select control-select-agent"
+                    value={currentAgentId} 
+                    onChange={(e) => handleAgentChange(e.target.value)}
+                    className="agent-selector"
                 >
-                  {AGENTS.map(a => <option key={a.id} value={a.id}>{a.handle.toUpperCase()}</option>)}
+                    {AGENTS.map(agent => (
+                        <option key={agent.id} value={agent.id}>{agent.handle.toUpperCase()}</option>
+                    ))}
                 </select>
-
-                {isCustomVoice ? (
-                  <div style={{display:'flex', gap:'0.25rem', flex:'1 1 auto', minWidth:'120px', alignItems:'center'}}>
-                    <input 
-                      type="text" 
-                      value={customVoiceName}
-                      onChange={(e) => setCustomVoiceName(e.target.value)}
-                      placeholder="Voice ID..."
-                      className="form-input"
-                      style={{fontFamily: 'monospace', fontSize: '0.75rem', flex: 1}}
-                      disabled={connectionState !== ConnectionState.DISCONNECTED}
-                    />
-                    <button 
-                      onClick={() => setIsCustomVoice(false)} 
-                      className="btn btn-secondary" 
-                      style={{padding:'0 0.5rem', flex:'none'}}
-                      disabled={connectionState !== ConnectionState.DISCONNECTED}
-                    >
-                      X
-                    </button>
-                  </div>
-                ) : (
-                  <select 
-                      value={selectedVoice} 
-                      onChange={(e) => {
-                        if (e.target.value === 'CUSTOM_ENTRY') {
-                          setIsCustomVoice(true);
-                          setCustomVoiceName('');
-                        } else {
-                          setSelectedVoice(e.target.value);
-                        }
-                      }} 
-                      disabled={connectionState !== ConnectionState.DISCONNECTED} 
-                      className="form-select"
-                      style={{ flex: '1 1 auto', minWidth: '120px' }}
-                  >
-                      {PREBUILT_VOICES.map(v => <option key={v} value={v}>VOICE: {v.toUpperCase()}</option>)}
-                      <option value="CUSTOM_ENTRY" style={{fontStyle:'italic', color: '#a78bfa'}}>MANUAL...</option>
-                  </select>
-                )}
-            </div>
+            ) : (
+                <span className="status-indicator" style={{ color: '#38bdf8', borderColor: '#38bdf8' }}>MULTI-AGENT COUNCIL</span>
+            )}
         </div>
 
-        <div className="control-row">
-            <div className="control-group" style={{ flex: 2 }}>
-                <button 
-                    onClick={connectionState === ConnectionState.CONNECTED ? disconnect : connect} 
-                    className={`btn ${connectionState === ConnectionState.CONNECTED ? 'btn-abort' : 'btn-primary'} control-btn-link`}
-                >
-                  {connectionState === ConnectionState.CONNECTED ? 'TERMINATE LINK' : 'ESTABLISH LINK'}
-                </button>
+        <div className="flex-group">
+            <div className={`status-indicator ${connectionState.toLowerCase()}`}>
+                {connectionState}
             </div>
-
-            <div className="control-group tight">
-                <button 
-                    onClick={toggleCamera} 
-                    className={`btn btn-secondary btn-icon ${isCameraActive ? 'active' : ''}`} 
-                    style={{borderColor: isCameraActive ? '#4ade80' : ''}}
-                    title="Toggle Camera Stream"
-                >
-                  {isCameraActive ? (
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
-                  ) : (
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="1" y1="1" x2="23" y2="23"></line><path d="M21 21H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h3m3-3h6l2 3h4a2 2 0 0 1 2 2v9.34m-7.72-2.06a4 4 0 1 1-5.56-5.56"></path></svg>
-                  )}
-                </button>
-
-                <button 
-                    onClick={toggleMic} 
-                    className={`btn btn-secondary btn-icon ${isMicMuted ? 'active' : ''}`} 
-                    style={{borderColor: isMicMuted ? '#f87171' : '', color: isMicMuted ? '#f87171' : ''}}
-                    disabled={connectionState !== ConnectionState.CONNECTED}
-                    title="Mute Microphone"
-                >
-                  {isMicMuted ? (
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="1" y1="1" x2="23" y2="23"></line><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"></path><path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>
-                  ) : (
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>
-                  )}
-                </button>
-            </div>
-
-            <div className="control-group tight" style={{ justifyContent: 'flex-end', marginLeft: 'auto' }}>
-                <KnowledgeManager currentAgentId={selectedAgentId} onUpdate={handleLoreUpdate} />
-                <ChatHistoryManager currentLogs={logs} onLoadSession={setLogs} currentAgentId={selectedAgentId} onUpdateKnowledge={handleLoreUpdate} />
-                <RoomFocusConfig />
-                <SettingsManager 
-                    modelConfig={modelConfig} 
-                    setModelConfig={setModelConfig} 
-                    disabled={connectionState !== ConnectionState.DISCONNECTED} 
-                    generalInstruction={generalInstruction}
-                    setGeneralInstruction={setGeneralInstruction}
-                    agentInstruction={agentInstruction}
-                    setAgentInstruction={setAgentInstruction}
-                    agentName={currentAgent.handle}
-                    agentId={selectedAgentId}
-                    onSave={handleSaveSettings}
-                    onDirty={() => setHasUnsavedChanges(true)}
-                />
-                <VoiceCommandList /> 
-            </div>
+            
+            <VoiceCommandList 
+                isOpen={activeSidePanel === 'VOICE'}
+                onOpen={() => setActiveSidePanel('VOICE')}
+                onClose={closeSidePanel}
+            />
+            <RoomFocusConfig 
+                isOpen={activeSidePanel === 'FOCUS'}
+                onOpen={() => setActiveSidePanel('FOCUS')}
+                onClose={closeSidePanel}
+            />
+            <McpManager 
+                isOpen={activeSidePanel === 'MCP'}
+                onOpen={() => setActiveSidePanel('MCP')}
+                onClose={closeSidePanel}
+            />
+            <KnowledgeManager 
+                onUpdate={() => {}} 
+                currentAgentId={currentAgentId} 
+                isOpen={activeSidePanel === 'KNOWLEDGE'}
+                onOpen={() => setActiveSidePanel('KNOWLEDGE')}
+                onClose={closeSidePanel}
+            />
+            <ChatHistoryManager 
+                currentLogs={logs} 
+                onLoadSession={setLogs} 
+                currentAgentId={currentAgentId}
+                onUpdateKnowledge={() => {}}
+                isOpen={activeSidePanel === 'HISTORY'}
+                onOpen={() => setActiveSidePanel('HISTORY')}
+                onClose={closeSidePanel}
+            />
+            <SettingsManager 
+                modelConfig={modelConfig}
+                setModelConfig={setModelConfig}
+                disabled={connectionState === ConnectionState.CONNECTED}
+                generalInstruction={generalInstructions}
+                setGeneralInstruction={setGeneralInstructions}
+                agentInstruction={agentInstructions}
+                setAgentInstruction={setAgentInstructions}
+                agentName={currentAgent?.handle || 'Unknown'}
+                agentId={currentAgentId}
+                agentAccessLevel={accessLevel}
+                selectedVoice={selectedVoice}
+                onVoiceChange={setSelectedVoice}
+                onSave={handleSettingsSave}
+                isOpen={activeSidePanel === 'SETTINGS'}
+                onOpen={() => setActiveSidePanel('SETTINGS')}
+                onClose={closeSidePanel}
+            />
         </div>
-      </div>
+      </header>
 
-      <div style={{display: 'grid', gridTemplateColumns: isCameraActive ? '1fr 1fr' : '1fr', gap:'1rem'}}>
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
-            <div className="section-panel">
-                <div className="section-header"><span className="section-header-title">Resonator Output</span></div>
-                <Visualizer analyser={analyserRef.current} isActive={connectionState === ConnectionState.CONNECTED} />
-            </div>
-        </div>
-        {isCameraActive && (
-          <div className="section-panel" style={{overflow:'hidden', position:'relative'}}>
-             <video ref={videoRef} autoPlay playsInline muted style={{width:'100%', height:'8rem', objectFit:'cover', filter:'grayscale(100%) brightness(0.8) contrast(1.2)'}} />
-             <canvas ref={canvasRef} width="320" height="240" className="hidden" />
-             <div style={{position:'absolute', inset:0, background:'repeating-linear-gradient(0deg, rgba(0,0,0,0.1) 0px, rgba(0,0,0,0.1) 1px, transparent 2px)', pointerEvents:'none'}} />
-          </div>
-        )}
-      </div>
-
-      <div className="chat-history-container" style={{backgroundColor: '#050505', backgroundImage: 'radial-gradient(#111 1px, transparent 0)', backgroundSize: '20px 20px'}}>
-        {logs.map(log => {
-          if (log.type === 'system') {
-              return null;
-          }
-          const name = log.type === 'user' ? 'USER' : 'AGENT';
-          const isAgent = log.type === 'model';
-          return (
-            <div key={log.id} className={`chat-message-base chat-message-${log.type} ${log.id.includes('-stream-') ? 'animate-pulse' : ''}`}>
-              <div style={{fontSize: '0.7rem', marginBottom: '0.2rem', opacity: 0.8, fontWeight: 'bold', display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
-                <div>
-                  {name} <span style={{opacity:0.5, marginLeft: '0.2rem', fontWeight: 'normal'}}>[{new Date(log.timestamp).toLocaleTimeString()}]</span>
+      {/* MAIN VIEWPORT */}
+      <main className="main-viewport">
+        {currentView === 'COUNCIL' ? (
+            <MultiAgentConsole onExit={() => setCurrentView('ORCHESTRATOR')} />
+        ) : (
+            <>
+                {/* ORCHESTRATOR / LIVE VIEW */}
+                <div style={visualizerStyle}>
+                    <div className="panel-overlay top-left">
+                        <span className="overlay-label">
+                            VISUALIZER // {selectedVoice.toUpperCase()} // {isCameraOn ? 'CAM ON' : 'CAM OFF'} {layoutMode === 'VIDEO' ? '// VIDEO MODE' : ''}
+                        </span>
+                    </div>
+                    <canvas ref={canvasRef} className="hidden" />
+                    <div style={{ 
+                        position: 'absolute', bottom: '10px', right: '10px', width: '160px', height: '120px', 
+                        background: '#000', border: '1px solid #4ade80', display: isCameraOn ? 'block' : 'none', 
+                        zIndex: 30, boxShadow: '0 0 10px rgba(0,0,0,0.5)'
+                    }}>
+                        <video ref={videoRef} autoPlay playsInline muted style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    </div>
+                    <Visualizer analyser={analyserRef.current} isActive={connectionState === ConnectionState.CONNECTED} />
                 </div>
-                
-                {/* TTS PLAY BUTTON FOR AGENT MESSAGES */}
-                {isAgent && agentVoiceRef && !log.id.includes('-stream-') && (
-                    <button 
-                        onClick={() => playTts(log.text, log.id)} 
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: isSpeaking === log.id ? '#4ade80' : '#666' }}
-                        title="Dub Message (Voice Clone)"
-                    >
-                        {isSpeaking === log.id ? (
-                            <span className="animate-pulse">🔊 SPEAKING...</span>
-                        ) : (
-                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+
+                <div style={chatStyle}>
+                    <div className="logs-container">
+                        {logs.length === 0 && (
+                            <div className="empty-state">
+                                <p>SYSTEM READY.</p>
+                                <p>INITIALIZE CONNECTION TO BEGIN.</p>
+                            </div>
                         )}
-                    </button>
-                )}
-              </div>
-              {log.attachment && (
-                  <div style={{ margin: '0.5rem 0' }}>
-                      {log.attachmentType === 'video' ? (
-                          <video 
-                              src={log.attachment} 
-                              controls 
-                              autoPlay 
-                              muted 
-                              loop 
-                              style={{ maxWidth: '100%', maxHeight: '300px', borderRadius: '4px', border: '1px solid #4ade80' }} 
-                          />
-                      ) : (
-                          <img 
-                              src={log.attachment} 
-                              alt="Model Output" 
-                              style={{ maxWidth: '100%', maxHeight: '300px', borderRadius: '4px', border: '1px solid #4ade80' }} 
-                          />
-                      )}
-                  </div>
-              )}
-              {log.text}
-            </div>
-          );
-        })}
-        <div ref={logsEndRef} />
-      </div>
+                        {logs.map(log => (
+                            <div key={log.id} className={`log-entry ${log.type}`}>
+                                <div style={{display:'flex', justifyContent:'space-between'}}>
+                                    <span className="log-sender">{log.type.toUpperCase()}</span>
+                                    <span className="log-timestamp">{new Date(log.timestamp).toLocaleTimeString()}</span>
+                                </div>
+                                <span className="log-text">{log.text}</span>
+                                {log.isStreaming && <span className="animate-pulse">_</span>}
+                            </div>
+                        ))}
+                        <div ref={logEndRef} />
+                    </div>
+                </div>
+            </>
+        )}
+      </main>
 
-      <div className="chat-input-container">
-          <input 
-              type="file" 
-              accept="image/*,.txt,.md,.json" 
-              ref={fileInputRef} 
-              className="hidden" 
-              onChange={handleFileSelect} 
-          />
-          
-          <div className="chat-input-wrapper">
-              {attachment && (
-                  <div className="attachment-preview">
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                          {attachment.type === 'image' ? (
-                              <img src={attachment.preview} alt="preview" className="attachment-thumb" />
-                          ) : (
-                              <span style={{ fontSize: '0.75rem', color: '#a3a3a3' }}>{attachment.preview}</span>
-                          )}
-                      </div>
-
-                      <button 
-                          onClick={clearAttachment}
-                          style={{background:'none', border:'none', color:'#f87171', cursor:'pointer', fontWeight:'bold'}}
-                      >
-                          X
-                      </button>
-                  </div>
-              )}
-              
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', width: '100%' }}>
-                  
-                  <div style={{ position: 'relative', flex: '0 0 auto' }} title="Task Routing Mode">
-                      <select 
-                          value={toolMode}
-                          onChange={(e) => setToolMode(e.target.value as ToolMode)}
-                          disabled={connectionState !== ConnectionState.CONNECTED}
-                          className="form-select"
-                          style={{ 
-                              backgroundColor: '#111', 
-                              color: getInputBorderColor() || '#a3a3a3', 
-                              border: `1px solid ${getInputBorderColor() || '#333'}`,
-                              width: 'auto',
-                              minWidth: '120px'
-                          }}
-                      >
-                          <option value="STANDARD">STANDARD</option>
-                          <option value="DEEP">DEEP REASON</option>
-                          <option value="IMAGE">IMAGE GEN</option>
-                          <option value="EXTERNAL">EXTERNAL LLM</option>
-                      </select>
-                  </div>
-
+      {/* COMMAND DECK (Footer) - Hidden in Council Mode */}
+      <footer className={`command-deck ${activeSidePanel ? 'minimized' : ''} ${currentView === 'COUNCIL' ? 'hidden' : ''}`}>
+          {/* TRAY */}
+          <div className="tray-controls">
+              <div className="flex-group">
                   <button 
-                      className="btn btn-secondary btn-icon"
-                      onClick={() => fileInputRef.current?.click()}
-                      disabled={connectionState !== ConnectionState.CONNECTED}
-                      title="Attach File (Image, TXT, MD, JSON)"
-                      style={{ flex: '0 0 auto' }}
+                    onClick={() => setIsMicOn(!isMicOn)} 
+                    className={`btn btn-icon ${isMicOn ? 'active-green' : 'btn-danger'}`}
+                    title={isMicOn ? "Microphone Active" : "Microphone Muted"}
                   >
-                      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-                      </svg>
+                      {isMicOn ? (
+                          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>
+                      ) : (
+                          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="1" y1="1" x2="23" y2="23"></line><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"></path><path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>
+                      )}
                   </button>
+                  <button 
+                    onClick={toggleCamera} 
+                    className={`btn btn-icon ${isCameraOn ? 'active-green' : ''}`}
+                    title="Toggle Camera"
+                  >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
+                  </button>
+              </div>
 
-                  <input 
-                      type="text" 
-                      className="chat-input" 
-                      placeholder={connectionState === ConnectionState.CONNECTED ? (isMicMuted ? "Type message (Mic Muted)..." : "Type a message...") : "Connect to chat..."}
-                      value={inputText}
-                      onChange={(e) => setInputText(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && handleSendText()}
-                      disabled={connectionState !== ConnectionState.CONNECTED}
-                      style={{ borderColor: getInputBorderColor(), flex: 1, width: 'auto', minWidth: 0 }}
-                      onFocus={() => { isTypingRef.current = true; }}
-                      onBlur={() => { 
-                          setTimeout(() => { isTypingRef.current = false; }, 200); 
-                      }}
-                  />
+              <div className="flex-group">
+                  <button onClick={() => setCurrentView('COUNCIL')} className="btn btn-xs" title="Open Multi-Agent Console">COUNCIL</button>
+                  <button onClick={() => setIsTerminalOpen(!isTerminalOpen)} className="btn btn-xs" title="Open Terminal">TERM (~)</button>
+              </div>
+
+              <div className="flex-group">
+                  <button onClick={() => setLayoutMode('VIDEO')} className={`btn btn-xs ${layoutMode === 'VIDEO' ? 'active' : ''}`}>VIDEO</button>
+                  <button onClick={() => setLayoutMode('AUDIO')} className={`btn btn-xs ${layoutMode === 'AUDIO' ? 'active' : ''}`}>AUDIO</button>
+                  <button onClick={() => setLayoutMode('HYBRID')} className={`btn btn-xs ${layoutMode === 'HYBRID' ? 'active' : ''}`}>HYBRID</button>
+                  <button onClick={() => setLayoutMode('CHAT')} className={`btn btn-xs ${layoutMode === 'CHAT' ? 'active' : ''}`}>CHAT</button>
               </div>
           </div>
-          
-          <button 
-              className="btn btn-secondary" 
-              onClick={handleSendText}
-              disabled={connectionState !== ConnectionState.CONNECTED || (!inputText.trim() && !attachment && !activeCloudFileUri)}
-          >
-              SEND
-          </button>
-      </div>
+
+          {/* INPUT: Text & Actions */}
+          <div className="input-bar">
+              <input 
+                  type="text" 
+                  className="main-input"
+                  placeholder={connectionState === ConnectionState.CONNECTED ? "Type message to agent..." : "Connect to start conversation..."}
+                  value={inputText}
+                  onChange={(e) => setInputText(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleSendText()}
+                  disabled={connectionState !== ConnectionState.CONNECTED}
+              />
+              {connectionState === ConnectionState.CONNECTED ? (
+                 <button onClick={disconnect} className="btn btn-danger" style={{ fontWeight: 'bold' }}>STOP</button>
+              ) : (
+                 <button onClick={connect} className="btn btn-primary" disabled={connectionState === ConnectionState.CONNECTING}>
+                     {connectionState === ConnectionState.CONNECTING ? '...' : 'START'}
+                 </button>
+              )}
+              <button onClick={handleSendText} className="btn btn-secondary" disabled={!inputText.trim() || connectionState !== ConnectionState.CONNECTED}>SEND</button>
+          </div>
+      </footer>
+
+      {/* OVERLAYS */}
+      <Terminal 
+        isOpen={isTerminalOpen} 
+        onClose={() => setIsTerminalOpen(false)} 
+        onSwitchAgent={handleAgentChange}
+        currentAgentHandle={currentAgent?.handle || 'guest'}
+      />
+
     </div>
   );
 };

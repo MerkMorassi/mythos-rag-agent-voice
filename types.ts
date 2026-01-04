@@ -9,6 +9,7 @@ export interface KnowledgeDoc {
   // Optional NumMark metadata
   numMarkId?: string;
   tags?: string[];
+  permissions?: string; // UNIX-style "644", "777"
 }
 
 export enum ConnectionState {
@@ -23,6 +24,7 @@ export interface LogMessage {
   type: 'user' | 'model' | 'system' | 'tool';
   text: string;
   timestamp: number;
+  isStreaming?: boolean; // Tracks if the message is currently being generated
   feedback?: 'up' | 'down';
   attachment?: string; // Base64 image data or Video URI
   attachmentType?: 'image' | 'video' | 'text' | 'audio';
@@ -51,7 +53,11 @@ export interface AgentConfig {
   agentId: string;
   systemInstruction: string;
   modelConfig: ModelConfig;
+  voiceName?: string;      // Persisted Voice Selection
   voiceReference?: string; // Base64 audio string for Voice Cloning
+  voiceSpeed?: number;     // Playback Rate (default 1.0)
+  voicePitch?: number;     // Detune in Semitones (default 0)
+  accessLevel?: string; // "777", "755", etc.
 }
 
 export interface CloudFile {
@@ -66,12 +72,15 @@ export interface CloudFile {
 
 // SOMA PERMISSION TYPES
 export type SomaPermission = 
-  | 'READ_LORE'      // Can search RAG
-  | 'WRITE_LORE'     // Can save to RAG
-  | 'MODIFY_LORE'    // Can update/delete RAG
-  | 'EXECUTE_CODE'   // Can run code/tools
-  | 'ROUTE_EXTERNAL' // Can call other models
-  | 'ADMIN_OVERRIDE'; // Can change settings
+  | 'READ_LORE'      // 400
+  | 'WRITE_LORE'     // 200
+  | 'MODIFY_LORE'    // 100
+  | 'EXECUTE_CODE'   // 040
+  | 'ROUTE_EXTERNAL' // 020
+  | 'GENERATE_MEDIA' // 010
+  | 'ADMIN_OVERRIDE' // 004
+  | 'BROADCAST_COUNCIL' // 002
+  | 'SELF_UPDATE';   // 001
 
 export interface Agent {
   id: string;
@@ -80,7 +89,9 @@ export interface Agent {
   system_instruction: string;
   voice: string;
   voiceReference?: string; 
-  permissions: SomaPermission[]; // SOMA Schema
+  accessLevel: string; // Default CHMOD like "755"
+  pronouns?: string; // "he/him", "she/her", "they/them"
+  permissions?: SomaPermission[]; // Explicit capabilities list
 }
 
 // --- LOREPACK SCHEMA (MYTHOS.LOREPACK.v1) ---

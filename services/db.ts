@@ -10,7 +10,6 @@ const PROMPT_STORE_NAME = 'saved_prompts';
 const DB_VERSION = 7;
 
 // --- PORTABILITY INTERFACE ---
-// Implement this interface for Postgres/pgVector or other backends
 export interface IVectorStore {
     addDocument(doc: KnowledgeDoc): Promise<void>;
     updateDocument(id: string, content: string): Promise<void>;
@@ -98,6 +97,8 @@ export const addDocument = async (doc: KnowledgeDoc): Promise<void> => {
   return new Promise((resolve, reject) => {
     const transaction = db.transaction([STORE_NAME], 'readwrite');
     const store = transaction.objectStore(STORE_NAME);
+    // Default UNIX permission for files if not set: 644 (rw-r--r--)
+    if (!doc.permissions) doc.permissions = '644';
     const request = store.put(doc);
     request.onsuccess = () => resolve();
     request.onerror = () => reject(request.error);
@@ -118,8 +119,29 @@ export const updateDocumentContent = async (id: string, newContent: string): Pro
                 return;
             }
             doc.content = newContent;
-            doc.timestamp = Date.now(); // Update timestamp
-            // Note: Embedding is now stale, ideal to re-embed, but treating as text update for now.
+            doc.timestamp = Date.now(); 
+            const putReq = store.put(doc);
+            putReq.onsuccess = () => resolve();
+            putReq.onerror = () => reject(putReq.error);
+        };
+        getReq.onerror = () => reject(getReq.error);
+    });
+};
+
+export const updateDocumentPermissions = async (id: string, permissions: string): Promise<void> => {
+    const db = await initDB();
+    return new Promise((resolve, reject) => {
+        const transaction = db.transaction([STORE_NAME], 'readwrite');
+        const store = transaction.objectStore(STORE_NAME);
+        
+        const getReq = store.get(id);
+        getReq.onsuccess = () => {
+            const doc = getReq.result as KnowledgeDoc;
+            if (!doc) {
+                reject("Document not found");
+                return;
+            }
+            doc.permissions = permissions;
             const putReq = store.put(doc);
             putReq.onsuccess = () => resolve();
             putReq.onerror = () => reject(putReq.error);
@@ -135,7 +157,10 @@ export const bulkAddDocuments = async (docs: KnowledgeDoc[]): Promise<void> => {
     const store = transaction.objectStore(STORE_NAME);
     transaction.oncomplete = () => resolve();
     transaction.onerror = () => reject(transaction.error);
-    docs.forEach(doc => { store.put(doc); });
+    docs.forEach(doc => { 
+        if(!doc.permissions) doc.permissions = '644';
+        store.put(doc); 
+    });
   });
 };
 
@@ -315,7 +340,7 @@ export const getGeneralInstructions = async (): Promise<string> => {
   });
 };
 
-export const saveAgentConfig = async (agentId: string, config: { instruction: string, modelConfig: ModelConfig, voiceReference?: string }): Promise<void> => {
+export const saveAgentConfig = async (agentId: string, config: { instruction: string, modelConfig: ModelConfig, voiceName?: string, voiceReference?: string, accessLevel?: string, voiceSpeed?: number, voicePitch?: number }): Promise<void> => {
   const db = await initDB();
   return new Promise((resolve, reject) => {
     const transaction = db.transaction([CONFIG_STORE_NAME], 'readwrite');
@@ -326,13 +351,13 @@ export const saveAgentConfig = async (agentId: string, config: { instruction: st
   });
 };
 
-export const getAgentConfig = async (agentId: string): Promise<{ instruction: string, modelConfig: ModelConfig, voiceReference?: string }> => {
+export const getAgentConfig = async (agentId: string): Promise<{ instruction: string, modelConfig: ModelConfig, voiceName?: string, voiceReference?: string, accessLevel?: string, voiceSpeed?: number, voicePitch?: number }> => {
   const db = await initDB();
   return new Promise((resolve, reject) => {
     const transaction = db.transaction([CONFIG_STORE_NAME], 'readonly');
     const store = transaction.objectStore(CONFIG_STORE_NAME);
     const request = store.get(`agent_config_${agentId}`);
-    request.onsuccess = () => { resolve(request.result?.value || { instruction: '', modelConfig: DEFAULT_MODEL_CONFIG }); };
+    request.onsuccess = () => { resolve(request.result?.value || { instruction: '', modelConfig: DEFAULT_MODEL_CONFIG, accessLevel: '' }); };
     request.onerror = () => reject(request.error);
   });
 };
@@ -400,7 +425,6 @@ export const searchDocuments = async (query: string, queryEmbedding?: number[], 
 
   const scoredDocs = docsToSearch.map(doc => {
       // 1. Vector Score (Semantic)
-      // Clamping negative cosine similarity to 0 to avoid punishing distinct but related concepts
       let vectorScore = 0;
       if (doc.embedding && queryEmbedding) {
           const rawScore = cosineSimilarity(queryEmbedding, doc.embedding);
@@ -417,13 +441,11 @@ export const searchDocuments = async (query: string, queryEmbedding?: number[], 
       
       const keywordScore = Math.min(keywordHits * 0.2, 1.0);
 
-      // 3. Hybrid Fusion: Weighted Scoring
-      // Priority: Semantic (70%) > Keyword (30%)
+      // 3. Hybrid Fusion
       let finalScore = 0;
       if (queryEmbedding && doc.embedding) {
           finalScore = (vectorScore * 0.7) + (keywordScore * 0.3);
       } else {
-          // Fallback to Keyword Only if embeddings are missing
           finalScore = keywordScore;
       }
 
@@ -435,4 +457,111 @@ export const searchDocuments = async (query: string, queryEmbedding?: number[], 
     .sort((a, b) => b.score - a.score)
     .slice(0, 8) 
     .map(item => item.doc);
+};
+
+// --- SIMULATED SQL ENGINE ---
+export const executeSql = async (query: string): Promise<string> => {
+    const upperQuery = query.trim().toUpperCase();
+    
+    // DELETE
+    if (upperQuery.startsWith('DELETE FROM')) {
+        const tableMatch = upperQuery.match(/DELETE FROM (\w+)/);
+        const table = tableMatch ? tableMatch[1] : '';
+        if (table !== 'LORE') return `Error: Table '${table}' not found. Only 'LORE' supported.`;
+        
+        // WHERE clause
+        const whereMatch = query.match(/WHERE\s+(.+)$/i);
+        if (!whereMatch) return "Error: DELETE requires WHERE clause.";
+        
+        const condition = whereMatch[1];
+        const allDocs = await getAllDocuments();
+        let deletedCount = 0;
+        
+        for (const doc of allDocs) {
+            // Simple condition parser: id = '...'
+            // Very basic support for now: id equals, or content like
+            let match = false;
+            
+            if (condition.toUpperCase().includes("ID =")) {
+                const targetId = condition.split('=')[1].trim().replace(/['"]/g, '');
+                if (doc.id === targetId) match = true;
+            } else if (condition.toUpperCase().includes("LIKE")) {
+                const term = condition.split(/LIKE/i)[1].trim().replace(/['"%]/g, '').toLowerCase();
+                if (doc.content.toLowerCase().includes(term) || doc.title.toLowerCase().includes(term)) match = true;
+            }
+            
+            if (match) {
+                await deleteDocument(doc.id);
+                deletedCount++;
+            }
+        }
+        return `Query executed. ${deletedCount} rows deleted.`;
+    }
+    
+    // UPDATE
+    if (upperQuery.startsWith('UPDATE')) {
+        const tableMatch = upperQuery.match(/UPDATE (\w+)/);
+        const table = tableMatch ? tableMatch[1] : '';
+        if (table !== 'LORE') return `Error: Table '${table}' not found.`;
+        
+        // SET clause
+        const setMatch = query.match(/SET\s+(.+?)\s+WHERE/i);
+        if (!setMatch) return "Error: UPDATE syntax: UPDATE lore SET col=val WHERE ...";
+        
+        const setClause = setMatch[1]; // e.g. content = 'new text'
+        // Naive parser for column=value
+        const [col, val] = setClause.split('=').map(s => s.trim());
+        const cleanVal = val.replace(/^['"]|['"]$/g, '');
+        
+        // WHERE clause
+        const whereMatch = query.match(/WHERE\s+(.+)$/i);
+        if (!whereMatch) return "Error: UPDATE requires WHERE clause.";
+        
+        const condition = whereMatch[1];
+        const allDocs = await getAllDocuments();
+        let updatedCount = 0;
+        
+        for (const doc of allDocs) {
+            let match = false;
+            if (condition.toUpperCase().includes("ID =")) {
+                const targetId = condition.split('=')[1].trim().replace(/['"]/g, '');
+                if (doc.id === targetId) match = true;
+            }
+            
+            if (match) {
+                if (col.toUpperCase() === 'CONTENT') {
+                    await updateDocumentContent(doc.id, cleanVal);
+                    updatedCount++;
+                } else if (col.toUpperCase() === 'PERMISSIONS') {
+                    await updateDocumentPermissions(doc.id, cleanVal);
+                    updatedCount++;
+                }
+            }
+        }
+        return `Query executed. ${updatedCount} rows updated.`;
+    }
+
+    // SELECT
+    if (upperQuery.startsWith('SELECT')) {
+        // Syntax: SELECT * FROM lore WHERE content LIKE '%query%'
+        const likeMatch = query.match(/LIKE\s+['"]%?(.*?)%?['"]/i);
+        const term = likeMatch ? likeMatch[1] : '';
+        
+        if (!term && !upperQuery.includes('*')) return "Error: SELECT requires 'WHERE content LIKE' or similar.";
+        
+        let results = await getAllDocuments();
+        if (term) {
+            results = await searchDocuments(term);
+        }
+        
+        if (results.length === 0) return '0 rows returned.';
+
+        const rows = results.map(r => `| ${r.id.substring(0,8)}... | ${r.title.padEnd(20).substring(0,20)} | ${(r.permissions || '644').padEnd(5)} | ${(r.agentId || 'ALL').padEnd(10)} |`);
+        const header = `| ID           | TITLE                | PERM  | OWNER      |`;
+        const sep = `+--------------+----------------------+-------+------------+`;
+        
+        return `<pre>${sep}\n${header}\n${sep}\n${rows.join('\n')}\n${sep}\n(${results.length} rows)</pre>`;
+    }
+
+    return "SQL Error: Command not supported. Use SELECT, UPDATE, DELETE.";
 };

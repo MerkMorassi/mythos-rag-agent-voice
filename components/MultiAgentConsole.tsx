@@ -12,7 +12,7 @@ import {
 import { RoomFocusService } from '../services/roomFocus';
 
 interface MultiAgentConsoleProps {
-    onClose: () => void;
+    onExit: () => void;
 }
 
 const CONFERENCE_ID = 'CONFERENCE_MAIN';
@@ -21,7 +21,7 @@ const ARCHIVAX_ID = 'ARCHIVAX';
 // Filter out Gemini Core for the Multi-Agent Conference
 const CONFERENCE_AGENTS = AGENTS.filter(a => a.id !== 'GEMINI_CORE');
 
-export const MultiAgentConsole: React.FC<MultiAgentConsoleProps> = ({ onClose }) => {
+export const MultiAgentConsole: React.FC<MultiAgentConsoleProps> = ({ onExit }) => {
     const [messages, setMessages] = useState<MultiAgentMessage[]>([]);
     const [input, setInput] = useState('');
     
@@ -268,6 +268,9 @@ RULES:
 ${focus.rules.map(r => "- " + r).join('\n')}
 `;
 
+        // --- ROSTER PREPARATION ---
+        const currentRoster = CONFERENCE_AGENTS.filter(a => activeAgents.has(a.id));
+
         const spokenSet = new Set<string>();
         const processingQueue = [...targetIds];
 
@@ -289,7 +292,8 @@ ${focus.rules.map(r => "- " + r).join('\n')}
                 userText, 
                 messages, 
                 generalInstructions,
-                focusContext, // Pass focus context
+                focusContext, 
+                currentRoster, // Pass active agents list for context
                 currentAttachment 
             );
 
@@ -311,104 +315,127 @@ ${focus.rules.map(r => "- " + r).join('\n')}
     };
 
     return (
-        <div style={{ display: 'grid', gridTemplateColumns: '160px 1fr', height: '100%', gap: '1rem' }}>
-            <div className="section-panel" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', overflow: 'hidden', padding: '0.75rem' }}>
-                <div className="section-header" style={{ marginBottom: '0.5rem' }}><span className="section-header-title">ROSTER ({activeAgents.size})</span></div>
-                <div style={{ overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+        <div className="council-layout">
+            
+            {/* LEFT SIDEBAR: AGENT ROSTER */}
+            <div className="council-sidebar">
+                <div style={{ paddingBottom: '1rem', borderBottom: '1px solid #333' }}>
+                    <div className="section-header-title" style={{ marginBottom: '0.5rem', color: '#38bdf8' }}>COUNCIL ROSTER</div>
+                    <div className="flex-group">
+                        <button className="btn btn-secondary btn-xs" style={{ flex: 1 }} onClick={selectAllCapable}>SELECT ALL</button>
+                        <button className="btn btn-secondary btn-xs" style={{ flex: 1 }} onClick={() => setActiveAgents(new Set())}>NONE</button>
+                    </div>
+                </div>
+                
+                <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                     {CONFERENCE_AGENTS.map(agent => {
                         const hasLore = (agentCounts[agent.id] || 0) > 0;
                         const isActive = activeAgents.has(agent.id);
                         const isInit = initializingAgents.has(agent.id);
+                        
                         return (
                             <div 
                                 key={agent.id} 
                                 onClick={() => toggleAgent(agent.id)}
-                                title={hasLore ? `${agentCounts[agent.id]} documents loaded` : "No LorePack loaded (Offline)"}
-                                style={{ 
-                                    padding: '0.4rem', 
-                                    background: isActive ? '#111' : '#000',
-                                    border: '1px solid',
-                                    borderColor: isActive ? '#4ade80' : '#333',
-                                    borderRadius: '4px',
-                                    cursor: hasLore ? 'pointer' : 'not-allowed',
-                                    opacity: hasLore ? (isActive ? 1 : 0.6) : 0.3,
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '0.5rem',
-                                    transition: 'all 0.2s'
-                                }}
+                                className={`agent-card ${isActive ? 'active' : ''} ${!hasLore ? 'disabled' : ''}`}
                             >
-                                <div style={{ 
-                                    width:'6px', height:'6px', borderRadius:'50%', flexShrink: 0,
-                                    background: isInit ? '#facc15' : (hasLore ? (isActive ? '#4ade80' : '#666') : '#f87171') 
-                                }} className={isInit ? 'animate-pulse' : ''} />
-                                <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                                    <span style={{ fontWeight: 'bold', fontSize: '0.7rem', color: '#eee', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>{agent.handle}</span>
-                                    <span style={{ fontSize: '0.55rem', color: isInit ? '#facc15' : (hasLore ? '#666' : '#f87171') }}>
-                                        {isInit ? 'MOUNTING...' : (hasLore ? 'ONLINE' : 'OFFLINE')}
-                                    </span>
+                                <div className="agent-avatar">
+                                    {isInit ? <span className="animate-pulse">●</span> : agent.handle.substring(0,2).toUpperCase()}
                                 </div>
+                                <div style={{ flex: 1 }}>
+                                    <div style={{ fontWeight: 'bold', fontSize: '0.8rem', color: '#eee' }}>{agent.handle}</div>
+                                    <div style={{ fontSize: '0.65rem', color: hasLore ? (isActive ? '#4ade80' : '#666') : '#f87171' }}>
+                                        {hasLore ? `${agentCounts[agent.id]} DOCS` : 'OFFLINE'}
+                                    </div>
+                                </div>
+                                {isActive && <span style={{ color: '#4ade80', fontSize: '0.7rem' }}>●</span>}
                             </div>
                         );
                     })}
                 </div>
-                <div style={{ paddingTop: '0.5rem', borderTop: '1px solid #333', display: 'flex', gap: '0.25rem' }}>
-                    <button className="btn btn-secondary" style={{ flex: 1, padding: '0.25rem', fontSize:'0.65rem' }} onClick={selectAllCapable}>ALL</button>
-                    <button className="btn btn-secondary" style={{ flex: 1, padding: '0.25rem', fontSize:'0.65rem' }} onClick={() => setActiveAgents(new Set())}>NONE</button>
-                </div>
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', minHeight: 0 }}>
-                <div className="section-header" style={{ marginBottom: 0, paddingBottom: '0.5rem', display: 'flex', justifyContent: 'space-between' }}>
-                    <span className="section-header-title">CONFERENCE TRANSCRIPT [REC: ARCHIVAX]</span>
-                    <div style={{ display: 'flex', gap: '0.5rem' }}>
-                        <button onClick={handleClearHistory} className="btn btn-danger" style={{ width: 'auto' }}>CLEAR CHAT</button>
-                        <button onClick={onClose} className="btn btn-secondary" style={{ width: 'auto' }}>EXIT TO UPLINK</button>
+            {/* MAIN AREA */}
+            <div className="council-main">
+                
+                {/* HEADER */}
+                <div className="council-header">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                        <span style={{ fontSize: '1rem', fontWeight: 'bold', color: '#eee', letterSpacing: '2px' }}>ARCHIVAX PROTOCOL</span>
+                        <span style={{ fontSize: '0.7rem', color: '#666', border: '1px solid #333', padding: '0.2rem 0.5rem', borderRadius: '4px' }}>
+                            FOCUS: {RoomFocusService.getActive().id}
+                        </span>
+                    </div>
+                    <div className="flex-group">
+                        <button onClick={handleClearHistory} className="btn btn-danger btn-xs">CLEAR TRANSCRIPT</button>
+                        <button onClick={onExit} className="btn btn-secondary btn-xs" style={{ borderColor: '#facc15', color: '#facc15' }}>EXIT TO UPLINK</button>
                     </div>
                 </div>
 
-                <div className="chat-history-container" style={{ flex: 1 }}>
+                {/* TRANSCRIPT */}
+                <div className="council-transcript">
                     {messages.map(msg => (
-                        <div key={msg.id} className={`chat-message-base ${msg.senderId === 'USER' ? 'chat-message-user' : msg.senderId === 'SYSTEM' ? 'chat-message-system' : 'chat-message-model'}`}>
-                            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', fontSize: '0.7rem', marginBottom: '0.2rem', opacity: 0.8, fontWeight: 'bold', color: msg.senderId === 'USER' ? '#aaddff' : (msg.senderId === 'SYSTEM' ? '#4ade80' : '#a78bfa') }}>
-                                <span>{msg.senderName.toUpperCase()} <span style={{ opacity: 0.5, fontWeight: 'normal', marginLeft: '0.5rem' }}>{new Date(msg.timestamp).toLocaleTimeString()}</span></span>
-                                {msg.targets && msg.targets.length > 0 && (
-                                    <span style={{ fontSize:'0.6rem', color:'#666', border:'1px solid #333', padding:'0 4px', borderRadius:'3px' }}>
-                                        To: {msg.targets.length === CONFERENCE_AGENTS.length ? 'ALL' : msg.targets.join(', ')}
-                                    </span>
-                                )}
-                            </div>
-                            {msg.attachment && msg.attachment.startsWith('data:image') && (
-                                <div style={{ margin: '0.5rem 0' }}>
-                                    <img src={msg.attachment} alt="Attachment" style={{ maxWidth: '200px', borderRadius: '4px', border: '1px solid #4ade80' }} />
-                                </div>
+                        <div key={msg.id} className={`council-msg ${msg.senderId === 'USER' ? 'user' : (msg.senderId === 'SYSTEM' ? 'system' : 'agent')}`}>
+                            {msg.senderId !== 'SYSTEM' && (
+                                <span className="council-sender" style={{ color: msg.senderId === 'USER' ? '#38bdf8' : '#a78bfa' }}>
+                                    {msg.senderName} 
+                                    {msg.targets && msg.targets.length > 0 && <span style={{ opacity: 0.5, marginLeft: '0.5rem', fontWeight: 'normal', fontSize: '0.65rem' }}>to {msg.targets.length} agents</span>}
+                                </span>
                             )}
-                            <div style={{ whiteSpace: 'pre-wrap', opacity: msg.isThinking ? 0.5 : 1 }}>
-                                {msg.text}
-                            </div>
+                            
+                            {msg.attachment && msg.attachment.startsWith('data:image') && (
+                                <img src={msg.attachment} alt="Attachment" style={{ maxWidth: '100%', borderRadius: '4px', border: '1px solid #333', marginBottom: '0.5rem' }} />
+                            )}
+                            
+                            <div style={{ whiteSpace: 'pre-wrap', opacity: msg.isThinking ? 0.6 : 1 }}>{msg.text}</div>
                         </div>
                     ))}
                     <div ref={endRef} />
                 </div>
 
-                <div className="chat-input-container">
+                {/* INPUT AREA */}
+                <div className="council-input-area">
                     <input type="file" accept="image/*,.txt,.md,.json" ref={fileInputRef} className="hidden" onChange={handleFileSelect} />
-                    <button className="btn btn-secondary btn-icon" onClick={() => fileInputRef.current?.click()} disabled={isProcessing} title="Attach File to Conference">
+                    
+                    <button 
+                        className="btn btn-secondary btn-icon" 
+                        onClick={() => fileInputRef.current?.click()} 
+                        disabled={isProcessing}
+                        title="Attach File"
+                        style={{ height: '3rem', width: '3rem' }}
+                    >
                         <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" /></svg>
                     </button>
-                    <div className="chat-input-wrapper">
+
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                         {attachment && (
-                            <div className="attachment-preview" style={{ padding: '0.25rem 0.5rem', marginBottom: '0.25rem', fontSize: '0.75rem' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                    {attachment.type === 'image' ? <img src={attachmentPreview || ''} alt="preview" style={{ width: '20px', height: '20px', objectFit: 'cover' }} /> : <span>📄</span>}
-                                    <span style={{ color: '#a3a3a3', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{attachment.type === 'image' ? 'Image Attached' : attachmentPreview}</span>
-                                </div>
-                                <button onClick={clearAttachment} style={{background:'none', border:'none', color:'#f87171', cursor:'pointer', fontWeight:'bold'}}>X</button>
+                            <div className="section-panel" style={{ padding: '0.25rem 0.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderColor: '#4ade80' }}>
+                                <span style={{ fontSize: '0.75rem', color: '#4ade80' }}>
+                                    ATTACHED: {attachment.name || (attachment.type === 'image' ? 'Image' : 'Text File')}
+                                </span>
+                                <button onClick={clearAttachment} style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', fontWeight: 'bold' }}>×</button>
                             </div>
                         )}
-                        <input type="text" className="chat-input" placeholder={isProcessing ? "Agents are deliberating..." : "Broadcast to active agents (or use @Name)..."} value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleBroadcast()} disabled={isProcessing} />
+                        <input 
+                            type="text" 
+                            className="main-input" 
+                            placeholder={isProcessing ? "Agents are deliberating..." : "Broadcast to Council (or use @AgentName)..."} 
+                            value={input} 
+                            onChange={e => setInput(e.target.value)} 
+                            onKeyDown={e => e.key === 'Enter' && handleBroadcast()} 
+                            disabled={isProcessing} 
+                            style={{ height: '3rem' }}
+                        />
                     </div>
-                    <button className="btn btn-secondary" onClick={handleBroadcast} disabled={isProcessing || (!input.trim() && !attachment)} style={{ width: 'auto', padding: '0 2rem' }}>{isProcessing ? 'BUSY' : 'BROADCAST'}</button>
+
+                    <button 
+                        className="btn btn-primary" 
+                        onClick={handleBroadcast} 
+                        disabled={isProcessing || (!input.trim() && !attachment)} 
+                        style={{ height: '3rem', padding: '0 2rem', fontWeight: 'bold', fontSize: '0.9rem' }}
+                    >
+                        {isProcessing ? 'PROCESSING' : 'BROADCAST'}
+                    </button>
                 </div>
             </div>
         </div>

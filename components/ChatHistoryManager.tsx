@@ -11,16 +11,21 @@ interface ChatHistoryManagerProps {
   onLoadSession: (logs: LogMessage[]) => void;
   currentAgentId: string;
   onUpdateKnowledge: () => void;
+  isOpen: boolean;
+  onOpen: () => void;
+  onClose: () => void;
 }
 
 const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({ 
     currentLogs, 
     onLoadSession,
     currentAgentId,
-    onUpdateKnowledge
+    onUpdateKnowledge,
+    isOpen,
+    onOpen,
+    onClose
 }) => {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
-  const [isOpen, setIsOpen] = useState(false);
   const [sessionName, setSessionName] = useState('');
   const [ingestingId, setIngestingId] = useState<string | null>(null);
   
@@ -96,7 +101,7 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
     const confirmLoad = window.confirm("Loading a session will replace the current chat history. Continue?");
     if (confirmLoad) {
       onLoadSession(session.logs);
-      setIsOpen(false);
+      onClose();
     }
   };
   
@@ -104,7 +109,7 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
       const confirmClear = window.confirm("Are you sure you want to clear the current chat?");
       if(confirmClear) {
           onLoadSession([]);
-          setIsOpen(false);
+          onClose();
       }
   }
 
@@ -228,7 +233,7 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
   if (!isOpen) {
     return (
       <button 
-        onClick={() => setIsOpen(true)}
+        onClick={onOpen}
         className="btn btn-secondary btn-icon"
         title="Chat History"
       >
@@ -247,7 +252,7 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
           <div className="flex-group">
              <span className="modal-section-title">SESSION HISTORY</span>
           </div>
-          <button onClick={() => setIsOpen(false)} className="close-btn">
+          <button onClick={onClose} className="close-btn">
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         </div>
@@ -272,7 +277,7 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
                   CLEAR CHAT
                 </button>
             </div>
-            <form onSubmit={handleSave} className="flex-col" style={{marginTop: '1rem'}}>
+            <form onSubmit={handleSave} className="flex-col" style={{marginTop: '1rem', gap: '0.5rem'}}>
               <div style={{ display: 'flex', gap: '0.5rem' }}>
                 <input
                   type="text"
@@ -285,6 +290,7 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
                 <button 
                   type="submit" 
                   className="btn btn-primary"
+                  style={{ padding: '0 1.5rem'}}
                   disabled={currentLogs.length === 0 || !sessionName.trim()}
                 >
                   SAVE
@@ -303,45 +309,42 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
               ) : (
                 sessions.sort((a,b) => b.timestamp - a.timestamp).map((session) => (
                   <div key={session.id} className="section-panel" style={{ padding: '0.75rem' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
                          <span style={{ fontWeight: 'bold', fontSize: '0.875rem', color: '#eeeeee' }}>{session.title}</span>
                          <span style={{ fontSize: '0.65rem', color: '#666', fontFamily: 'monospace' }}>
                             {new Date(session.timestamp).toLocaleString()}
                          </span>
                     </div>
-                    <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 30px', gap: '0.5rem' }}>
                         <button 
                             onClick={() => handleLoad(session)}
-                            className="btn btn-secondary"
-                            style={{ flex: 1, fontSize: '0.7rem', padding: '0.4rem' }}
+                            className="btn btn-secondary btn-xs"
                             title="Restore this session into active view"
                         >
                             LOAD
                         </button>
                         <button 
                             onClick={() => handleExportJson(session)}
-                            className="btn btn-secondary"
-                            style={{ flex: 1, fontSize: '0.7rem', padding: '0.4rem' }}
+                            className="btn btn-secondary btn-xs"
                             title="Download LorePack JSON"
                         >
                             EXPORT LP
                         </button>
                         <button 
                             onClick={() => handleIngestToLore(session)}
-                            className="btn btn-ingest"
-                            style={{ flex: 1.5, fontSize: '0.7rem', padding: '0.4rem' }}
+                            className="btn btn-xs btn-accent"
                             title={`Embed into ${currentAgentId}'s RAG Database`}
                             disabled={!!ingestingId}
                         >
-                            {ingestingId === session.id ? 'EMBEDDING...' : 'INGEST TO LORE'}
+                            {ingestingId === session.id ? '...' : 'INGEST'}
                         </button>
                         <button 
                             onClick={() => handleDelete(session.id)}
-                            className="btn btn-danger"
-                            style={{ width: '2.5rem', padding: '0.4rem' }}
+                            className="btn btn-danger btn-xs"
                             title="Delete Session"
+                            style={{ padding: 0 }}
                         >
-                            DEL
+                            ×
                         </button>
                     </div>
                   </div>

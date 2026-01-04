@@ -16,6 +16,9 @@ import { NumMarkX_GenerateSigil, NumMarkX_GenerateHeader } from '../patterns/Num
 interface KnowledgeManagerProps {
   onUpdate: () => void;
   currentAgentId: string;
+  isOpen: boolean;
+  onOpen: () => void;
+  onClose: () => void;
 }
 
 const ITEMS_PER_PAGE = 5;
@@ -45,9 +48,14 @@ const FileIcon = ({ typeStr }: { typeStr: string }) => {
   );
 };
 
-export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, currentAgentId }) => {
+export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ 
+    onUpdate, 
+    currentAgentId,
+    isOpen,
+    onOpen,
+    onClose
+}) => {
   const [activeTab, setActiveTab] = useState<'local' | 'cloud'>('local');
-  const [isOpen, setIsOpen] = useState(false);
   
   // Local DB State
   const [docs, setDocs] = useState<KnowledgeDoc[]>([]);
@@ -376,7 +384,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
   if (!isOpen) {
     return (
       <button 
-        onClick={() => setIsOpen(true)}
+        onClick={onOpen}
         className="btn btn-secondary btn-icon"
         title="Knowledge Database"
       >
@@ -395,29 +403,31 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
         
         <div className="modal-header-area">
           <div className="flex-group">
-             <span className="modal-section-title">KNOWLEDGE MANAGER</span>
+             <span className="modal-section-title" style={{ color: '#4ade80' }}>KNOWLEDGE MANAGER</span>
           </div>
-          <button onClick={() => setIsOpen(false)} className="close-btn">[X]</button>
+          <button onClick={onClose} className="close-btn">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
         </div>
 
         {isStreamingImport ? (
-            <div style={{ padding: '2rem', flex: 1, display: 'flex', flexDirection: 'column', gap: '1.5rem', justifyContent: 'center', animation: 'fadeIn 0.3s' }}>
+            <div style={{ padding: '2rem', flex: 1, display: 'flex', flexDirection: 'column', gap: '1.5rem', justifyContent: 'center', alignItems: 'center', height: '100%', animation: 'fadeIn 0.3s' }}>
                 <div style={{ textAlign: 'center' }}>
                     <h3 style={{ color: '#4ade80', marginBottom: '0.5rem' }}>STREAMING INGESTION</h3>
                     <p style={{ color: '#ccc', fontSize: '0.8rem' }}>Processing Large LorePack...</p>
                 </div>
                 
-                <div className="section-panel" style={{ borderColor: '#4ade80' }}>
+                <div className="section-panel" style={{ borderColor: '#4ade80', width: '80%', padding: '2rem' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', fontSize: '0.85rem', alignItems: 'center' }}>
-                        <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#fff' }}>{streamedDocsCount}</div>
-                        <div style={{ color: '#666' }}>Nodes Processed</div>
-                        <div className="spinner" style={{ marginTop: '1rem' }} />
+                        <div style={{ fontSize: '2.5rem', fontWeight: 'bold', color: '#fff' }}>{streamedDocsCount}</div>
+                        <div style={{ color: '#666', letterSpacing: '1px' }}>NODES PROCESSED</div>
+                        <div className="spinner" style={{ marginTop: '1.5rem' }} />
                     </div>
                 </div>
             </div>
         ) : (
             <>
-                <div style={{ display: 'flex', borderBottom: '1px solid #333', padding: '0 1.5rem' }}>
+                <div style={{ display: 'flex', borderBottom: '1px solid #333', padding: '0 1rem' }}>
                     <button 
                         onClick={() => setActiveTab('local')}
                         style={{ 
@@ -428,7 +438,8 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
                             color: activeTab === 'local' ? '#eee' : '#666',
                             cursor: 'pointer',
                             fontWeight: 'bold',
-                            fontSize: '0.75rem'
+                            fontSize: '0.75rem',
+                            flex: 1
                         }}
                     >
                         LOCAL VECTORS (RAG)
@@ -443,7 +454,8 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
                             color: activeTab === 'cloud' ? '#eee' : '#666',
                             cursor: 'pointer',
                             fontWeight: 'bold',
-                            fontSize: '0.75rem'
+                            fontSize: '0.75rem',
+                            flex: 1
                         }}
                     >
                         CLOUD FILES (CONTEXT)
@@ -461,7 +473,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
                 {activeTab === 'local' ? (
                     <>
                         <div className="flex-col">
-                            <span className="section-header-title">INGEST ({currentAgentId})</span>
+                            <span className="section-header-title" style={{color: '#4ade80'}}>INGEST ({currentAgentId})</span>
                             <label className="btn-file-input">
                             <input 
                                 type="file" 
@@ -473,10 +485,10 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
                                 multiple
                             />
                             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem' }}>
-                                <span style={{ fontSize: '0.875rem', fontWeight: 'bold', color: '#a3a3a3' }}>
+                                <span style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#a3a3a3' }}>
                                 {isProcessing && uploadProgress ? 'PROCESSING...' : 'DROP .TXT / .MD / .JSON'}
                                 </span>
-                                <span style={{ fontSize: '0.75rem', color: '#666' }}>Smart Recursive Chunking & Embedding</span>
+                                <span style={{ fontSize: '0.7rem', color: '#666' }}>Smart Recursive Chunking & Embedding</span>
                             </div>
                             </label>
 
@@ -487,7 +499,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
                                         <span>{uploadProgress.current}/{uploadProgress.total}</span>
                                     </div>
                                     <div style={{ width: '100%', height: '4px', background: '#333' }}>
-                                        <div style={{ width: `${(uploadProgress.current / uploadProgress.total) * 100}%`, height: '100%', background: '#fff' }} />
+                                        <div style={{ width: `${(uploadProgress.current / uploadProgress.total) * 100}%`, height: '100%', background: '#4ade80' }} />
                                     </div>
                                     <div style={{ textAlign: 'right', fontSize: '0.7rem', color: '#666' }}>ETA: {calculateETA()}</div>
                                 </div>
@@ -500,21 +512,21 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
                                 <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                                     <button 
                                         onClick={handleExportLorePack} 
-                                        className="btn btn-secondary" 
-                                        style={{ color: '#a78bfa', borderColor: '#a78bfa' }}
+                                        className="btn btn-accent" 
+                                        style={{ fontSize: '0.65rem' }}
                                         title="Download valid LorePack JSON"
                                     >
-                                        EXPORT LOREPACK
+                                        EXPORT LP
                                     </button>
                                     
-                                    <label className="btn btn-secondary" style={{ cursor: 'pointer' }}>
-                                        IMPORT LOREPACK
+                                    <label className="btn btn-accent" style={{ fontSize: '0.65rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                                        IMPORT LP
                                         <input type="file" accept=".json" onChange={handleSelectLorePack} ref={importInputRef} className="hidden" />
                                     </label>
-                                    <button onClick={handlePurgeAll} className="btn btn-danger">PURGE ALL</button>
+                                    <button onClick={handlePurgeAll} className="btn btn-danger" style={{ fontSize: '0.65rem' }}>PURGE ALL</button>
                                 </div>
                             </div>
-                            <input type="text" placeholder="Filter..." value={filterQuery} onChange={(e) => setFilterQuery(e.target.value)} className="form-input" />
+                            <input type="text" placeholder="Filter documents..." value={filterQuery} onChange={(e) => setFilterQuery(e.target.value)} className="form-input" />
                             
                             <div className="flex-col" style={{ gap: '0.5rem' }}>
                                 {paginatedDocs.map(doc => (
@@ -523,11 +535,11 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
                                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', overflow: 'hidden' }}>
                                                 <FileIcon typeStr={doc.title} />
                                                 <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                                                    <span style={{ fontWeight: 'bold', fontSize: '0.75rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{doc.title}</span>
+                                                    <span style={{ fontWeight: 'bold', fontSize: '0.75rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: '#eee' }}>{doc.title}</span>
                                                     {doc.numMarkId && <span style={{ fontSize: '0.6rem', color: '#a78bfa' }}>{doc.numMarkId}</span>}
                                                 </div>
                                             </div>
-                                            <button onClick={() => handleDelete(doc.id)} style={{ background: 'none', border: 'none', color: '#666', marginLeft: '0.5rem' }}>[X]</button>
+                                            <button onClick={() => handleDelete(doc.id)} style={{ background: 'none', border: 'none', color: '#666', marginLeft: '0.5rem', cursor: 'pointer', fontSize: '1.2rem' }}>×</button>
                                         </div>
                                         <p style={{ color: '#888', fontSize: '0.7rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginTop: '0.25rem', paddingLeft: 'calc(20px + 0.75rem)' }}>{doc.content}</p>
                                     </div>
@@ -535,9 +547,9 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
                             </div>
                             
                             {totalPages > 1 && (
-                                <div style={{ display: 'flex', justifyContent: 'center', gap: '0.5rem' }}>
+                                <div style={{ display: 'flex', justifyContent: 'center', gap: '0.5rem', marginTop: '0.5rem' }}>
                                     <button onClick={() => setCurrentPage(p => Math.max(1, p-1))} className="btn btn-secondary" disabled={currentPage === 1}>&lt;</button>
-                                    <span style={{ fontSize: '0.75rem', alignSelf: 'center' }}>{currentPage} / {totalPages}</span>
+                                    <span style={{ fontSize: '0.75rem', alignSelf: 'center', color: '#666' }}>PAGE {currentPage} / {totalPages}</span>
                                     <button onClick={() => setCurrentPage(p => Math.min(totalPages, p+1))} className="btn btn-secondary" disabled={currentPage === totalPages}>&gt;</button>
                                 </div>
                             )}
@@ -546,8 +558,8 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
                 ) : (
                     <>
                         <div className="flex-col">
-                            <span className="section-header-title">UPLOAD TO GOOGLE CLOUD</span>
-                            <label className="btn-file-input" style={{ borderColor: '#a78bfa', color: '#a78bfa' }}>
+                            <span className="section-header-title" style={{ color: '#a78bfa' }}>UPLOAD TO GOOGLE CLOUD</span>
+                            <label className="btn-file-input purple" style={{ borderColor: '#a78bfa', color: '#a78bfa', background: 'rgba(167, 139, 250, 0.05)' }}>
                                 <input 
                                     type="file" 
                                     onChange={handleCloudUpload} 
@@ -557,10 +569,10 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
                                     multiple
                                 />
                                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem' }}>
-                                    <span style={{ fontSize: '0.875rem', fontWeight: 'bold' }}>
+                                    <span style={{ fontSize: '0.8rem', fontWeight: 'bold' }}>
                                         {isProcessing ? 'UPLOADING...' : 'DROP LARGE FILES (PDF/CSV/TXT/VIDEO)'}
                                     </span>
-                                    <span style={{ fontSize: '0.75rem', color: '#a78bfa' }}>Supports 2M+ Context Window via Gating Model</span>
+                                    <span style={{ fontSize: '0.7rem', color: '#a78bfa' }}>Supports 2M+ Context Window via Gating Model</span>
                                 </div>
                             </label>
                         </div>
@@ -568,7 +580,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
                         <div className="flex-col">
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                 <span className="section-header-title">CLOUD FILES ({cloudFiles.length})</span>
-                                <button onClick={fetchCloudFiles} className="btn btn-secondary" style={{ fontSize: '0.7rem' }}>REFRESH</button>
+                                <button onClick={fetchCloudFiles} className="btn btn-secondary" style={{ fontSize: '0.65rem', padding: '0 0.5rem' }}>REFRESH</button>
                             </div>
                             
                             {cloudFiles.length === 0 ? (
@@ -590,10 +602,10 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
                                             </div>
                                             <button 
                                                 onClick={() => handleDeleteCloudFile(file.name)}
-                                                style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', marginLeft: '0.5rem' }}
+                                                style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', marginLeft: '0.5rem', fontSize: '1.2rem' }}
                                                 title="Delete from Cloud"
                                             >
-                                                [DEL]
+                                                ×
                                             </button>
                                         </div>
                                     </div>
@@ -603,9 +615,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ onUpdate, cu
                     </>
                 )}
                 </div>
-            </>
-        )}
-      </div>
-    </div>
-  );
+            </div>
+        </div>
+    );
 };

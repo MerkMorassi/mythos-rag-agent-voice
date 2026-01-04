@@ -30,7 +30,8 @@ export const MultiAgentService = {
         userMessage: string, 
         history: MultiAgentMessage[],
         globalInstructions: string,
-        roomFocusContext: string, // <-- Added Parameter
+        roomFocusContext: string, // Parameter for focus
+        activeRoster: Agent[],    // <-- NEW: Parameter for active agents
         attachment?: AgentAttachment | null
     ): Promise<AgentResponse> {
         
@@ -64,13 +65,27 @@ export const MultiAgentService = {
             const agentConfig = await getAgentConfig(agent.id);
             const specificInstruction = agentConfig.instruction || "";
 
+            // --- ROSTER GENERATION ---
+            // Creates a list like: "- Archivax (he/him): Central Hypervisor"
+            const rosterString = activeRoster
+                .map(a => `- ${a.handle.toUpperCase()} (${a.pronouns || 'they/them'}): ${a.role}`)
+                .join('\n');
+
             let systemPrompt = `
 ${globalInstructions}
 
 ${roomFocusContext} 
 
-=== IDENTITY ===
+=== ROSTER & IDENTITY CONTEXT ===
+You are in a multi-agent conference room. The following agents are present:
+${rosterString}
+
+When referring to other agents, use their preferred pronouns listed above.
+If the context implies a specific agent (e.g. "She said..."), look at the roster to resolve who "She" is.
+
+=== YOUR IDENTITY ===
 NAME: ${agent.handle}
+PRONOUNS: ${agent.pronouns || "they/them"}
 ROLE: ${agent.role}
 CORE INSTRUCTION: ${agent.system_instruction}
 ${specificInstruction}
@@ -79,7 +94,6 @@ ${specificInstruction}
 ${contextDocs.length > 0 ? "RELEVANT KNOWLEDGE RETRIEVED:\n" + contextDocs.map(d => `- ${d.content}`).join('\n') : "No specific memory retrieved for this query."}
 
 === CONVERSATION PROTOCOL ===
-- You are in a multi-agent conference room.
 - Read the TRANSCRIPT below to understand the flow.
 - Respond to the USER or other AGENTS as appropriate.
 - Be concise. Do not monologue.

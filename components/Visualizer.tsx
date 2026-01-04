@@ -1,4 +1,5 @@
-import React, { useEffect, useRef } from 'react';
+
+import React, { useEffect, useRef, useState } from 'react';
 
 interface VisualizerProps {
   analyser: AnalyserNode | null;
@@ -7,71 +8,98 @@ interface VisualizerProps {
 
 const Visualizer: React.FC<VisualizerProps> = ({ analyser, isActive }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
 
+  // Handle Resizing
   useEffect(() => {
-    if (!canvasRef.current) return;
+    if (!containerRef.current) return;
+
+    const updateDimensions = () => {
+      if (containerRef.current) {
+        setDimensions({
+          width: containerRef.current.offsetWidth,
+          height: containerRef.current.offsetHeight
+        });
+      }
+    };
+
+    updateDimensions();
+    const observer = new ResizeObserver(updateDimensions);
+    observer.observe(containerRef.current);
+
+    return () => observer.disconnect();
+  }, []);
+
+  // Drawing Loop
+  useEffect(() => {
+    if (!canvasRef.current || dimensions.width === 0 || dimensions.height === 0) return;
     
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
+    canvas.width = dimensions.width;
+    canvas.height = dimensions.height;
+
     let animationId: number;
-    const dataArray = new Uint8Array(analyser ? analyser.frequencyBinCount : 0);
+    
+    // Configure Analyser for "Square" Bars (Low FFT Size)
+    if (analyser) {
+        analyser.fftSize = 64; 
+    }
+    
+    const bufferLength = analyser ? analyser.frequencyBinCount : 0;
+    const dataArray = new Uint8Array(bufferLength);
 
     const draw = () => {
       animationId = requestAnimationFrame(draw);
 
       const width = canvas.width;
       const height = canvas.height;
+      
       ctx.clearRect(0, 0, width, height);
 
-      // Create gradient
-      const gradient = ctx.createLinearGradient(0, 0, width, 0);
-      gradient.addColorStop(0, '#333333'); 
-      gradient.addColorStop(0.5, '#ffffff'); 
-      gradient.addColorStop(1, '#333333'); 
+      // Gradient for active bars
+      const gradient = ctx.createLinearGradient(0, height, 0, 0);
+      gradient.addColorStop(0, '#4ade80');
+      gradient.addColorStop(0.5, '#a78bfa');
+      gradient.addColorStop(1, '#ffffff');
 
       if (!analyser || !isActive) {
-        // Draw idle line
-        ctx.beginPath();
-        ctx.moveTo(0, height / 2);
-        ctx.lineTo(width, height / 2);
-        ctx.strokeStyle = '#333333';
-        ctx.lineWidth = 1;
-        ctx.stroke();
+        // IDLE STATE: Clean horizontal line (Standby)
+        ctx.fillStyle = 'rgba(50, 50, 50, 0.5)';
+        ctx.fillRect(0, height / 2, width, 1);
         return;
       }
 
-      analyser.getByteTimeDomainData(dataArray);
+      analyser.getByteFrequencyData(dataArray);
 
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = gradient;
-      ctx.shadowBlur = 0;
-      
-      ctx.beginPath();
-
-      const sliceWidth = width * 1.0 / dataArray.length;
-      let x = 0;
-
-      for (let i = 0; i < dataArray.length; i++) {
-        const v = dataArray[i] / 128.0;
-        const y = v * height / 2;
-
-        if (i === 0) {
-          ctx.moveTo(x, y);
-        } else {
-          // Smooth curve
-          const prevX = x - sliceWidth;
-          const prevY = (dataArray[i-1] / 128.0) * height / 2;
-          const cpX = (prevX + x) / 2;
-          ctx.quadraticCurveTo(prevX, prevY, cpX, (prevY + y)/2);
-        }
-
-        x += sliceWidth;
+      // Check for silence to draw a subtle baseline
+      const hasSignal = dataArray.some(val => val > 0);
+      if (!hasSignal) {
+          ctx.fillStyle = 'rgba(74, 222, 128, 0.2)';
+          ctx.fillRect(0, height - 1, width, 1);
+          return;
       }
 
-      ctx.lineTo(canvas.width, canvas.height / 2);
-      ctx.stroke();
+      const barWidth = width / bufferLength; 
+      let x = 0;
+
+      ctx.fillStyle = gradient;
+
+      for (let i = 0; i < bufferLength; i++) {
+        // Scale bar height - Audio data is 0-255
+        const val = dataArray[i];
+        const barHeight = (val / 255) * height;
+
+        if (barHeight > 0) {
+            // Draw Square Bar with 2px gap
+            ctx.fillRect(x, height - barHeight, barWidth - 2, barHeight);
+        }
+
+        x += barWidth;
+      }
     };
 
     draw();
@@ -79,16 +107,15 @@ const Visualizer: React.FC<VisualizerProps> = ({ analyser, isActive }) => {
     return () => {
       cancelAnimationFrame(animationId);
     };
-  }, [analyser, isActive]);
+  }, [analyser, isActive, dimensions]);
 
   return (
-    <canvas 
-      ref={canvasRef} 
-      width={800} 
-      height={200} 
-      className="w-full"
-      style={{ width: '100%', height: '8rem', display: 'block' }}
-    />
+    <div ref={containerRef} style={{ width: '100%', height: '100%', display: 'flex' }}>
+        <canvas 
+          ref={canvasRef}
+          style={{ width: '100%', height: '100%', display: 'block' }}
+        />
+    </div>
   );
 };
 

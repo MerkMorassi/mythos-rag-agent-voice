@@ -2,8 +2,13 @@
 import React, { useState, useEffect } from 'react';
 import { RoomFocus, RoomFocusService, DEFAULT_FOCUS } from '../services/roomFocus';
 
-export const RoomFocusConfig: React.FC = () => {
-    const [isOpen, setIsOpen] = useState(false);
+interface RoomFocusConfigProps {
+    isOpen: boolean;
+    onOpen: () => void;
+    onClose: () => void;
+}
+
+export const RoomFocusConfig: React.FC<RoomFocusConfigProps> = ({ isOpen, onOpen, onClose }) => {
     const [focusList, setFocusList] = useState<RoomFocus[]>([]);
     const [selectedId, setSelectedId] = useState<string>('OPEN');
     const [activeId, setActiveId] = useState<string>('OPEN');
@@ -80,7 +85,7 @@ export const RoomFocusConfig: React.FC = () => {
     if (!isOpen) {
         return (
             <button 
-                onClick={() => setIsOpen(true)}
+                onClick={onOpen}
                 className="btn btn-secondary btn-icon"
                 title="Room Focus Configuration"
             >
@@ -101,26 +106,35 @@ export const RoomFocusConfig: React.FC = () => {
                     <div className="flex-group">
                         <span className="modal-section-title" style={{ color: '#facc15' }}>ROOM FOCUS PROTOCOL</span>
                     </div>
-                    <button onClick={() => setIsOpen(false)} className="close-btn">[ESC]</button>
+                    <button onClick={onClose} className="close-btn">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    </button>
                 </div>
 
                 <div className="modal-body-area">
                     
+                    {/* ACTIVE STATUS PANEL */}
                     <div className="section-panel" style={{ borderColor: '#facc15' }}>
-                        <div className="section-header" style={{ borderBottom: 'none', padding: 0, marginBottom: '0.25rem' }}>
-                             <span className="section-header-title" style={{color: '#facc15'}}>ACTIVE FOCUS: {activeId}</span>
+                        <div className="section-header" style={{ borderBottom: 'none', padding: 0, marginBottom: '0.5rem' }}>
+                             <span className="section-header-title" style={{color: '#facc15'}}>CURRENT ACTIVE FOCUS</span>
                         </div>
-                        <p style={{ fontSize: '0.75rem', color: '#ccc' }}>
-                            {focusList.find(f => f.id === activeId)?.title || 'Unknown'}
-                        </p>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                            <span style={{ fontSize: '1rem', fontWeight: 'bold', color: '#fff' }}>{activeId}</span>
+                            <span style={{ fontSize: '0.8rem', color: '#ccc' }}>
+                                {focusList.find(f => f.id === activeId)?.title || 'Unknown'}
+                            </span>
+                        </div>
                     </div>
 
+                    <hr style={{ borderColor: '#333', margin: '0.5rem 0' }} />
+
                     <div className="flex-col">
-                        <label className="section-header-title">SELECT PROFILE</label>
+                        <label className="section-header-title" style={{ color: '#eee' }}>SELECT / EDIT PROFILE</label>
                         <select 
                             value={selectedId} 
                             onChange={handleSelectChange} 
                             className="form-select"
+                            style={{ width: '100%', padding: '0.5rem', background: '#000', color: '#fff', border: '1px solid #444', borderRadius: '4px' }}
                         >
                             {focusList.map(f => (
                                 <option key={f.id} value={f.id}>{f.id} — {f.title}</option>
@@ -128,28 +142,28 @@ export const RoomFocusConfig: React.FC = () => {
                         </select>
                     </div>
 
-                    <div className="flex-col" style={{gap: '0.5rem'}}>
-                        <div style={{display:'flex', gap:'0.5rem'}}>
+                    <div className="section-panel" style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                        <div style={{display:'flex', gap:'1rem'}}>
                             <div style={{flex:1}}>
-                                <label style={{fontSize:'0.65rem', color:'#666'}}>ID (UPPERCASE)</label>
-                                <input className="form-input" value={formId} onChange={e => setFormId(e.target.value)} placeholder="WRITERS" />
+                                <label style={{fontSize:'0.7rem', color:'#888', display:'block', marginBottom:'0.25rem'}}>ID (UPPERCASE)</label>
+                                <input className="form-input" value={formId} onChange={e => setFormId(e.target.value)} placeholder="WRITERS" style={{ fontFamily: 'monospace' }} />
                             </div>
                             <div style={{flex:2}}>
-                                <label style={{fontSize:'0.65rem', color:'#666'}}>TITLE</label>
+                                <label style={{fontSize:'0.7rem', color:'#888', display:'block', marginBottom:'0.25rem'}}>TITLE</label>
                                 <input className="form-input" value={formTitle} onChange={e => setFormTitle(e.target.value)} placeholder="Creative Writing" />
                             </div>
                         </div>
                         
                         <div>
-                            <label style={{fontSize:'0.65rem', color:'#666'}}>SUMMARY</label>
+                            <label style={{fontSize:'0.7rem', color:'#888', display:'block', marginBottom:'0.25rem'}}>SUMMARY</label>
                             <input className="form-input" value={formSummary} onChange={e => setFormSummary(e.target.value)} placeholder="Goal of the session..." />
                         </div>
 
                         <div>
-                            <label style={{fontSize:'0.65rem', color:'#666'}}>RULES (ONE PER LINE)</label>
+                            <label style={{fontSize:'0.7rem', color:'#888', display:'block', marginBottom:'0.25rem'}}>RULES (ONE PER LINE)</label>
                             <textarea 
                                 className="form-input" 
-                                style={{height:'8rem', resize:'vertical', paddingTop:'0.5rem'}} 
+                                style={{height:'8rem', resize:'vertical', lineHeight: '1.4'}} 
                                 value={formRules} 
                                 onChange={e => setFormRules(e.target.value)}
                                 placeholder="- Stay in character&#10;- No lengthy monologues"
@@ -157,17 +171,18 @@ export const RoomFocusConfig: React.FC = () => {
                         </div>
                     </div>
 
-                    <div className="flex-group">
+                    <div className="flex-group" style={{ marginTop: '0.5rem' }}>
                         <button className="btn btn-secondary" onClick={handleSave} style={{flex:1}}>SAVE / UPDATE</button>
-                        <button className="btn btn-danger" onClick={handleDelete} disabled={selectedId === 'OPEN'} style={{width:'3rem'}}>DEL</button>
+                        <button className="btn btn-danger" onClick={handleDelete} disabled={selectedId === 'OPEN'} style={{width:'4rem'}}>DEL</button>
                     </div>
                     
                     <button 
-                        className="btn btn-primary" 
+                        className="btn btn-accent" 
                         onClick={handleApply}
-                        style={{ borderColor: '#facc15', color: '#facc15' }}
+                        disabled={selectedId === activeId}
+                        style={{ width: '100%' }}
                     >
-                        APPLY TO CONFERENCE
+                        {selectedId === activeId ? 'CURRENTLY ACTIVE' : `APPLY "${selectedId}" TO ROOM`}
                     </button>
 
                 </div>

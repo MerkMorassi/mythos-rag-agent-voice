@@ -1,7 +1,11 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { ModelConfig, DEFAULT_MODEL_CONFIG } from '../types';
-import { getSavedPromptsByAgentId, SavedPrompt, deleteSavedPrompt } from '../services/db';
+import { getSavedPromptsByAgentId, SavedPrompt, deleteSavedPrompt, getAgentConfig } from '../services/db';
+import { AccessControl } from '../services/accessControl';
+
+// PREBUILT VOICES LIST
+const PREBUILT_VOICES = ["Puck", "Kore", "Fenrir", "Zephyr", "Aoede", "Callirrhoe", "Leda"];
 
 interface SettingsManagerProps {
   modelConfig: ModelConfig;
@@ -17,8 +21,20 @@ interface SettingsManagerProps {
   agentName: string;
   agentId: string; 
   
-  onSave: (voiceRef?: string) => Promise<void>;
+  // New props for access level
+  agentAccessLevel?: string;
+  
+  // Voice Props
+  selectedVoice: string;
+  onVoiceChange: (voice: string) => void;
+  
+  onSave: (voiceRef?: string, accessLevel?: string, voiceSpeed?: number, voicePitch?: number) => Promise<void>;
   onDirty?: () => void;
+  
+  // Modal Control
+  isOpen: boolean;
+  onOpen: () => void;
+  onClose: () => void;
 }
 
 const SettingsManager: React.FC<SettingsManagerProps> = ({ 
@@ -31,17 +47,27 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
   setAgentInstruction,
   agentName,
   agentId,
+  agentAccessLevel,
+  selectedVoice,
+  onVoiceChange,
   onSave,
-  onDirty
+  onDirty,
+  isOpen,
+  onOpen,
+  onClose
 }) => {
-  const [isOpen, setIsOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [savedPrompts, setSavedPrompts] = useState<SavedPrompt[]>([]);
   
-  // Voice Clone State
+  const [localAccessLevel, setLocalAccessLevel] = useState('755');
+  
+  // Voice Settings
   const [voiceFile, setVoiceFile] = useState<File | null>(null);
   const [voiceBase64, setVoiceBase64] = useState<string | undefined>(undefined);
+  const [voiceSpeed, setVoiceSpeed] = useState<number>(1.0);
+  const [voicePitch, setVoicePitch] = useState<number>(0); // Semitones
+  
   const voiceInputRef = useRef<HTMLInputElement>(null);
   
   // API Credentials State
@@ -51,12 +77,27 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
 
   useEffect(() => {
       if (isOpen) {
-          if (agentId) loadPrompts();
+          if (agentId) {
+              loadPrompts();
+              loadAgentVoiceSettings();
+          }
+          setLocalAccessLevel(agentAccessLevel || '400');
           setGeminiKey(localStorage.getItem('gemini_api_key') || '');
           setHfToken(localStorage.getItem('hf_token') || '');
           setOpenlKey(localStorage.getItem('openl_api_key') || '');
       }
-  }, [isOpen, agentId]);
+  }, [isOpen, agentId, agentAccessLevel]);
+
+  const loadAgentVoiceSettings = async () => {
+      try {
+          const cfg = await getAgentConfig(agentId);
+          setVoiceSpeed(cfg.voiceSpeed !== undefined ? cfg.voiceSpeed : 1.0);
+          setVoicePitch(cfg.voicePitch !== undefined ? cfg.voicePitch : 0);
+          setVoiceBase64(cfg.voiceReference);
+      } catch (e) {
+          console.warn("Failed to load agent voice settings", e);
+      }
+  };
 
   const loadPrompts = async () => {
       const prompts = await getSavedPromptsByAgentId(agentId);
@@ -98,6 +139,11 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
       }
   };
 
+  const handleAccessChange = (val: string) => {
+      setLocalAccessLevel(val);
+      if (onDirty) onDirty();
+  };
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSaving(true);
@@ -111,7 +157,7 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
         if (openlKey) localStorage.setItem('openl_api_key', openlKey);
         else localStorage.removeItem('openl_api_key');
 
-        await onSave(voiceBase64);
+        await onSave(voiceBase64, localAccessLevel, voiceSpeed, voicePitch);
         setSaveSuccess(true);
         setTimeout(() => setSaveSuccess(false), 2000);
     } catch (e) {
@@ -121,10 +167,12 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
     }
   };
 
+  const accessDesc = AccessControl.getDescription(localAccessLevel);
+
   if (!isOpen) {
     return (
       <button 
-        onClick={() => setIsOpen(true)}
+        onClick={onOpen}
         className="btn btn-secondary btn-icon"
         title="Settings & System Configuration"
       >
@@ -144,34 +192,55 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
           <div className="flex-group">
              <span className="modal-section-title">SYSTEM CONFIGURATION</span>
           </div>
-          <button onClick={() => setIsOpen(false)} className="close-btn">
+          <button onClick={onClose} className="close-btn">
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         </div>
 
         <div className="modal-body-area">
           
-          <div className="section-panel" style={{ borderColor: disabled ? '#4ade80' : '#4ade80' }}>
+          <div className="section-panel" style={{ borderColor: disabled ? '#4ade80' : '#333' }}>
             <div className="section-header" style={{ borderBottom: 'none', padding: 0, marginBottom: '0.5rem' }}>
-                 <span className="section-header-title" style={{color: '#4ade80'}}>STATUS</span>
+                 <span className="section-header-title" style={{color: '#4ade80'}}>SYSTEM STATUS</span>
             </div>
             <p style={{ fontSize: '0.75rem', color: '#eee' }}>
                 {disabled 
                     ? "LIVE LINK ACTIVE. Saving updates will inject new instructions into the active session." 
-                    : "Ready to apply to next connection."}
+                    : "Ready to apply configuration to next connection."}
             </p>
           </div>
           
-          <form onSubmit={handleSave} className="flex-col" style={{gap: '1.5rem'}}>
+          <form onSubmit={handleSave} className="flex-col" style={{gap: '2rem'}}>
             
+            {/* PERMISSION CHMOD EDITOR */}
+            <div className="flex-col">
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span className="section-header-title" style={{color: '#a78bfa'}}>ACCESS CONTROL (CHMOD)</span>
+                </div>
+                <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+                    <input 
+                        type="text"
+                        maxLength={3}
+                        value={localAccessLevel}
+                        onChange={(e) => handleAccessChange(e.target.value.replace(/[^0-7]/g, ''))}
+                        className="form-input"
+                        style={{ width: '5rem', textAlign: 'center', fontSize: '1.25rem', fontFamily: 'monospace', fontWeight: 'bold', letterSpacing: '2px', color: '#a78bfa', borderColor: '#a78bfa' }}
+                    />
+                    <div className="flex-col" style={{ gap: '0.2rem' }}>
+                        <span style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#eee' }}>{accessDesc}</span>
+                        <span style={{ fontSize: '0.65rem', color: '#666' }}>Format: [LORE] [TOOLS] [SYSTEM] (e.g. 755)</span>
+                    </div>
+                </div>
+            </div>
+
             <div className="flex-col">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <span className="section-header-title" style={{color: '#facc15'}}>CREDENTIALS</span>
                     {saveSuccess && <span className="animate-pulse" style={{ color: '#4ade80', fontWeight: 'bold' }}>✓ SAVED</span>}
                 </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                <div className="flex-col" style={{ gap: '0.75rem' }}>
                     <div>
-                        <label style={{ fontSize: '0.7rem', color: '#888', display: 'block', marginBottom: '0.25rem' }}>GEMINI API KEY (Required)</label>
+                        <label className="form-label">GEMINI API KEY (Required)</label>
                         <input 
                             type="password"
                             value={geminiKey}
@@ -182,7 +251,7 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
                         />
                     </div>
                     <div>
-                        <label style={{ fontSize: '0.7rem', color: '#888', display: 'block', marginBottom: '0.25rem' }}>HUGGING FACE TOKEN (Read - Optional)</label>
+                        <label className="form-label">HUGGING FACE TOKEN (Read - Optional)</label>
                         <input 
                             type="password"
                             value={hfToken}
@@ -193,7 +262,7 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
                         />
                     </div>
                     <div>
-                        <label style={{ fontSize: '0.7rem', color: '#888', display: 'block', marginBottom: '0.25rem' }}>OPENL.IO API KEY (Translate - Optional)</label>
+                        <label className="form-label">OPENL.IO API KEY (Translate - Optional)</label>
                         <input 
                             type="password"
                             value={openlKey}
@@ -206,35 +275,76 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
                 </div>
             </div>
 
-            {/* VOICE CLONE SECTION */}
+            {/* VOICE SETTINGS & CLONE */}
             <div className="flex-col">
-                <span className="section-header-title" style={{color: '#f472b6'}}>VOICE CLONE REFERENCE</span>
-                <input 
-                    type="file" 
-                    accept="audio/*" 
-                    ref={voiceInputRef} 
-                    className="hidden" 
-                    onChange={handleVoiceSelect}
-                />
-                <div 
-                    onClick={() => voiceInputRef.current?.click()}
-                    className="btn btn-secondary"
-                    style={{ borderStyle: 'dashed', textAlign: 'center', cursor: 'pointer', padding: '1rem' }}
-                >
-                    {voiceFile ? `SELECTED: ${voiceFile.name}` : "UPLOAD REFERENCE AUDIO (WAV/MP3)"}
+                <span className="section-header-title" style={{color: '#a78bfa'}}>VOICE PARAMETERS</span>
+                
+                <div style={{ marginBottom: '0.5rem' }}>
+                    <label className="form-label">PREBUILT VOICE MODEL</label>
+                    <select 
+                        className="form-select"
+                        value={selectedVoice}
+                        onChange={(e) => { onVoiceChange(e.target.value); if(onDirty) onDirty(); }}
+                    >
+                        {PREBUILT_VOICES.map(v => (
+                            <option key={v} value={v}>{v}</option>
+                        ))}
+                    </select>
                 </div>
-                {voiceBase64 && (
-                    <audio src={voiceBase64} controls style={{ width: '100%', height: '2rem' }} />
-                )}
-                <p style={{ fontSize: '0.65rem', color: '#666' }}>
-                    Upload a 10-15s clean audio clip. This will be used by Chatterbox for offline dubbing of chat messages.
-                </p>
+
+                <div className="flex-group" style={{justifyContent: 'space-between', alignItems: 'center'}}>
+                    <span className="form-label" style={{ width: '30%' }}>SPEED ({voiceSpeed}x)</span>
+                    <input 
+                        type="range" 
+                        min="0.5" 
+                        max="2.0" 
+                        step="0.1" 
+                        value={voiceSpeed} 
+                        onChange={(e) => { setVoiceSpeed(parseFloat(e.target.value)); if(onDirty) onDirty(); }} 
+                        style={{ width: '60%' }} 
+                    />
+                </div>
+                
+                <div className="flex-group" style={{justifyContent: 'space-between', alignItems: 'center'}}>
+                    <span className="form-label" style={{ width: '30%' }}>PITCH ({voicePitch > 0 ? '+' : ''}{voicePitch} st)</span>
+                    <input 
+                        type="range" 
+                        min="-12" 
+                        max="12" 
+                        step="1" 
+                        value={voicePitch} 
+                        onChange={(e) => { setVoicePitch(parseInt(e.target.value)); if(onDirty) onDirty(); }} 
+                        style={{ width: '60%' }} 
+                    />
+                </div>
+
+                <div style={{ marginTop: '0.5rem' }}>
+                    <input 
+                        type="file" 
+                        accept="audio/*" 
+                        ref={voiceInputRef} 
+                        className="hidden" 
+                        onChange={handleVoiceSelect}
+                    />
+                    <div 
+                        onClick={() => voiceInputRef.current?.click()}
+                        className="btn btn-secondary"
+                        style={{ borderStyle: 'dashed', textAlign: 'center', cursor: 'pointer', padding: '1rem', height: 'auto' }}
+                    >
+                        {voiceFile ? `SELECTED: ${voiceFile.name}` : (voiceBase64 ? "REPLACE REFERENCE AUDIO" : "UPLOAD REFERENCE AUDIO (WAV/MP3)")}
+                    </div>
+                    {voiceBase64 && (
+                        <div style={{ marginTop: '0.5rem' }}>
+                            <audio src={voiceBase64} controls style={{ width: '100%', height: '2rem' }} />
+                        </div>
+                    )}
+                </div>
             </div>
 
             <div className="flex-col">
-              <span className="section-header-title" style={{color: '#a3a3a3'}}>GENERAL SYSTEM INSTRUCTIONS (GLOBAL)</span>
+              <span className="section-header-title" style={{color: '#eee'}}>GENERAL SYSTEM INSTRUCTIONS (GLOBAL)</span>
               <textarea
-                placeholder="Instructions that apply to ALL agents (e.g., 'Be concise', 'Always answer in JSON')..."
+                placeholder="Instructions that apply to ALL agents..."
                 value={generalInstruction}
                 onChange={(e) => { setGeneralInstruction(e.target.value); if (onDirty) onDirty(); }}
                 className="form-input"
@@ -284,12 +394,12 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
 
             <div className="flex-col">
                <div className="section-header" style={{ borderBottom: 'none', padding: 0 }}>
-                   <span className="section-header-title">MODEL PARAMETERS ({agentName.toUpperCase()})</span>
+                   <span className="section-header-title" style={{ color: '#4ade80' }}>MODEL PARAMETERS ({agentName.toUpperCase()})</span>
               </div>
               
-              <div className="flex-col">
+              <div className="flex-col" style={{ gap: '0.5rem' }}>
                   <div className="flex-group" style={{ justifyContent: 'space-between' }}>
-                      <span className="section-header-title">TEMPERATURE: {modelConfig.temperature}</span>
+                      <span className="form-label" style={{marginBottom: 0}}>TEMPERATURE: {modelConfig.temperature}</span>
                       <input 
                           type="range" 
                           min="0" 
@@ -302,7 +412,7 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
                       />
                   </div>
                   <div className="flex-group" style={{ justifyContent: 'space-between' }}>
-                      <span className="section-header-title">TOP P: {modelConfig.topP}</span>
+                      <span className="form-label" style={{marginBottom: 0}}>TOP P: {modelConfig.topP}</span>
                       <input 
                           type="range" 
                           min="0" 
@@ -315,7 +425,7 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
                       />
                   </div>
                   <div className="flex-group" style={{ justifyContent: 'space-between' }}>
-                      <span className="section-header-title">TOP K: {modelConfig.topK}</span>
+                      <span className="form-label" style={{marginBottom: 0}}>TOP K: {modelConfig.topK}</span>
                       <input 
                           type="range" 
                           min="1" 
@@ -342,7 +452,7 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
                   <button 
                     type="submit" 
                     disabled={isSaving}
-                    className="btn btn-ingest"
+                    className="btn btn-primary"
                     style={{ flex: 2 }}
                   >
                     {isSaving ? 'SAVING...' : (disabled ? 'UPDATE LIVE SESSION' : 'SAVE CONFIGURATION')}
