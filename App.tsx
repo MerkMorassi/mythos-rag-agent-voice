@@ -39,7 +39,7 @@ const SAMPLE_RATE = 24000;
 const INPUT_SAMPLE_RATE = 16000;
 
 type ViewMode = 'ORCHESTRATOR' | 'COUNCIL';
-type ModelMode = 'STD' | 'DEEP' | 'EXT';
+type ModelMode = 'STD' | 'DEEP' | 'EXT' | 'IMG';
 
 const App: React.FC = () => {
   // --- STATE ---
@@ -64,7 +64,7 @@ const App: React.FC = () => {
   const [modelMode, setModelMode] = useState<ModelMode>('STD');
 
   // Layout & View Modes
-  const [layoutMode, setLayoutMode] = useState<'AUDIO' | 'CHAT' | 'HYBRID' | 'VIDEO'>('HYBRID');
+  const [layoutMode, setLayoutMode] = useState<'VOICE' | 'CHAT' | 'HYBRID' | 'VIDEO'>('HYBRID');
   const [currentView, setCurrentView] = useState<ViewMode>('ORCHESTRATOR');
   
   // Tools and Panels
@@ -262,6 +262,8 @@ const App: React.FC = () => {
               modeInstruction = "\n\n[OPERATIONAL MODE: DEEP REASONING]\nACTIVATE 'Gemini 3 Pro' SIMULATION PROTOCOL.\n- Prioritize complex analysis, detailed explanations, and nuance.\n- Do not simplify unless asked.\n- Use advanced vocabulary and structural depth.\n- THINK before speaking.";
           } else if (modelMode === 'EXT') {
               modeInstruction = "\n\n[OPERATIONAL MODE: EXTERNAL TOOLING]\nACTIVATE 'Router' PROTOCOL.\n- You are operating in a HIGH-LATENCY, HIGH-POWER environment.\n- AGGRESSIVELY use the 'routeRequest' tool for ANY task involving:\n  1. Image Generation (Target: FLUX_IMAGE)\n  2. Uncensored/NSFW topics (Target: EXTERNAL_LLM)\n  3. Coding/Scripting (Target: EXTERNAL_LLM)\n- Prioritize tool use over chat.";
+          } else if (modelMode === 'IMG') {
+              modeInstruction = "\n\n[OPERATIONAL MODE: VISUALIZER]\nACTIVATE 'Image Generation' PROTOCOL.\n- You are a visual artist and observer.\n- Prioritize visual descriptions and imagery.\n- Use 'routeRequest' with target='FLUX_IMAGE' when asked to generate, show, or create an image.\n- If a scene is described, offer to visualize it.";
           }
 
           const config = {
@@ -593,7 +595,7 @@ const App: React.FC = () => {
 
   // --- LAYOUT STYLES ---
   const visualizerStyle: React.CSSProperties = {
-      flex: (layoutMode === 'AUDIO' || layoutMode === 'HYBRID' || layoutMode === 'VIDEO') ? '1 1 0' : '0 0 auto',
+      flex: (layoutMode === 'VOICE' || layoutMode === 'HYBRID' || layoutMode === 'VIDEO') ? '1 1 0' : '0 0 auto',
       height: layoutMode === 'CHAT' ? '0px' : 'auto',
       display: layoutMode === 'CHAT' ? 'none' : 'flex',
       flexDirection: 'column',
@@ -604,8 +606,8 @@ const App: React.FC = () => {
 
   const chatStyle: React.CSSProperties = {
       flex: (layoutMode === 'CHAT' || layoutMode === 'HYBRID') ? '1 1 0' : '0 0 auto',
-      height: (layoutMode === 'AUDIO' || layoutMode === 'VIDEO') ? '0px' : 'auto',
-      display: (layoutMode === 'AUDIO' || layoutMode === 'VIDEO') ? 'none' : 'flex',
+      height: (layoutMode === 'VOICE' || layoutMode === 'VIDEO') ? '0px' : 'auto',
+      display: (layoutMode === 'VOICE' || layoutMode === 'VIDEO') ? 'none' : 'flex',
       flexDirection: 'column',
       overflow: 'hidden',
       transition: 'flex 0.3s ease'
@@ -692,14 +694,26 @@ const App: React.FC = () => {
                         </span>
                     </div>
                     <canvas ref={canvasRef} className="hidden" />
+                    
+                    {/* VIDEO MODE: Placeholder Container for future Agent Video Feed */}
+                    {layoutMode === 'VIDEO' ? (
+                        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', color: '#333' }}>
+                            <div className="animate-pulse" style={{ width: '100px', height: '100px', borderRadius: '50%', border: '2px dashed #333', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                <div style={{ width: '80px', height: '80px', borderRadius: '50%', background: '#111' }}></div>
+                            </div>
+                            <div style={{ marginTop: '1rem', fontSize: '0.7rem', letterSpacing: '2px', color: '#444' }}>VIDEO FEED STANDBY</div>
+                        </div>
+                    ) : (
+                        <Visualizer analyser={analyserRef.current} isActive={connectionState === ConnectionState.CONNECTED} />
+                    )}
+
                     <div style={{ position: 'absolute', bottom: '10px', right: '10px', width: '160px', height: '120px', background: '#000', border: '1px solid #4ade80', display: isCameraOn ? 'block' : 'none', zIndex: 30, boxShadow: '0 0 10px rgba(0,0,0,0.5)' }}>
                         <video ref={videoRef} autoPlay playsInline muted style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                     </div>
-                    <Visualizer analyser={analyserRef.current} isActive={connectionState === ConnectionState.CONNECTED} />
                 </div>
 
                 <div style={chatStyle}>
-                    <div className="logs-container">
+                    <div className={`logs-container ${logs.length === 1 && logs[0].type === 'system' ? 'centered-single' : ''}`}>
                         {logs.length === 0 && (
                             <div className="empty-state">
                                 <p>SYSTEM READY.</p>
@@ -768,13 +782,17 @@ const App: React.FC = () => {
 
               {/* MODEL MODE SELECTOR - RESTORED IN FOOTER */}
               <div className="mode-selector">
-                  {['STD', 'DEEP', 'EXT'].map(m => (
+                  {['STD', 'DEEP', 'IMG', 'EXT'].map(m => (
                       <button
                           key={m}
                           onClick={() => setModelMode(m as ModelMode)}
                           disabled={connectionState === ConnectionState.CONNECTED}
                           className={modelMode === m ? `active ${m.toLowerCase()}` : ''}
-                          title={m === 'DEEP' ? "Pro Reasoning (Thinking)" : (m === 'EXT' ? "External Tools (Routing)" : "Standard Mode")}
+                          title={
+                              m === 'DEEP' ? "Pro Reasoning (Thinking)" : 
+                              (m === 'EXT' ? "External Tools (Routing)" : 
+                              (m === 'IMG' ? "Visualizer (Image Generation)" : "Standard Mode"))
+                          }
                       >
                           {m}
                       </button>
@@ -783,7 +801,7 @@ const App: React.FC = () => {
 
               <div className="flex-group">
                   <button onClick={() => setLayoutMode('VIDEO')} className={`btn btn-xs ${layoutMode === 'VIDEO' ? 'active' : ''}`}>VIDEO</button>
-                  <button onClick={() => setLayoutMode('AUDIO')} className={`btn btn-xs ${layoutMode === 'AUDIO' ? 'active' : ''}`}>AUDIO</button>
+                  <button onClick={() => setLayoutMode('VOICE')} className={`btn btn-xs ${layoutMode === 'VOICE' ? 'active' : ''}`}>VOICE</button>
                   <button onClick={() => setLayoutMode('HYBRID')} className={`btn btn-xs ${layoutMode === 'HYBRID' ? 'active' : ''}`}>HYBRID</button>
                   <button onClick={() => setLayoutMode('CHAT')} className={`btn btn-xs ${layoutMode === 'CHAT' ? 'active' : ''}`}>CHAT</button>
               </div>

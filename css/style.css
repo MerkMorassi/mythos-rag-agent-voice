@@ -257,6 +257,11 @@ html, body {
     box-sizing: border-box;
 }
 
+/* HELPER FOR SINGLE MESSAGE CENTERING (System Notice) */
+.logs-container.centered-single {
+    justify-content: center;
+}
+
 .log-entry {
     display: flex;
     flex-direction: column;
@@ -274,7 +279,18 @@ html, body {
 .log-timestamp { font-size: 0.65rem; opacity: 0.5; }
 .log-sender { font-size: 0.7rem; font-weight: bold; opacity: 0.8; margin-bottom: 2px; }
 
-.empty-state { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; color: #333; font-size: 0.8rem; letter-spacing: 0.1em; }
+.empty-state { 
+    flex-grow: 1; 
+    display: flex; 
+    flex-direction: column; 
+    justify-content: center; 
+    align-items: center; 
+    color: #666; 
+    font-size: 0.8rem; 
+    letter-spacing: 0.1em;
+    height: 100%; 
+    text-align: center;
+}
 
 .btn {
     height: var(--btn-h-md);
@@ -482,6 +498,7 @@ html, body {
 .mode-selector button.active { color: #000; }
 .mode-selector button.active.std { background: #4ade80; }
 .mode-selector button.active.deep { background: #a78bfa; }
+.mode-selector button.active.img { background: #e879f9; }
 .mode-selector button.active.ext { background: #facc15; }
 
 /* --- RESPONSIVE / MOBILE OPTIMIZATION --- */
