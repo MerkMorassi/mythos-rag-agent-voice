@@ -96,7 +96,7 @@ export class IngestionService {
         if (chunks.length === 0) return 0;
 
         const ai = new GoogleGenAI({ apiKey });
-        const BATCH_SIZE = 50; 
+        const BATCH_SIZE = 10; // Reduced batch size
         let savedCount = 0;
 
         for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
@@ -122,7 +122,6 @@ export class IngestionService {
                         embedding: embeddings?.[k]?.values,
                         timestamp: Date.now(),
                         tags: ['AUTO_INGEST', 'CHAT_UPLOAD']
-                        // numMarkId intentionally OMITTED per requirements
                     };
                     return addDocument(doc);
                 });
@@ -216,10 +215,11 @@ export class IngestionService {
                         const triggerDepth = isArrayRoot ? 0 : 1;
                         if (depth === triggerDepth) {
                             buffering = true;
-                            objectBuffer = '';
+                            objectBuffer += char;
+                        } else if (buffering) {
+                            objectBuffer += char;
                         }
                         depth++;
-                        if (buffering) objectBuffer += char;
                     } 
                     else if (char === '}') {
                         if (buffering) objectBuffer += char;
@@ -277,39 +277,85 @@ export class IngestionService {
     /**
      * STRUCTURE-AWARE RECURSIVE CHUNKER
      * Splits text by Headers -> Paragraphs -> Sentences to preserve context.
+     * Prevents giant chunks from large paragraphs.
+     * 
+     * SAFE MODE: Detects binary and uses fallback simple chunking for massive files.
      */
     static chunkText(text: string, maxChunkSize: number = 1000, overlap: number = 100): string[] {
+        // 0. Binary Detection (Null characters)
+        // If >0.1% of characters are null, likely binary.
+        if (text.includes('\0')) {
+             throw new Error("Binary content detected. Please upload valid text/markdown/json.");
+        }
+
         const chunks: string[] = [];
         
-        // 1. Split by Markdown Headers (Narrative Scenes)
-        // Regex looks for # Header at start of line
-        const sections = text.split(/(?=^#{1,3}\s)/gm);
-
-        for (const section of sections) {
-            if (section.trim().length === 0) continue;
-
-            // If section fits, keep it whole (Preserve Context)
-            if (section.length <= maxChunkSize) {
-                chunks.push(section.trim());
-                continue;
+        try {
+            // 1. Split by Markdown Headers (Narrative Scenes)
+            // Safety: If file is too large, skip regex split to avoid stack overflow/memory issues
+            let sections = [text];
+            if (text.length < 5 * 1024 * 1024) { // 5MB Limit for Regex Split
+                sections = text.split(/(?=^#{1,3}\s)/gm);
             }
 
-            // 2. If too big, split by Paragraphs
-            const paragraphs = section.split(/\n\s*\n/);
-            let currentChunk = "";
+            for (const section of sections) {
+                if (section.trim().length === 0) continue;
 
-            for (const para of paragraphs) {
-                // If adding this para exceeds limit, push current and start new
-                if ((currentChunk.length + para.length) > maxChunkSize) {
-                    if (currentChunk) chunks.push(currentChunk.trim());
-                    // Start new chunk with overlap from previous (The "Narrative Tail")
-                    const tail = currentChunk.slice(-overlap);
-                    currentChunk = tail + "\n\n" + para;
-                } else {
-                    currentChunk += (currentChunk ? "\n\n" : "") + para;
+                // If section fits, keep it whole (Preserve Context)
+                if (section.length <= maxChunkSize) {
+                    chunks.push(section.trim());
+                    continue;
                 }
+
+                // 2. If too big, split by Paragraphs
+                const paragraphs = section.split(/\n\s*\n/);
+                let currentChunk = "";
+
+                for (const para of paragraphs) {
+                    // 3. FORCE SPLIT GIANT PARAGRAPHS
+                    if (para.length > maxChunkSize) {
+                        // Flush current
+                        if (currentChunk) {
+                            chunks.push(currentChunk.trim());
+                            currentChunk = "";
+                        }
+                        
+                        let i = 0;
+                        while (i < para.length) {
+                            let end = i + maxChunkSize;
+                            if (end > para.length) end = para.length;
+                            chunks.push(para.substring(i, end).trim());
+                            i = end - overlap; 
+                            if (i < 0) i = 0; // Prevent infinite loop if overlap >= maxChunkSize
+                            // Safety break for logic error
+                            if (i >= para.length) break;
+                        }
+                        continue; 
+                    }
+
+                    // If adding this para exceeds limit, push current and start new
+                    if ((currentChunk.length + para.length) > maxChunkSize) {
+                        if (currentChunk) chunks.push(currentChunk.trim());
+                        // Start new chunk with overlap
+                        const tail = currentChunk.slice(-overlap);
+                        currentChunk = tail + "\n\n" + para;
+                    } else {
+                        currentChunk += (currentChunk ? "\n\n" : "") + para;
+                    }
+                }
+                if (currentChunk) chunks.push(currentChunk.trim());
             }
-            if (currentChunk) chunks.push(currentChunk.trim());
+        } catch (e) {
+            console.warn("Regex chunking failed, falling back to simple linear chunking.", e);
+            // FALLBACK: LINEAR SCAN
+            let i = 0;
+            while (i < text.length) {
+                let end = i + maxChunkSize;
+                if (end > text.length) end = text.length;
+                chunks.push(text.substring(i, end).trim());
+                i = end - overlap;
+                if (i < 0) i = 0;
+            }
         }
 
         return chunks;

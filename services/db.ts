@@ -541,6 +541,7 @@ function cosineSimilarity(vecA: number[], vecB: number[]): number {
     normA += vecA[i] * vecA[i];
     normB += vecB[i] * vecB[i];
   }
+  if (normA === 0 || normB === 0) return 0;
   return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
@@ -550,14 +551,16 @@ export const searchDocuments = async (query: string, queryEmbedding?: number[], 
   const queryTerms = lowerQuery.split(/\s+/).filter(t => t.length > 2); 
 
   const scoredDocs = docsToSearch.map(doc => {
-      // 1. Vector Score (Semantic)
+      // 1. Vector Score (Semantic) - 70% Weight
       let vectorScore = 0;
       if (doc.embedding && queryEmbedding) {
           const rawScore = cosineSimilarity(queryEmbedding, doc.embedding);
+          // Clamp negative cosine similarity to 0
           vectorScore = Math.max(0, rawScore);
       }
 
-      // 2. Keyword Score (Precision)
+      // 2. Keyword Score (Precision) - 30% Weight
+      // Simple heuristic: saturation at 5 matches = 100% relevance
       let keywordHits = 0;
       const contentLower = (doc.content + " " + doc.title).toLowerCase();
       
@@ -570,8 +573,10 @@ export const searchDocuments = async (query: string, queryEmbedding?: number[], 
       // 3. Hybrid Fusion
       let finalScore = 0;
       if (queryEmbedding && doc.embedding) {
+          // Weighted Fusion: 70% Semantic, 30% Keyword
           finalScore = (vectorScore * 0.7) + (keywordScore * 0.3);
       } else {
+          // Fallback to pure Keyword scoring if embedding missing
           finalScore = keywordScore;
       }
 

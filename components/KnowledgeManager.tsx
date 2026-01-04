@@ -137,7 +137,6 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
       }
   };
 
-  // ... (keeping all handler logic identical) ...
   const handleExportLorePack = async () => {
       if (docs.length === 0) {
           showStatus("No documents to export.", 'error');
@@ -204,10 +203,11 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
         const file = files[i];
         await new Promise(resolve => setTimeout(resolve, 0));
         const text = await file.text();
+        // chunkText updated to handle large paragraphs safely
         const chunks = IngestionService.chunkText(text);
         const startTime = Date.now();
         setUploadProgress({ fileName: file.name, current: 0, total: chunks.length, startTime });
-        const BATCH_SIZE = 100;
+        const BATCH_SIZE = 10; 
         for (let j = 0; j < chunks.length; j += BATCH_SIZE) {
             await new Promise(resolve => setTimeout(resolve, 0));
             const batchChunks = chunks.slice(j, j + BATCH_SIZE);
@@ -233,7 +233,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                     });
                 }
             } catch(err: any) {
-                console.error("Batch embedding failed, saving without vectors", err);
+                console.error("Batch embedding failed", err);
                 for (let k = 0; k < batchChunks.length; k++) {
                     const chunkContent = batchChunks[k];
                     const sigil = NumMarkX_GenerateSigil(chunkContent);
@@ -248,6 +248,8 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                 }
                 if (err.message && err.message.includes('429')) {
                     showStatus("Rate limit hit. Saving remaining chunks without vectors.", 'info');
+                } else if (err.message && err.message.includes('payload')) {
+                    showStatus("Chunk too large. Saving without vectors.", 'info');
                 }
             }
             setUploadProgress(prev => {
@@ -275,10 +277,15 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
     setIsProcessing(true);
     setIsStreamingImport(true);
     setStreamedDocsCount(0);
-    const BATCH_SIZE = 150;
+    const BATCH_SIZE = 20; // Reduced for safer embedding
     let batch: KnowledgeDoc[] = [];
     let count = 0;
     let foundHeader = null;
+    
+    // Auto-embed configuration
+    const apiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY;
+    const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
+
     try {
         for await (const obj of IngestionService.streamLorePack(file)) {
             if (obj.schema === 'MYTHOS.LOREPACK.v1' || (obj.agentId && obj.handle)) {
@@ -287,8 +294,9 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                 const doc = IngestionService.normalizeNode(obj, currentAgentId, count);
                 batch.push(doc);
                 count++;
+                
                 if (batch.length >= BATCH_SIZE) {
-                    await bulkAddDocuments(batch);
+                    await processBatch(batch, ai);
                     batch = [];
                     setStreamedDocsCount(count);
                     await new Promise(r => setTimeout(r, 0));
@@ -296,16 +304,18 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
             }
         }
         if (batch.length > 0) {
-            await bulkAddDocuments(batch);
+            await processBatch(batch, ai);
             setStreamedDocsCount(count);
         }
+        
         if (count === 0) {
              showStatus("Warning: No valid nodes found in stream. Check JSON format.", 'error');
         } else {
+             const embedsMsg = ai ? "" : " (No Embeddings generated - missing API Key)";
              if (foundHeader && foundHeader.agentId !== currentAgentId) {
-                 showStatus(`Imported ${count} nodes (Agent: ${foundHeader.agentId})`, 'info');
+                 showStatus(`Imported ${count} nodes (Agent: ${foundHeader.agentId})${embedsMsg}`, 'info');
              } else {
-                 showStatus(`Streamed ${count} nodes successfully.`, 'success');
+                 showStatus(`Streamed ${count} nodes successfully.${embedsMsg}`, 'success');
              }
              await fetchDocs();
              onUpdate();
@@ -318,6 +328,29 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
         setIsStreamingImport(false);
         if(importInputRef.current) importInputRef.current.value = '';
     }
+  };
+
+  const processBatch = async (batch: KnowledgeDoc[], ai: GoogleGenAI | null) => {
+      // If we have an AI client, try to generate missing embeddings
+      if (ai) {
+          const docsNeedingEmbed = batch.filter(d => !d.embedding);
+          if (docsNeedingEmbed.length > 0) {
+              try {
+                  const batchResult = await ai.models.embedContent({
+                      model: 'text-embedding-004',
+                      contents: docsNeedingEmbed.map(d => ({ parts: [{ text: d.content }] })),
+                      config: { taskType: 'RETRIEVAL_DOCUMENT' }
+                  });
+                  // Map back
+                  batchResult.embeddings?.forEach((e, idx) => {
+                      docsNeedingEmbed[idx].embedding = e.values;
+                  });
+              } catch (e) {
+                  console.warn("Auto-embed failed for batch, saving without vectors.", e);
+              }
+          }
+      }
+      await bulkAddDocuments(batch);
   };
 
   const handlePurgeAll = async () => {

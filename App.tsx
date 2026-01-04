@@ -154,12 +154,12 @@ const App: React.FC = () => {
                   
                   if (sessionPromiseRef.current) {
                       sessionPromiseRef.current.then(session => {
-                          if (isCameraOnRef.current) {
+                          if (isCameraOnRef.current && session && typeof session.sendRealtimeInput === 'function') {
                               session.sendRealtimeInput({ 
                                   media: { mimeType: 'image/jpeg', data: base64 } 
                               });
                           }
-                      });
+                      }).catch(() => {});
                   }
               }
           }, 1000); 
@@ -432,9 +432,15 @@ const App: React.FC = () => {
       setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'user', text: text, timestamp: Date.now() }]);
       try {
           const session = await sessionPromiseRef.current;
-          await session.send({
-              clientContent: { turns: [{ role: 'user', parts: [{ text }] }], turnComplete: true }
-          });
+          
+          if (session && typeof session.send === 'function') {
+              await session.send({
+                  clientContent: { turns: [{ role: 'user', parts: [{ text }] }], turnComplete: true }
+              });
+          } else {
+              console.error("Session not ready or 'send' method missing.");
+              setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', text: 'Error: Session not ready.', timestamp: Date.now() }]);
+          }
       } catch (e) {
           console.error("Failed to send text", e);
       }
@@ -515,49 +521,62 @@ const App: React.FC = () => {
           if (sessionPromiseRef.current) {
               const session = await sessionPromiseRef.current;
               
-              if (type === 'image') {
-                  // Send Image Frame
-                  session.sendRealtimeInput({
-                      media: { mimeType: file.type, data: data }
-                  });
-              } else if (type === 'text') {
-                  // Send Text Content
-                  session.send({
-                      clientContent: { turns: [{ role: 'user', parts: [{ text: `[USER UPLOADED TEXT/CODE FILE: ${file.name}]\n${data}` }] }], turnComplete: true }
-                  });
-                  
-                  // --- AUTO-INGEST TEXT TO DB ---
-                  const apiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY;
-                  if (apiKey) {
-                      IngestionService.ingestText(data, file.name, currentAgentId, apiKey)
-                        .then(count => {
-                            if (count > 0) {
-                                setLogs(prev => [...prev, {
-                                    id: crypto.randomUUID(),
-                                    type: 'system',
-                                    text: `[SYSTEM] Auto-ingested ${count} chunks from ${file.name} into Knowledge Base.`,
-                                    timestamp: Date.now()
-                                }]);
-                            }
-                        })
-                        .catch(err => console.error("Auto-ingest failed", err));
-                  }
+              if (session && typeof session.sendRealtimeInput === 'function') {
+                  if (type === 'image') {
+                      // Send Image Frame
+                      session.sendRealtimeInput({
+                          media: { mimeType: file.type, data: data }
+                      });
+                  } else if (type === 'text') {
+                      // TRUNCATE TEXT for Live Context to avoid 40MB payload limits
+                      // The full text is ingested into RAG separately below.
+                      const MAX_CONTEXT_LENGTH = 20000; // ~20KB safe limit for direct context
+                      const truncatedData = data.length > MAX_CONTEXT_LENGTH 
+                          ? data.substring(0, MAX_CONTEXT_LENGTH) + "\n...[TRUNCATED FOR LIVE CONTEXT. FULL TEXT INGESTED TO MEMORY]..." 
+                          : data;
 
-              } else if (type === 'pdf') {
-                  // Notify Model of PDF
-                  session.send({
-                      clientContent: { turns: [{ role: 'user', parts: [{ text: `[USER UPLOADED PDF: ${file.name} to Media Gallery]` }] }], turnComplete: true }
-                  });
-              } else if (type === 'video') {
-                  // Notify Model of Video
-                  session.send({
-                      clientContent: { turns: [{ role: 'user', parts: [{ text: `[USER UPLOADED VIDEO: ${file.name} to Media Gallery. Please analyze the context if possible.]` }] }], turnComplete: true }
-                  });
-              } else if (type === 'audio') {
-                  // Notify Model of Audio Upload
-                  session.send({
-                      clientContent: { turns: [{ role: 'user', parts: [{ text: `[USER UPLOADED AUDIO: ${file.name} to Media Gallery. Please analyze audio content if able.]` }] }], turnComplete: true }
-                  });
+                      if (typeof session.send === 'function') {
+                          session.send({
+                              clientContent: { turns: [{ role: 'user', parts: [{ text: `[USER UPLOADED TEXT/CODE FILE: ${file.name}]\n${truncatedData}` }] }], turnComplete: true }
+                          });
+                      }
+                      
+                      // --- AUTO-INGEST TEXT TO DB (FULL CONTENT) ---
+                      const apiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY;
+                      if (apiKey) {
+                          IngestionService.ingestText(data, file.name, currentAgentId, apiKey)
+                            .then(count => {
+                                if (count > 0) {
+                                    setLogs(prev => [...prev, {
+                                        id: crypto.randomUUID(),
+                                        type: 'system',
+                                        text: `[SYSTEM] Auto-ingested ${count} chunks from ${file.name} into Knowledge Base.`,
+                                        timestamp: Date.now()
+                                    }]);
+                                }
+                            })
+                            .catch(err => console.error("Auto-ingest failed", err));
+                      }
+
+                  } else if (type === 'pdf') {
+                      if (typeof session.send === 'function') {
+                          session.send({
+                              clientContent: { turns: [{ role: 'user', parts: [{ text: `[USER UPLOADED PDF: ${file.name} to Media Gallery]` }] }], turnComplete: true }
+                          });
+                      }
+                  } else if (type === 'video') {
+                      if (typeof session.send === 'function') {
+                          session.send({
+                              clientContent: { turns: [{ role: 'user', parts: [{ text: `[USER UPLOADED VIDEO: ${file.name} to Media Gallery. Please analyze the context if possible.]` }] }], turnComplete: true }
+                          });
+                      }
+                  } else if (type === 'audio') {
+                      if (typeof session.send === 'function') {
+                          session.send({
+                              clientContent: { turns: [{ role: 'user', parts: [{ text: `[USER UPLOADED AUDIO: ${file.name} to Media Gallery. Please analyze audio content if able.]` }] }], turnComplete: true }
+                          });
+                      }
+                  }
               }
           }
       };

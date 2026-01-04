@@ -189,7 +189,7 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
           const ai = new GoogleGenAI({ apiKey });
           
           // Process in batches
-          const BATCH_SIZE = 50; 
+          const BATCH_SIZE = 10; // Reduced from 50 to 10
           for(let i=0; i<chunks.length; i+=BATCH_SIZE) {
                const batch = chunks.slice(i, i+BATCH_SIZE);
                const batchResult = await ai.models.embedContent({
