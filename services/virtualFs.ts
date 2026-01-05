@@ -80,7 +80,7 @@ export const VirtualFs = {
             
             return JSON.stringify({
                 id: agent.id,
-                role: agent.role,
+                title: agent.title,
                 accessLevel: level,
                 capabilities: perms,
                 voice: agent.voice,

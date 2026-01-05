@@ -1,5 +1,5 @@
 
-import { Agent, SomaActionType, MultiAgentMessage } from "../types";
+import { Agent, SomaActionType, MultiAgentMessage, SomaPermission } from "../types";
 import { AccessControl } from "./accessControl";
 import { AGENTS } from "../agents";
 import { getAgentConfig } from "./db";
@@ -19,6 +19,7 @@ export interface ClusterNode {
     accessLevel: string;
     status: 'ONLINE' | 'OFFLINE' | 'BUSY';
     lastHeartbeat: number;
+    permissions?: SomaPermission[];
 }
 
 export class SomaKernel {
@@ -46,6 +47,7 @@ export class SomaKernel {
                 id: agent.id,
                 handle: agent.handle,
                 accessLevel: config.accessLevel || agent.accessLevel,
+                permissions: agent.permissions,
                 status: 'OFFLINE',
                 lastHeartbeat: Date.now()
             });
@@ -82,15 +84,40 @@ export class SomaKernel {
             return false;
         }
 
+        // 1. Check Explicit Permissions (New Schema)
+        if (node.permissions && node.permissions.length > 0) {
+            // Map action to permission string
+            // This requires a mapping since ActionType != PermissionType 1:1 always
+            const requiredPerm = this.mapActionToPermission(action);
+            if (requiredPerm && node.permissions.includes(requiredPerm)) {
+                return true;
+            }
+        }
+
+        // 2. Fallback to Chmod (Legacy/General)
         const allowed = AccessControl.canPerform(node.accessLevel, action);
         
         if (!allowed) {
             console.warn(`[SOMA KERNEL] ACCESS DENIED: ${node.handle} (Level ${node.accessLevel}) attempted ${action}`);
-        } else {
-            // console.debug(`[SOMA KERNEL] ACCESS GRANTED: ${node.handle} -> ${action}`);
         }
 
         return allowed;
+    }
+
+    private mapActionToPermission(action: SomaActionType): SomaPermission | undefined {
+        switch(action) {
+            case SomaActionType.QUERY_DB: return 'READ_LORE';
+            case SomaActionType.INGEST_DATA: return 'WRITE_LORE';
+            case SomaActionType.DELETE_DATA: return 'MODIFY_LORE'; // or MANAGE_MEMORY
+            case SomaActionType.EXEC_CODE: return 'EXECUTE_CODE';
+            case SomaActionType.ROUTE_REQUEST: return 'ROUTE_EXTERNAL';
+            case SomaActionType.CREATE_IMAGE: return 'GENERATE_MEDIA';
+            case SomaActionType.SYSTEM_ADMIN: return 'ADMIN_OVERRIDE';
+            case SomaActionType.BROADCAST: return 'BROADCAST_COUNCIL';
+            case SomaActionType.PUBLISH_CANON: return 'WRITE_CANON'; // Map to new perm
+            case SomaActionType.COLLABORATE: return 'COLLABORATE';
+            default: return undefined;
+        }
     }
 
     /**
@@ -120,19 +147,15 @@ export class SomaKernel {
             return mentions;
         }
 
-        // 2. Default to "High Clearance" or "General" agents if query is broad?
-        // For now, in our app, we usually manual select or broadcast.
-        // This kernel method handles the "Broadcast" logic logic.
-        
         // Filter agents capable of ROUTE_EXTERNAL if the prompt asks for images?
         if (userMessage.toLowerCase().includes('image') || userMessage.toLowerCase().includes('visual')) {
             return availableAgents.filter(a => {
                 const node = this.nodes.get(a.id);
-                return node && AccessControl.canPerform(node.accessLevel, SomaActionType.ROUTE_REQUEST);
+                return node && (AccessControl.canPerform(node.accessLevel, SomaActionType.ROUTE_REQUEST) || (node.permissions?.includes('ROUTE_EXTERNAL')));
             });
         }
 
-        return availableAgents; // Return all for broad broadcast (Console handles slicing)
+        return availableAgents; 
     }
 
     private parseMentions(text: string, agents: Agent[]): Agent[] {

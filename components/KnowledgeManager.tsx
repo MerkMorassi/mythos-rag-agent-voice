@@ -87,7 +87,8 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cloudFileInputRef = useRef<HTMLInputElement>(null);
-  const importInputRef = useRef<HTMLInputElement>(null);
+  const importInputRef = useRef<HTMLInputElement>(null); // For Active Memory Import
+  const libraryImportRef = useRef<HTMLInputElement>(null); // For Library Import
 
   const fetchDocs = async () => {
     try {
@@ -206,6 +207,47 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
       }
   };
 
+  const handleImportToLibrary = async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      
+      setIsProcessing(true);
+      setStatusMsg({ text: "Parsing LorePack for Library...", type: 'info' });
+
+      try {
+          // Use IngestionService to parse and validate
+          const result = await IngestionService.parseLorePack(file, currentAgentId);
+          
+          if (!result.success) throw new Error(result.error);
+          
+          // Construct LorePack object
+          const pack: LorePack = {
+              id: result.header.id,
+              header: result.header,
+              sacred_archive: result.docs
+          };
+
+          // Retarget to current agent to ensure it shows in their library
+          pack.header.agentId = currentAgentId; 
+          pack.header.handle = currentAgentId;
+          // Use filename as name if header name missing
+          if (!pack.header.name || pack.header.name === 'Streamed Import') {
+              pack.header.name = file.name.replace('.json', '');
+          }
+
+          await saveLorePack(pack);
+          await fetchSavedPacks();
+          showStatus(`Imported "${pack.header.name}" to Library.`, 'success');
+
+      } catch (e: any) {
+          console.error(e);
+          showStatus(`Library Import Failed: ${e.message}`, 'error');
+      } finally {
+          setIsProcessing(false);
+          if (libraryImportRef.current) libraryImportRef.current.value = '';
+      }
+  };
+
   /**
    * EXCLUSIVE MOUNTING
    * Wipes previous active memory for this agent and loads the new pack.
@@ -277,7 +319,6 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
         const file = files[i];
         await new Promise(resolve => setTimeout(resolve, 0));
         const text = await file.text();
-        // chunkText updated to handle large paragraphs safely
         const chunks = IngestionService.chunkText(text);
         const startTime = Date.now();
         setUploadProgress({ fileName: file.name, current: 0, total: chunks.length, startTime });
@@ -679,10 +720,19 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
 
                 {activeTab === 'library' && (
                     <div className="flex-col">
-                        <span className="section-header-title" style={{color: '#facc15'}}>LORE LIBRARY ({savedPacks.length})</span>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span className="section-header-title" style={{color: '#facc15'}}>LORE LIBRARY ({savedPacks.length})</span>
+                            
+                            {/* IMPORT PACK TO LIBRARY */}
+                            <label className="btn btn-secondary btn-xs" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }} title="Upload a JSON LorePack to this Library (No Mount)">
+                                IMPORT PACK
+                                <input type="file" accept=".json" onChange={handleImportToLibrary} ref={libraryImportRef} className="hidden" />
+                            </label>
+                        </div>
+                        
                         <div className="section-panel" style={{ padding: '1rem', marginBottom: '1rem' }}>
                             <p style={{ fontSize: '0.75rem', color: '#ccc' }}>
-                                LorePacks are frozen snapshots. Mounting a pack will <strong>REPLACE</strong> the current Active Memory for this agent.
+                                LorePacks are persistent snapshots. Mounting a pack will <strong>SWAP OUT</strong> the current Active Memory for this agent.
                             </p>
                         </div>
 

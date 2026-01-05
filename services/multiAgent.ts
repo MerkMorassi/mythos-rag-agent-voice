@@ -58,7 +58,7 @@ const consultAgentTool: FunctionDeclaration = {
         properties: {
             targetId: {
                 type: Type.STRING,
-                description: "The ID of the agent to consult (e.g., 'ARCHIVAX', 'CLIO')."
+                description: "The ID of the agent to consult (e.g., 'NOESIS', 'BARBELO')."
             },
             query: {
                 type: Type.STRING,
@@ -70,6 +70,35 @@ const consultAgentTool: FunctionDeclaration = {
             }
         },
         required: ["targetId", "query"]
+    }
+};
+
+// THESPIAN PROTOCOL
+const assumeRoleTool: FunctionDeclaration = {
+    name: "assume_role",
+    description: "Assume a fictional character role for rehearsal or performance.",
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            characterName: { type: Type.STRING },
+            scriptContext: { type: Type.STRING }
+        },
+        required: ["characterName"]
+    }
+};
+
+// GREENLIGHT SYSTEM (Barbelo/Partners)
+const greenlightTool: FunctionDeclaration = {
+    name: "greenlight_asset",
+    description: "Formally approve an asset, ritual, or script segment as Canon.",
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            assetId: { type: Type.STRING, description: "ID of the image, video frame, or text." },
+            verdict: { type: Type.STRING, enum: ["APPROVED", "REJECTED", "NEEDS_REVISION"] },
+            comment: { type: Type.STRING, description: "Official notes from the Executive Producer." }
+        },
+        required: ["assetId", "verdict"]
     }
 };
 
@@ -165,7 +194,7 @@ export const MultiAgentService = {
 
             console.warn(`[SAFETY] Attachment '${attachment.name}' flagged. Routing to External Cluster.`);
             
-            const safetyPrompt = `[SYSTEM: The user attached a file named '${attachment.name}' flagged as NSFW/Restricted. It has been withheld from the primary model. The user's text prompt is: "${userMessage}". Please respond to the user's text prompt within your persona (${agent.handle}: ${agent.role}), acknowledging you cannot see the image but proceeding with the conversation.]`;
+            const safetyPrompt = `[SYSTEM: The user attached a file named '${attachment.name}' flagged as NSFW/Restricted. It has been withheld from the primary model. The user's text prompt is: "${userMessage}". Please respond to the user's text prompt within your persona (${agent.handle}: ${agent.title}), acknowledging you cannot see the image but proceeding with the conversation.]`;
             
             try {
                 const routerRes = await ExternalRouter.route(
@@ -229,7 +258,7 @@ export const MultiAgentService = {
             const specificInstruction = agentConfig.instruction || "";
 
             const rosterString = activeRoster
-                .map(a => `- ${a.handle.toUpperCase()} (${a.pronouns || 'they/them'}): ${a.role}`)
+                .map(a => `- ${a.handle.toUpperCase()} (${a.pronouns || 'they/them'}): ${a.title}`)
                 .join('\n');
 
             let memorySection = "";
@@ -257,7 +286,9 @@ ${rosterString}
 === YOUR IDENTITY ===
 NAME: ${agent.handle}
 PRONOUNS: ${agent.pronouns || "they/them"}
-ROLE: ${agent.role}
+TITLE: ${agent.title}
+CLASS: ${agent.agentClass}
+BIO: ${agent.bio}
 ACCESS_LEVEL: ${agentConfig.accessLevel || agent.accessLevel} (SOMA Permission Bitmask)
 CORE INSTRUCTION: ${agent.system_instruction}
 ${specificInstruction}
@@ -320,6 +351,16 @@ ${agent.handle.toUpperCase()}:`;
             // Authorization for Delegation (Synapse) & Holodeck (Collaboration)
             if (kernel.authorize(agent.id, SomaActionType.COLLABORATE)) {
                 tools.push({ functionDeclarations: [consultAgentTool, readCanvasTool, updateCanvasTool] });
+            }
+            
+            // Thespian Protocol (Partners & Talent)
+            if (agent.agentClass === 'TALENT' || agent.agentClass === 'PARTNER') {
+                tools.push({ functionDeclarations: [assumeRoleTool] });
+            }
+
+            // Greenlight System (Barbelo/Admins)
+            if (agent.handle === 'BARBELO' || agent.accessLevel === '777') {
+                tools.push({ functionDeclarations: [greenlightTool] });
             }
             
             // HARDCODED: Google Maps Tools
@@ -436,6 +477,25 @@ ${agent.handle.toUpperCase()}:`;
                     } catch(e: any) {
                         return { agentId: agent.id, text: `[DELEGATION FAILED]: ${e.message}` };
                     }
+                }
+
+                // THESPIAN PROTOCOL: ASSUME ROLE
+                else if (call.name === "assume_role") {
+                    const args = call.args as any;
+                    return { 
+                        agentId: agent.id, 
+                        text: `[SYSTEM: ROLE_SHIFT_ACTIVE] ${agent.handle} is now performing as "${args.characterName}".\nContext: ${args.scriptContext || 'Improv'}` 
+                    };
+                }
+
+                // GREENLIGHT SYSTEM
+                else if (call.name === "greenlight_asset") {
+                    const args = call.args as any;
+                    const statusIcon = args.verdict === 'APPROVED' ? '✅' : '❌';
+                    return {
+                        agentId: agent.id,
+                        text: `[EXECUTIVE ORDER] Asset ${args.assetId} has been ${args.verdict} ${statusIcon}.\nNote: ${args.comment}`
+                    };
                 }
 
                 // HOLODECK: READ

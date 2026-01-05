@@ -335,7 +335,7 @@ const App: React.FC = () => {
       }
   }, [connectionState, analyser, isMicOn]);
 
-  // Auto-focus Input Listener: Ensures text-only users can type immediately upon connection
+  // Auto-focus Input Listener
   useEffect(() => {
       if (connectionState === ConnectionState.CONNECTED) {
           mainInputRef.current?.focus();
@@ -345,9 +345,8 @@ const App: React.FC = () => {
   useEffect(() => { loadAgentConfig(currentAgentId); }, [currentAgentId]);
   useEffect(() => { logEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [logs, layoutMode]);
 
-  // STREAMING LOOP (VISION) - OPTIMIZED FOR ROBUSTNESS
+  // STREAMING LOOP (VISION)
   useEffect(() => {
-      // Clean up previous interval immediately
       if (frameIntervalRef.current) {
           clearInterval(frameIntervalRef.current);
           frameIntervalRef.current = null;
@@ -358,7 +357,6 @@ const App: React.FC = () => {
           const ctx = canvas.getContext('2d');
           
           frameIntervalRef.current = window.setInterval(() => {
-              // Priority Source Check
               let source: CanvasImageSource | null = null;
               
               if (videoSource === 'media' && mediaVideoRef.current) {
@@ -368,19 +366,16 @@ const App: React.FC = () => {
               }
 
               if (ctx && source) {
-                  // For HTMLVideoElement, check readiness
                   if (source instanceof HTMLVideoElement) {
-                      if (source.readyState < 2) return; // Not enough data
+                      if (source.readyState < 2) return;
                   }
                   
-                  // Downscale for performance if needed
                   canvas.width = 640; 
                   canvas.height = 360; 
                   
                   ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
                   const base64 = canvas.toDataURL('image/jpeg', 0.6).split(',')[1];
                   
-                  // Send to model
                   sendRealtimeInput({ media: { mimeType: 'image/jpeg', data: base64 } });
               }
           }, 1000); // 1 FPS
@@ -430,7 +425,6 @@ const App: React.FC = () => {
           if (videoRef.current?.srcObject) (videoRef.current.srcObject as MediaStream).getTracks().forEach(t => t.stop());
       } else {
           setVideoSource('camera');
-          // Switch to HYBRID if in CHAT, otherwise VIDEO (Screening Room)
           if (layoutMode === 'CHAT') setLayoutMode('HYBRID');
           else if (layoutMode !== 'HYBRID') setLayoutMode('VIDEO'); 
           
@@ -448,12 +442,10 @@ const App: React.FC = () => {
           const url = URL.createObjectURL(file);
           setStreamFileUrl(url);
           setVideoSource('media');
-          // Switch to HYBRID if in CHAT, otherwise VIDEO
           if (layoutMode === 'CHAT') setLayoutMode('HYBRID');
           else if (layoutMode !== 'HYBRID') setLayoutMode('VIDEO');
           
-          setIsCameraOn(true); // Treat media stream as "camera on" for logic
-          // Auto-play the media video ref when it loads
+          setIsCameraOn(true);
           setTimeout(() => mediaVideoRef.current?.play(), 500);
       }
       if(mediaFileInputRef.current) mediaFileInputRef.current.value = '';

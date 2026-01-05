@@ -19,6 +19,15 @@ export enum ConnectionState {
   ERROR = 'ERROR',
 }
 
+export interface VisionEvent {
+    id: string;
+    timestamp: number;
+    type: 'SCREENING_ROOM_SNAPSHOT';
+    description: string; // The text analysis from Gemini Vision
+    assetUrl: string;    // The snapshot
+    witnessedBy: string[]; // ['BARBELO', 'KINE']
+}
+
 export interface LogMessage {
   id: string;
   type: 'user' | 'model' | 'system' | 'tool';
@@ -28,6 +37,7 @@ export interface LogMessage {
   feedback?: 'up' | 'down';
   attachment?: string; // Base64 image data or Video URI
   attachmentType?: 'image' | 'video' | 'text' | 'audio' | 'pdf';
+  visionEvent?: VisionEvent; // Vision Bridge Data
 }
 
 export interface ChatSession {
@@ -104,11 +114,11 @@ export interface CommunitySummary {
 
 // --- SOMA PERMISSION ARCHITECTURE ---
 // Sector 1: MNEMOSYNE (Memory)
-export type PermMemory = 'READ_LORE' | 'WRITE_LORE' | 'MODIFY_LORE';
+export type PermMemory = 'READ_LORE' | 'WRITE_LORE' | 'MODIFY_LORE' | 'MANAGE_MEMORY';
 // Sector 2: TECHNE (Tools)
-export type PermTools = 'EXECUTE_CODE' | 'ROUTE_EXTERNAL' | 'GENERATE_MEDIA';
+export type PermTools = 'EXECUTE_CODE' | 'ROUTE_EXTERNAL' | 'GENERATE_MEDIA' | 'COLLABORATE';
 // Sector 3: METRON (System)
-export type PermSystem = 'ADMIN_OVERRIDE' | 'BROADCAST_COUNCIL' | 'SELF_UPDATE' | 'WRITE_CANON';
+export type PermSystem = 'ADMIN_OVERRIDE' | 'BROADCAST_COUNCIL' | 'SELF_UPDATE' | 'PUBLISH_CANON' | 'WRITE_CANON';
 
 export type SomaPermission = PermMemory | PermTools | PermSystem;
 
@@ -130,16 +140,48 @@ export enum SomaActionType {
     COLLABORATE = 'COLLABORATE'
 }
 
+// --- HIERARCHY TYPES ---
+export type AgentClass = 'PARTNER' | 'EXECUTIVE' | 'TALENT' | 'STAFF';
+export type AgentDepartment = 'ADMINISTRATION' | 'CREATIVE' | 'PRODUCTION' | 'TECHNICAL';
+
+export interface StudioConfig {
+    preferredTools: string[];
+    color: string;
+}
+
+export interface ActorProfile {
+    canAct: boolean;
+    currentRole?: string;     // e.g. "Kali Malindra"
+    voiceCloneId?: string;
+}
+
 export interface Agent {
   id: string;
   handle: string;
-  role: string;
+  name: string;
+  
+  // Hierarchy
+  agentClass: AgentClass;
+  department: AgentDepartment;
+  title: string; // Replaces 'role'
+  
+  // Identity
+  bio: string;
   system_instruction: string;
+  pronouns?: string;
+  
+  // Operational
+  accessLevel: string; // '777', '755', '644'
+  permissions: SomaPermission[]; 
+  
+  // Capabilities
   voice: string;
-  voiceReference?: string; 
-  accessLevel: string; // Default CHMOD like "755"
-  pronouns?: string; // "he/him", "she/her", "they/them"
-  permissions?: SomaPermission[]; // Explicit capabilities list
+  voiceReference?: string; // Legacy support for settings
+  studioConfig?: StudioConfig;
+  actorProfile?: ActorProfile;
+
+  // State (Legacy support)
+  file_ids?: string[]; 
 }
 
 // --- LOREPACK SCHEMA (MYTHOS.LOREPACK.v1) ---

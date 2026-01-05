@@ -66,6 +66,8 @@ export const AccessControl = {
                 return perms.includes('ADMIN_OVERRIDE');
             case SomaActionType.BROADCAST:
                 return perms.includes('BROADCAST_COUNCIL');
+            case SomaActionType.PUBLISH_CANON:
+                return perms.includes('PUBLISH_CANON');
             
             // SYNAPSE PROTOCOL
             // Collaboration requires the ability to Route (Bit 2 in Tools or System Broadcast)
