@@ -140,6 +140,22 @@ html, body {
     padding-bottom: 2rem; /* Buffer for aesthetics */
 }
 
+/* HOLODECK */
+.holodeck-panel {
+    flex: 1;
+    border-left: 1px solid #333;
+    background: #09090b;
+    padding: 2rem;
+    overflow-y: auto;
+    color: #e5e7eb;
+    font-family: var(--font-mono);
+    min-width: 300px;
+    transition: all 0.3s ease;
+    box-sizing: border-box;
+}
+.holodeck-panel h1 { font-size: 1.5rem; letter-spacing: 2px; margin-top: 0; }
+.holodeck-panel h2 { font-size: 1.1rem; margin-top: 0; }
+
 /* Rest of styles remain largely similar */
 
 .logo-text {

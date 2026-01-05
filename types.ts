@@ -171,6 +171,22 @@ export interface MediaAsset {
     tags?: string[];
 }
 
+// --- HOLODECK STATE (SHARED CANVAS) ---
+export interface CanvasSection {
+    id: string;
+    title: string;
+    content: string; // Markdown supported
+    lastEditor: string; // Agent ID
+    timestamp: number;
+}
+
+export interface WorkingMemory {
+    id: string; // 'HOLODECK_MAIN'
+    title: string;
+    sections: CanvasSection[];
+    lastModified: number;
+}
+
 // --- MULTI-AGENT TYPES (ENVELOPE PROTOCOL) ---
 export interface MultiAgentMessage {
     id: string;

@@ -1,5 +1,5 @@
 
-import { KnowledgeDoc, ChatSession, LogMessage, AgentConfig, ModelConfig, DEFAULT_MODEL_CONFIG, LorePack, MediaAsset, CanonBlock, GraphNode, GraphEdge } from '../types';
+import { KnowledgeDoc, ChatSession, LogMessage, AgentConfig, ModelConfig, DEFAULT_MODEL_CONFIG, LorePack, MediaAsset, CanonBlock, GraphNode, GraphEdge, WorkingMemory } from '../types';
 
 const DB_NAME = 'gemini_rag_db';
 const STORE_NAME = 'documents';
@@ -14,8 +14,9 @@ const CANON_STORE = 'production_blocks';
 const GRAPH_NODE_STORE = 'graph_nodes';
 const GRAPH_EDGE_STORE = 'graph_edges';
 const COMMUNITY_STORE = 'community_summaries';
+const WORKING_MEMORY_STORE = 'working_memory'; // HOLODECK
 
-const DB_VERSION = 12; // Bumped for vector store
+const DB_VERSION = 13; // Bumped for working_memory
 
 // --- TYPES ---
 interface DocVector {
@@ -105,12 +106,37 @@ export const initDB = (): Promise<IDBDatabase> => {
           const commStore = db.createObjectStore(COMMUNITY_STORE, { keyPath: 'id' });
           commStore.createIndex('agentId', 'agentId', { unique: false });
       }
+
+      // 5. HOLODECK STORE
+      if (!db.objectStoreNames.contains(WORKING_MEMORY_STORE)) {
+          db.createObjectStore(WORKING_MEMORY_STORE, { keyPath: 'id' });
+      }
     };
 
     request.onsuccess = (event) => {
       resolve((event.target as IDBOpenDBRequest).result);
     };
   });
+};
+
+// --- HOLODECK OPERATIONS ---
+export const getCanvas = async (id: string = 'HOLODECK_MAIN'): Promise<WorkingMemory> => {
+    const db = await initDB();
+    return new Promise((resolve) => {
+        const tx = db.transaction([WORKING_MEMORY_STORE], 'readonly');
+        const req = tx.objectStore(WORKING_MEMORY_STORE).get(id);
+        req.onsuccess = (e: any) => {
+            const res = e.target.result;
+            resolve(res || { id, title: "New Project", sections: [], lastModified: Date.now() });
+        };
+    });
+};
+
+export const updateCanvas = async (memory: WorkingMemory): Promise<void> => {
+    const db = await initDB();
+    const tx = db.transaction([WORKING_MEMORY_STORE], 'readwrite');
+    tx.objectStore(WORKING_MEMORY_STORE).put(memory);
+    return new Promise((resolve) => { tx.oncomplete = () => resolve(); });
 };
 
 // --- MIGRATION UTILITY ---

@@ -1,7 +1,7 @@
 
 import { GoogleGenAI, FunctionDeclaration, Type, Tool } from "@google/genai";
 import { Agent, MultiAgentMessage, SomaActionType } from "../types";
-import { searchDocuments, getAgentConfig, getGraphContext } from "./db";
+import { searchDocuments, getAgentConfig, getGraphContext, getCanvas, updateCanvas } from "./db";
 import { RetrievalGate } from "./retrievalGate";
 import { ExternalRouter } from "./externalRouter";
 import { SomaKernel } from "./soma";
@@ -70,6 +70,28 @@ const consultAgentTool: FunctionDeclaration = {
             }
         },
         required: ["targetId", "query"]
+    }
+};
+
+// HOLODECK TOOLS
+export const readCanvasTool: FunctionDeclaration = {
+    name: "read_canvas",
+    description: "Read the current content of the Shared Whiteboard/Holodeck.",
+    parameters: { type: Type.OBJECT, properties: {}, required: [] }
+};
+
+export const updateCanvasTool: FunctionDeclaration = {
+    name: "update_canvas",
+    description: "Modify the Shared Whiteboard. You can add, edit, or delete sections.",
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            operation: { type: Type.STRING, enum: ["ADD_SECTION", "UPDATE_SECTION", "DELETE_SECTION", "SET_TITLE"], description: "The action to perform." },
+            sectionId: { type: Type.STRING, description: "Unique ID for the section (e.g., 'intro', 'chapter_1'). Required for UPDATE/DELETE." },
+            title: { type: Type.STRING, description: "Title of the section or the document." },
+            content: { type: Type.STRING, description: "The full text content for the section (Markdown allowed)." }
+        },
+        required: ["operation"]
     }
 };
 
@@ -295,9 +317,9 @@ ${agent.handle.toUpperCase()}:`;
                 tools.push({ functionDeclarations: [routeRequestTool] });
             }
             
-            // Authorization for Delegation (Synapse)
+            // Authorization for Delegation (Synapse) & Holodeck (Collaboration)
             if (kernel.authorize(agent.id, SomaActionType.COLLABORATE)) {
-                tools.push({ functionDeclarations: [consultAgentTool] });
+                tools.push({ functionDeclarations: [consultAgentTool, readCanvasTool, updateCanvasTool] });
             }
             
             // HARDCODED: Google Maps Tools
@@ -414,6 +436,48 @@ ${agent.handle.toUpperCase()}:`;
                     } catch(e: any) {
                         return { agentId: agent.id, text: `[DELEGATION FAILED]: ${e.message}` };
                     }
+                }
+
+                // HOLODECK: READ
+                else if (call.name === "read_canvas") {
+                    const canvas = await getCanvas();
+                    const summary = `=== HOLODECK: ${canvas.title} ===\n` + 
+                        canvas.sections.map(s => `[ID: ${s.id}] ## ${s.title}\n${s.content}`).join('\n\n');
+                    return { agentId: agent.id, text: `[READING CANVAS...]\n${summary}` };
+                }
+
+                // HOLODECK: UPDATE
+                else if (call.name === "update_canvas") {
+                    const args = call.args as any;
+                    const canvas = await getCanvas();
+                    
+                    if (args.operation === 'SET_TITLE') {
+                        canvas.title = args.title || canvas.title;
+                    } else if (args.operation === 'ADD_SECTION') {
+                        const newId = args.sectionId || `sec_${Date.now()}`;
+                        canvas.sections.push({
+                            id: newId,
+                            title: args.title || "Untitled",
+                            content: args.content || "",
+                            lastEditor: agent.id,
+                            timestamp: Date.now()
+                        });
+                    } else if (args.operation === 'UPDATE_SECTION') {
+                        const idx = canvas.sections.findIndex(s => s.id === args.sectionId);
+                        if (idx !== -1) {
+                            if(args.title) canvas.sections[idx].title = args.title;
+                            if(args.content) canvas.sections[idx].content = args.content;
+                            canvas.sections[idx].lastEditor = agent.id;
+                            canvas.sections[idx].timestamp = Date.now();
+                        }
+                    } else if (args.operation === 'DELETE_SECTION') {
+                        canvas.sections = canvas.sections.filter(s => s.id !== args.sectionId);
+                    }
+                    
+                    canvas.lastModified = Date.now();
+                    await updateCanvas(canvas);
+                    
+                    return { agentId: agent.id, text: `[HOLODECK UPDATED] Operation ${args.operation} successful.` };
                 }
 
                 // GOOGLE MAPS TOOL (RE-PROMPT PATTERN)

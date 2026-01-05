@@ -19,7 +19,8 @@ import { RoomFocusConfig } from './components/RoomFocusConfig';
 import { McpManager } from './components/McpManager';
 import { Terminal } from './components/Terminal';
 import { MediaGallery } from './components/MediaGallery';
-import { MediaPlayer } from './components/MediaPlayer'; // Import Player
+import { MediaPlayer } from './components/MediaPlayer'; 
+import { Holodeck } from './components/Holodeck';
 import {
   saveActiveChat,
   getAgentConfig,
@@ -29,13 +30,16 @@ import {
   saveMediaAsset,
   getGraphContext,
   searchDocuments,
-  ensureVectorIndex
+  ensureVectorIndex,
+  getCanvas,
+  updateCanvas
 } from './services/db';
 import { IngestionService } from './services/ingestion';
 import { NumMarkX_GenerateID } from './patterns/NumMarkX';
 import { useGeminiLive } from './hooks/useGeminiLive';
 import { McpClient } from './services/mcpClient';
 import { ExternalRouter } from './services/externalRouter';
+import { readCanvasTool, updateCanvasTool } from './services/multiAgent';
 
 type ViewMode = 'ORCHESTRATOR' | 'COUNCIL';
 type ModelMode = 'STD' | 'DEEP' | 'EXT' | 'IMG';
@@ -64,6 +68,10 @@ const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<ViewMode>('ORCHESTRATOR');
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
   const [activeSidePanel, setActiveSidePanel] = useState<string | null>(null);
+  
+  // Holodeck State
+  const [isHolodeckOpen, setIsHolodeckOpen] = useState(false);
+  const [holodeckRefresh, setHolodeckRefresh] = useState(0);
 
   // Video State
   const [isCameraOn, setIsCameraOn] = useState(false);
@@ -164,8 +172,16 @@ const App: React.FC = () => {
           }
       ]
   };
+  
+  // Reconstruct Holodeck Tools from exported definitions
+  const holodeckTools: Tool = {
+      functionDeclarations: [
+          readCanvasTool.functionDeclarations ? readCanvasTool.functionDeclarations[0] : readCanvasTool,
+          updateCanvasTool.functionDeclarations ? updateCanvasTool.functionDeclarations[0] : updateCanvasTool
+      ].filter(Boolean) as any
+  };
 
-  // --- TOOL HANDLER (GraphRAG + MCP + External) ---
+  // --- TOOL HANDLER (GraphRAG + MCP + External + Holodeck) ---
   const handleToolCall = async (toolCall: any): Promise<any[]> => {
       const responses = [];
       for (const fc of toolCall.functionCalls) {
@@ -279,6 +295,52 @@ const App: React.FC = () => {
                   });
               }
           }
+          
+          // 4. HOLODECK TOOLS
+          else if (fc.name === "read_canvas") {
+              const canvas = await getCanvas();
+              const summary = `=== HOLODECK: ${canvas.title} ===\n` + 
+                  canvas.sections.map(s => `[ID: ${s.id}] ## ${s.title}\n${s.content}`).join('\n\n');
+              responses.push({
+                  id: fc.id, name: fc.name, response: { result: summary }
+              });
+          }
+          else if (fc.name === "update_canvas") {
+              const args = fc.args as any;
+              const canvas = await getCanvas();
+              
+              if (args.operation === 'SET_TITLE') {
+                  canvas.title = args.title || canvas.title;
+              } else if (args.operation === 'ADD_SECTION') {
+                  const newId = args.sectionId || `sec_${Date.now()}`;
+                  canvas.sections.push({
+                      id: newId,
+                      title: args.title || "Untitled",
+                      content: args.content || "",
+                      lastEditor: currentAgentId,
+                      timestamp: Date.now()
+                  });
+              } else if (args.operation === 'UPDATE_SECTION') {
+                  const idx = canvas.sections.findIndex(s => s.id === args.sectionId);
+                  if (idx !== -1) {
+                      if(args.title) canvas.sections[idx].title = args.title;
+                      if(args.content) canvas.sections[idx].content = args.content;
+                      canvas.sections[idx].lastEditor = currentAgentId;
+                      canvas.sections[idx].timestamp = Date.now();
+                  }
+              } else if (args.operation === 'DELETE_SECTION') {
+                  canvas.sections = canvas.sections.filter(s => s.id !== args.sectionId);
+              }
+              
+              canvas.lastModified = Date.now();
+              await updateCanvas(canvas);
+              setHolodeckRefresh(prev => prev + 1); // TRIGGER UI REFRESH
+              setIsHolodeckOpen(true); // Auto-open on update
+              
+              responses.push({
+                  id: fc.id, name: fc.name, response: { result: "Canvas Updated Successfully." }
+              });
+          }
       }
       return responses;
   };
@@ -299,7 +361,7 @@ const App: React.FC = () => {
       modelName: 'gemini-2.5-flash-native-audio-preview-09-2025',
       systemInstruction,
       voiceName: selectedVoice,
-      tools: [retrievalTool, googleMapsTool, routeRequestTool],
+      tools: [retrievalTool, googleMapsTool, routeRequestTool, holodeckTools],
       onLog: (log) => {
           // Handle streaming log updates logic
           setLogs(prev => {
@@ -585,6 +647,15 @@ const App: React.FC = () => {
                 {connectionState}
             </div>
             
+            <button 
+                onClick={() => setIsHolodeckOpen(prev => !prev)}
+                className={`btn btn-secondary btn-icon ${isHolodeckOpen ? 'active' : ''}`}
+                title="Toggle Holodeck"
+                style={isHolodeckOpen ? {borderColor: '#38bdf8', color: '#38bdf8'} : {}}
+            >
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><line x1="9" y1="21" x2="9" y2="9"></line></svg>
+            </button>
+
             {renderTriggerBtn('VOICE', <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>, "Voice Commands")}
             {renderTriggerBtn('FOCUS', <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>, "Room Focus")}
             {renderTriggerBtn('MEDIA', <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect><line x1="7" y1="2" x2="7" y2="22"></line><line x1="17" y1="2" x2="17" y2="22"></line><line x1="2" y1="12" x2="22" y2="12"></line><line x1="2" y1="7" x2="7" y2="7"></line><line x1="2" y1="17" x2="7" y2="17"></line><line x1="17" y1="17" x2="22" y2="17"></line><line x1="17" y1="7" x2="22" y2="7"></line></svg>, "Media Gallery")}
@@ -614,79 +685,88 @@ const App: React.FC = () => {
         />
 
         {currentView === 'COUNCIL' ? (
-            <MultiAgentConsole onExit={() => setCurrentView('ORCHESTRATOR')} />
+            <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+                <MultiAgentConsole onExit={() => setCurrentView('ORCHESTRATOR')} />
+                <Holodeck isOpen={isHolodeckOpen} refreshTrigger={holodeckRefresh} />
+            </div>
         ) : (
-            <>
-                <div style={visualizerStyle}>
-                    <div className="panel-overlay top-left">
-                        <span className="overlay-label">
-                            VISUALIZER // {selectedVoice.toUpperCase()} // {isThinking ? 'THINKING...' : (isCameraOn ? 'CAM ON' : 'CAM OFF')}
-                        </span>
-                    </div>
-                    
-                    {/* VISUAL INDICATOR FOR THINKING */}
-                    {isThinking && (
-                        <div className="thinking-indicator" style={{
-                            position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-                            color: '#f59e0b', fontSize: '0.8rem', letterSpacing: '2px', fontWeight: 'bold',
-                            zIndex: 10, textShadow: '0 0 10px rgba(245, 158, 11, 0.8)',
-                            background: 'rgba(0,0,0,0.6)', padding: '0.5rem 1rem', borderRadius: '4px', border: '1px solid #f59e0b'
-                        }}>
-                            ACCESSING NEURAL LATTICE...
+            <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+                {/* ORCHESTRATOR LEFT PANE */}
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                    <div style={visualizerStyle}>
+                        <div className="panel-overlay top-left">
+                            <span className="overlay-label">
+                                VISUALIZER // {selectedVoice.toUpperCase()} // {isThinking ? 'THINKING...' : (isCameraOn ? 'CAM ON' : 'CAM OFF')}
+                            </span>
                         </div>
-                    )}
-
-                    <canvas ref={canvasRef} className="hidden" />
-                    
-                    {layoutMode === 'VIDEO' ? (
-                        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', color: '#333' }}>
-                            <div className="animate-pulse" style={{ width: '100px', height: '100px', borderRadius: '50%', border: `2px dashed ${isThinking ? '#facc15' : '#333'}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                <div style={{ width: '80px', height: '80px', borderRadius: '50%', background: '#111' }}></div>
-                            </div>
-                            <div style={{ marginTop: '1rem', fontSize: '0.7rem', letterSpacing: '2px', color: isThinking ? '#facc15' : '#444' }}>
-                                {isThinking ? 'ACCESSING KNOWLEDGE GRAPH...' : 'VIDEO FEED STANDBY'}
-                            </div>
-                        </div>
-                    ) : (
-                        <Visualizer analyser={analyser} isActive={connectionState === ConnectionState.CONNECTED} />
-                    )}
-
-                    <div style={{ position: 'absolute', bottom: '10px', right: '10px', width: '160px', height: '120px', background: '#000', border: '1px solid #4ade80', display: isCameraOn ? 'block' : 'none', zIndex: 30, boxShadow: '0 0 10px rgba(0,0,0,0.5)' }}>
-                        <video ref={videoRef} autoPlay playsInline muted style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                    </div>
-                </div>
-
-                <div style={layoutMode === 'CHAT' || layoutMode === 'HYBRID' ? { flex: '1 1 0', display: 'flex', flexDirection: 'column', overflow: 'hidden' } : { display: 'none' }}>
-                    <div className={`logs-container ${logs.length === 1 && logs[0].type === 'system' ? 'centered-single' : ''}`}>
-                        {logs.length === 0 && (
-                            <div className="empty-state">
-                                <p>SYSTEM READY.</p>
-                                <p>INITIALIZE CONNECTION TO BEGIN.</p>
+                        
+                        {/* VISUAL INDICATOR FOR THINKING */}
+                        {isThinking && (
+                            <div className="thinking-indicator" style={{
+                                position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+                                color: '#f59e0b', fontSize: '0.8rem', letterSpacing: '2px', fontWeight: 'bold',
+                                zIndex: 10, textShadow: '0 0 10px rgba(245, 158, 11, 0.8)',
+                                background: 'rgba(0,0,0,0.6)', padding: '0.5rem 1rem', borderRadius: '4px', border: '1px solid #f59e0b'
+                            }}>
+                                ACCESSING NEURAL LATTICE...
                             </div>
                         )}
-                        {logs.map(log => (
-                            <div key={log.id} className={`log-entry ${log.type}`}>
-                                <div style={{display:'flex', justifyContent:'space-between'}}>
-                                    <span className="log-sender">{log.type.toUpperCase()}</span>
-                                    <span className="log-timestamp">{new Date(log.timestamp).toLocaleTimeString()}</span>
+
+                        <canvas ref={canvasRef} className="hidden" />
+                        
+                        {layoutMode === 'VIDEO' ? (
+                            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', color: '#333' }}>
+                                <div className="animate-pulse" style={{ width: '100px', height: '100px', borderRadius: '50%', border: `2px dashed ${isThinking ? '#facc15' : '#333'}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                    <div style={{ width: '80px', height: '80px', borderRadius: '50%', background: '#111' }}></div>
                                 </div>
-                                {log.attachment && (
-                                    <div style={{ margin: '0.5rem 0', borderRadius: '4px', overflow: 'hidden', border: '1px solid #333', maxWidth: '300px' }}>
-                                        {log.attachmentType === 'image' ? (
-                                            <img src={`data:image/jpeg;base64,${log.attachment}`} style={{ width: '100%', display: 'block' }} />
-                                        ) : (
-                                            <div style={{ padding: '1rem', fontSize: '0.8rem', background: '#111', color: '#eee' }}>File Attached</div>
-                                        )}
-                                    </div>
-                                )}
-                                <span className="log-text">{log.text}</span>
-                                {log.isStreaming && <span className="animate-pulse">_</span>}
+                                <div style={{ marginTop: '1rem', fontSize: '0.7rem', letterSpacing: '2px', color: isThinking ? '#facc15' : '#444' }}>
+                                    {isThinking ? 'ACCESSING KNOWLEDGE GRAPH...' : 'VIDEO FEED STANDBY'}
+                                </div>
                             </div>
-                        ))}
-                        <div ref={logEndRef} />
+                        ) : (
+                            <Visualizer analyser={analyser} isActive={connectionState === ConnectionState.CONNECTED} />
+                        )}
+
+                        <div style={{ position: 'absolute', bottom: '10px', right: '10px', width: '160px', height: '120px', background: '#000', border: '1px solid #4ade80', display: isCameraOn ? 'block' : 'none', zIndex: 30, boxShadow: '0 0 10px rgba(0,0,0,0.5)' }}>
+                            <video ref={videoRef} autoPlay playsInline muted style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                        </div>
+                    </div>
+
+                    <div style={layoutMode === 'CHAT' || layoutMode === 'HYBRID' ? { flex: '1 1 0', display: 'flex', flexDirection: 'column', overflow: 'hidden' } : { display: 'none' }}>
+                        <div className={`logs-container ${logs.length === 1 && logs[0].type === 'system' ? 'centered-single' : ''}`}>
+                            {logs.length === 0 && (
+                                <div className="empty-state">
+                                    <p>SYSTEM READY.</p>
+                                    <p>INITIALIZE CONNECTION TO BEGIN.</p>
+                                </div>
+                            )}
+                            {logs.map(log => (
+                                <div key={log.id} className={`log-entry ${log.type}`}>
+                                    <div style={{display:'flex', justifyContent:'space-between'}}>
+                                        <span className="log-sender">{log.type.toUpperCase()}</span>
+                                        <span className="log-timestamp">{new Date(log.timestamp).toLocaleTimeString()}</span>
+                                    </div>
+                                    {log.attachment && (
+                                        <div style={{ margin: '0.5rem 0', borderRadius: '4px', overflow: 'hidden', border: '1px solid #333', maxWidth: '300px' }}>
+                                            {log.attachmentType === 'image' ? (
+                                                <img src={`data:image/jpeg;base64,${log.attachment}`} style={{ width: '100%', display: 'block' }} />
+                                            ) : (
+                                                <div style={{ padding: '1rem', fontSize: '0.8rem', background: '#111', color: '#eee' }}>File Attached</div>
+                                            )}
+                                        </div>
+                                    )}
+                                    <span className="log-text">{log.text}</span>
+                                    {log.isStreaming && <span className="animate-pulse">_</span>}
+                                </div>
+                            ))}
+                            <div ref={logEndRef} />
+                        </div>
                     </div>
                 </div>
-            </>
+                
+                {/* HOLODECK RIGHT PANE */}
+                <Holodeck isOpen={isHolodeckOpen} refreshTrigger={holodeckRefresh} />
+            </div>
         )}
       </main>
 
