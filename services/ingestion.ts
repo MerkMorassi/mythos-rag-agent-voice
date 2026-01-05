@@ -43,7 +43,7 @@ export class IngestionService {
 
             let updated = false;
 
-            // 1. Generate Sigil if missing (Safety check, though you said they exist)
+            // 1. Generate Sigil if missing
             if (!doc.numMarkId) {
                 doc.numMarkId = NumMarkX_GenerateSigil(doc.content);
                 updated = true;
@@ -61,7 +61,6 @@ export class IngestionService {
                 }
             } catch (e) {
                 console.warn(`[Retrofit] Graph extraction failed for ${doc.id}`, e);
-                // We do NOT mark as extracted so it can be retried later
             }
 
             // 3. Save Update if we changed tags or sigil
@@ -90,7 +89,7 @@ export class IngestionService {
             }
 
             const docs: KnowledgeDoc[] = [];
-            let header: LorePackHeader = NumMarkX_GenerateHeader(defaultAgentId, defaultAgentId, "Streamed Import");
+            let header: LorePackHeader = NumMarkX_GenerateHeader(defaultAgentId, defaultAgentId, "Imported Pack");
             let count = 0;
 
             for await (const obj of IngestionService.streamLorePack(fileBlob)) {
@@ -102,14 +101,14 @@ export class IngestionService {
                          handle: obj.handle || obj.agentId || defaultAgentId,
                          version: obj.version || 1,
                          timestamp: obj.timestamp || Date.now(),
-                         description: obj.description
+                         description: obj.description,
+                         name: obj.name
                     };
-                } else if (obj.content || obj.text || obj.sacred_archive || Array.isArray(obj)) {
+                } else {
+                    // Check if obj is array (handle bulk array structure)
                     if (Array.isArray(obj)) {
                         obj.forEach(sub => docs.push(IngestionService.normalizeNode(sub, header.agentId, count++)));
-                    } else if (obj.sacred_archive) {
-                        obj.sacred_archive.forEach((sub: any) => docs.push(IngestionService.normalizeNode(sub, header.agentId, count++)));
-                    } else {
+                    } else if (obj) {
                         docs.push(IngestionService.normalizeNode(obj, header.agentId, count++));
                     }
                 }
@@ -251,69 +250,86 @@ export class IngestionService {
         } catch (e) { }
     }
 
+    /**
+     * Robust Stream Parser
+     * Replaced custom byte-stream parser with JSON.parse for reliability.
+     */
     static async *streamLorePack(file: Blob): AsyncGenerator<any, void, unknown> {
-        const stream = file.stream();
-        const reader = stream.getReader();
-        const decoder = new TextDecoder();
-        let depth = 0;
-        let inString = false;
-        let escaped = false;
-        let rootDetermined = false;
-        let isArrayRoot = false;
-        let objectBuffer = '';
-        let buffering = false;
-
         try {
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                const chunk = decoder.decode(value, { stream: true });
-                for (let i = 0; i < chunk.length; i++) {
-                    const char = chunk[i];
-                    if (inString) {
-                        if (char === '\\' && !escaped) escaped = true;
-                        else if (char === '"' && !escaped) inString = false;
-                        else escaped = false;
-                        if (buffering) objectBuffer += char;
-                        continue;
-                    }
-                    if (char === '"') { inString = true; if (buffering) objectBuffer += char; continue; }
-                    if (!rootDetermined) {
-                        if (/\s/.test(char)) continue; 
-                        if (char === '[') { isArrayRoot = true; rootDetermined = true; continue; }
-                        else if (char === '{') { isArrayRoot = false; rootDetermined = true; depth = 1; continue; }
-                    }
-                    if (char === '{') {
-                        const triggerDepth = isArrayRoot ? 0 : 1;
-                        if (depth === triggerDepth) { buffering = true; objectBuffer += char; }
-                        else if (buffering) { objectBuffer += char; }
-                        depth++;
-                    } 
-                    else if (char === '}') {
-                        if (buffering) objectBuffer += char;
-                        depth--;
-                        const triggerDepth = isArrayRoot ? 0 : 1;
-                        if (depth === triggerDepth && buffering) {
-                            buffering = false;
-                            try { yield JSON.parse(objectBuffer); } catch (e) { }
-                            objectBuffer = '';
-                        }
-                    }
-                    else if (buffering) { objectBuffer += char; }
+            const text = await file.text();
+            
+            // Handle empty files gracefully
+            if (!text.trim()) return;
+
+            let data;
+            try {
+                data = JSON.parse(text);
+            } catch (e) {
+                // If it's not valid JSON, treat it as raw text wrapped in a doc
+                console.warn("Invalid JSON in LorePack, treating as text.");
+                yield { content: text, title: "Raw Import" };
+                return;
+            }
+
+            // Structure 1: LorePack { header: {}, sacred_archive: [] }
+            if (data.header) {
+                yield data.header;
+            }
+
+            // Find the array content, supporting various property names
+            let items: any[] = [];
+            
+            if (Array.isArray(data)) {
+                items = data;
+            } else {
+                // Look for *any* array property if typical ones aren't found
+                const possibleArrays = [
+                    data.sacred_archive, 
+                    data.docs, 
+                    data.documents, 
+                    data.nodes,
+                    data.items,
+                    data.records,
+                    data.data
+                ];
+                
+                const foundArray = possibleArrays.find(arr => Array.isArray(arr));
+                
+                if (foundArray) {
+                    items = foundArray;
+                } else if (!data.header) {
+                    // If no array found and no header, assume the object itself is the doc
+                    items = [data];
                 }
             }
-        } finally { reader.releaseLock(); }
+
+            for (const item of items) {
+                yield item;
+            }
+
+        } catch (e: any) {
+            console.error("LorePack JSON Parse Error:", e);
+            throw new Error(`Invalid LorePack JSON: ${e.message}`);
+        }
     }
 
     static normalizeNode(n: any, agentId: string, index: number): KnowledgeDoc {
-        const content = n.content || n.text || n.value || '';
+        // Handle raw strings (common in basic array exports)
+        let content = '';
+        if (typeof n === 'string') {
+            content = n;
+        } else {
+            content = n.content || n.text || n.value || n.pageContent || n.body || '';
+        }
+
         const embedding = n.embedding || n.vector || n.values;
-        const sigil = n.numMarkId || NumMarkX_GenerateSigil(typeof content === 'string' ? content : 'nodata');
+        const sigil = n.numMarkId || NumMarkX_GenerateSigil(content.length > 0 ? content : 'nodata');
+        
         return {
             id: n.id || NumMarkX_GenerateID('LORE'),
             agentId: agentId, 
             title: n.title || n.name || `Lore Node ${index + 1}`,
-            content: typeof content === 'string' ? content : JSON.stringify(content),
+            content: content,
             embedding: Array.isArray(embedding) ? embedding : undefined,
             timestamp: n.timestamp || Date.now(),
             numMarkId: sigil, 

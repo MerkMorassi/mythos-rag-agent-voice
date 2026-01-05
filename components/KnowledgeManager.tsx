@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { GoogleGenAI } from '@google/genai';
-import { KnowledgeDoc, CloudFile, LorePack } from '../types';
+import { KnowledgeDoc, CloudFile, LorePack, LorePackHeader } from '../types';
 import { 
   addDocument, 
   getDocumentsByAgentId, 
@@ -141,6 +141,11 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
       }
   };
 
+  const onInputClick = (e: React.MouseEvent<HTMLInputElement>) => {
+      // Allow re-selection of the same file
+      (e.target as HTMLInputElement).value = '';
+  };
+
   const processBatch = async (batch: KnowledgeDoc[], ai: GoogleGenAI | null) => {
       if (ai) {
           const docsNeedingEmbed = batch.filter(d => !d.embedding);
@@ -236,33 +241,52 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
       const file = e.target.files?.[0];
       if (!file) return;
       
+      // Use local processing state to show progress WITHOUT blocking UI
       setIsProcessing(true);
-      setStatusMsg({ text: "Parsing LorePack for Library...", type: 'info' });
+      setStatusMsg({ text: "Streaming to Library...", type: 'info' });
+
+      // Yield for render
+      await new Promise(resolve => setTimeout(resolve, 150));
 
       try {
-          // Use IngestionService to parse and validate
-          const result = await IngestionService.parseLorePack(file, currentAgentId);
+          // Accumulators
+          const accumulatedDocs: KnowledgeDoc[] = [];
+          let header: LorePackHeader = NumMarkX_GenerateHeader(currentAgentId, currentAgentId, "Imported Pack");
+          let count = 0;
           
-          if (!result.success) throw new Error(result.error);
-          
-          // Construct LorePack object
-          const pack: LorePack = {
-              id: result.header.id,
-              header: result.header,
-              sacred_archive: result.docs
-          };
-
-          // Retarget to current agent to ensure it shows in their library
-          pack.header.agentId = currentAgentId; 
-          pack.header.handle = currentAgentId;
-          // Use filename as name if header name missing
-          if (!pack.header.name || pack.header.name === 'Streamed Import') {
-              pack.header.name = file.name.replace('.json', '');
+          // Stream Process
+          for await (const obj of IngestionService.streamLorePack(file)) {
+              if (obj.schema === 'MYTHOS.LOREPACK.v1' || (obj.agentId && obj.handle && obj.version)) {
+                  header = {
+                         schema: 'MYTHOS.LOREPACK.v1',
+                         id: obj.id || crypto.randomUUID(),
+                         agentId: currentAgentId, // Retarget to current
+                         handle: currentAgentId,
+                         version: obj.version || 1,
+                         timestamp: obj.timestamp || Date.now(),
+                         description: obj.description,
+                         name: obj.name || file.name.replace('.json', '')
+                  };
+              } else {
+                  // Normalize and collect
+                  const doc = IngestionService.normalizeNode(obj, currentAgentId, count);
+                  accumulatedDocs.push(doc);
+                  count++;
+              }
           }
+          
+          // Finalize Pack
+          const pack: LorePack = {
+              id: header.id,
+              header: header,
+              sacred_archive: accumulatedDocs
+          };
+          
+          if (!pack.header.name) pack.header.name = file.name.replace('.json', '');
 
           await saveLorePack(pack);
           await fetchSavedPacks();
-          showStatus(`Imported "${pack.header.name}" to Library.`, 'success');
+          showStatus(`Imported "${pack.header.name}" to Library (${count} nodes).`, 'success');
 
       } catch (e: any) {
           console.error(e);
@@ -327,8 +351,11 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
     if (!files || files.length === 0) return;
     const apiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY;
     if (!apiKey) { showStatus("API Key Missing. Configure in Settings.", 'error'); return; }
-    setIsProcessing(true);
+    
+    // Set explicit upload progress state to trigger UI feedback without blocking entirely
+    setIsProcessing(true); 
     setStatusMsg(null);
+    
     try {
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
@@ -358,27 +385,39 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
     
-    if(!window.confirm("Importing a LorePack file. Do you want to REPLACE the current active memory with this pack? (Cancel to abort)")) return;
+    // Explicit confirm before doing ANY processing
+    if(!window.confirm("Importing a LorePack file. Do you want to REPLACE the current active memory with this pack? (Cancel to abort)")) {
+        e.target.value = ''; // Reset input so change fires again next time
+        return;
+    }
 
+    // Force UI state update immediately - BLOCKING UI FOR THIS OPERATION
     setIsProcessing(true);
     setIsStreamingImport(true);
     setStreamedDocsCount(0);
+    setStatusMsg({ text: "Reading LorePack...", type: 'info' });
+    
+    // YIELD TO RENDER - Critical for large files
+    await new Promise(resolve => setTimeout(resolve, 150));
     
     try {
+        // Step 1: Clear existing
         await deleteDocumentsByAgentId(currentAgentId);
         
-        const BATCH_SIZE = 20; 
+        const BATCH_SIZE = 50; 
         let batch: KnowledgeDoc[] = [];
         let count = 0;
-        let foundHeader = null;
         
         const apiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY;
         const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
 
+        // Step 2: Stream Process
         for await (const obj of IngestionService.streamLorePack(file)) {
-            if (obj.schema === 'MYTHOS.LOREPACK.v1' || (obj.agentId && obj.handle)) {
-                foundHeader = obj;
+            // Check if it's a Header (schema presence)
+            if (obj.schema === 'MYTHOS.LOREPACK.v1' || (obj.agentId && obj.handle && obj.version)) {
+                console.log("Found Header:", obj);
             } else {
+                // Assume it's a doc content node
                 const doc = IngestionService.normalizeNode(obj, currentAgentId, count);
                 batch.push(doc);
                 count++;
@@ -387,26 +426,32 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                     await processBatch(batch, ai);
                     batch = [];
                     setStreamedDocsCount(count);
+                    // Yield again to keep UI responsive during heavy embedding
                     await new Promise(r => setTimeout(r, 0));
                 }
             }
         }
+        
+        // Final batch
         if (batch.length > 0) {
             await processBatch(batch, ai);
             setStreamedDocsCount(count);
         }
         
-        showStatus(`Pack Mounted. ${count} nodes loaded.`, 'success');
+        // Success
         await fetchDocs();
         onUpdate();
+        showStatus(`Pack Mounted. ${count} nodes loaded.`, 'success');
 
     } catch (err: any) {
         console.error(err);
-        showStatus(`Streaming Failed: ${err.message}`, 'error');
+        showStatus(`Import Failed: ${err.message}`, 'error');
+        alert(`Import Error: ${err.message}`);
     } finally { 
         setIsProcessing(false); 
         setIsStreamingImport(false);
-        if(importInputRef.current) importInputRef.current.value = '';
+        // Reset input again just in case
+        if(e.target) e.target.value = '';
     }
   };
 
@@ -489,10 +534,11 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
           </button>
         </div>
 
-        {isStreamingImport || (isProcessing && !uploadProgress && !retrofitProgress) ? (
+        {/* FULL SCREEN BLOCKING LOADER - ONLY FOR LOREPACK IMPORT OR RETROFIT */}
+        {isStreamingImport || retrofitProgress ? (
             <div style={{ padding: '2rem', flex: 1, display: 'flex', flexDirection: 'column', gap: '1.5rem', justifyContent: 'center', alignItems: 'center', height: '100%', animation: 'fadeIn 0.3s' }}>
                 <div style={{ textAlign: 'center' }}>
-                    <h3 style={{ color: '#4ade80', marginBottom: '0.5rem' }}>{isStreamingImport ? 'STREAMING INGESTION' : 'PROCESSING'}</h3>
+                    <h3 style={{ color: '#4ade80', marginBottom: '0.5rem' }}>{isStreamingImport ? 'STREAMING INGESTION' : 'KNOWLEDGE RETROFIT'}</h3>
                     <p style={{ color: '#ccc', fontSize: '0.8rem' }}>Integrating Knowledge...</p>
                 </div>
                 
@@ -583,6 +629,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                                 type="file" 
                                 accept=".txt,.md,.json" 
                                 onChange={handleFileUpload} 
+                                onClick={onInputClick}
                                 ref={fileInputRef}
                                 className="hidden" 
                                 disabled={isProcessing}
@@ -590,7 +637,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                             />
                             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem' }}>
                                 <span style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#a3a3a3' }}>
-                                {isProcessing && uploadProgress ? 'PROCESSING...' : 'DROP .TXT / .MD / .JSON'}
+                                {uploadProgress ? 'PROCESSING...' : 'DROP .TXT / .MD / .JSON'}
                                 </span>
                                 <span style={{ fontSize: '0.7rem', color: '#666' }}>Smart Recursive Chunking & Graph Extraction</span>
                             </div>
@@ -604,18 +651,6 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                                     </div>
                                     <div style={{ width: '100%', height: '4px', background: '#333' }}>
                                         <div style={{ width: `${(uploadProgress.current / uploadProgress.total) * 100}%`, height: '100%', background: '#4ade80' }} />
-                                    </div>
-                                </div>
-                            )}
-                            
-                            {retrofitProgress && (
-                                <div className="flex-col" style={{ gap: '0.25rem' }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', color: '#facc15' }}>
-                                        <span>RETROFITTING...</span>
-                                        <span>{retrofitProgress.current}/{retrofitProgress.total}</span>
-                                    </div>
-                                    <div style={{ width: '100%', height: '4px', background: '#333' }}>
-                                        <div style={{ width: `${(retrofitProgress.current / retrofitProgress.total) * 100}%`, height: '100%', background: '#facc15' }} />
                                     </div>
                                 </div>
                             )}
@@ -650,7 +685,14 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                                     
                                     <label className="btn btn-accent" style={{ fontSize: '0.65rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }} title="Load a JSON LorePack into Active Memory">
                                         IMPORT LP
-                                        <input type="file" accept=".json" onChange={handleSelectLorePack} ref={importInputRef} className="hidden" />
+                                        <input 
+                                            type="file" 
+                                            accept=".json" 
+                                            onChange={handleSelectLorePack} 
+                                            onClick={onInputClick}
+                                            ref={importInputRef} 
+                                            className="hidden" 
+                                        />
                                     </label>
                                     
                                     <button 
@@ -703,9 +745,16 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                             <span className="section-header-title" style={{color: '#facc15'}}>LORE LIBRARY ({savedPacks.length})</span>
                             
                             {/* IMPORT PACK TO LIBRARY */}
-                            <label className="btn btn-secondary btn-xs" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }} title="Upload a JSON LorePack to this Library (No Mount)">
+                            <label className="btn btn-accent btn-xs" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }} title="Upload a JSON LorePack to this Library (No Mount)">
                                 IMPORT PACK
-                                <input type="file" accept=".json" onChange={handleImportToLibrary} ref={libraryImportRef} className="hidden" />
+                                <input 
+                                    type="file" 
+                                    accept=".json" 
+                                    onChange={handleImportToLibrary} 
+                                    onClick={onInputClick}
+                                    ref={libraryImportRef} 
+                                    className="hidden" 
+                                />
                             </label>
                         </div>
                         
@@ -751,6 +800,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                                 <input 
                                     type="file" 
                                     onChange={handleCloudUpload} 
+                                    onClick={onInputClick}
                                     ref={cloudFileInputRef}
                                     className="hidden" 
                                     disabled={isProcessing}
@@ -768,7 +818,9 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                         <div className="flex-col">
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                 <span className="section-header-title">CLOUD FILES ({cloudFiles.length})</span>
-                                <button onClick={fetchCloudFiles} className="btn btn-secondary" style={{ fontSize: '0.65rem', padding: '0 0.5rem' }} title="Refresh File List">REFRESH</button>
+                                <button onClick={fetchCloudFiles} className="btn btn-secondary" style={{ fontSize: '0.65rem', padding: '0 0.5rem' }} disabled={isProcessing} title="Refresh File List">
+                                    {isProcessing ? '...' : 'REFRESH'}
+                                </button>
                             </div>
                             
                             {cloudFiles.length === 0 ? (

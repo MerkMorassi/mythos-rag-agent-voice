@@ -7,7 +7,8 @@ import {
   ConnectionState, 
   DEFAULT_MODEL_CONFIG, 
   ModelConfig,
-  MediaAsset
+  MediaAsset,
+  SomaActionType
 } from './types';
 import Visualizer from './components/Visualizer';
 import ChatHistoryManager from './components/ChatHistoryManager';
@@ -40,6 +41,8 @@ import { useGeminiLive } from './hooks/useGeminiLive';
 import { McpClient } from './services/mcpClient';
 import { ExternalRouter } from './services/externalRouter';
 import { readCanvasTool, updateCanvasTool } from './services/multiAgent';
+import { PythonSandbox } from './services/pythonSandbox';
+import { AccessControl } from './services/accessControl';
 
 type ViewMode = 'ORCHESTRATOR' | 'COUNCIL';
 type ModelMode = 'STD' | 'DEEP' | 'EXT' | 'IMG';
@@ -78,6 +81,10 @@ const App: React.FC = () => {
   const [videoSource, setVideoSource] = useState<'camera' | 'media'>('camera');
   const [streamFileUrl, setStreamFileUrl] = useState<string | null>(null);
   
+  // Video Player Controls
+  const [isLooping, setIsLooping] = useState(false);
+  const [showCaptions, setShowCaptions] = useState(false);
+  
   const videoRef = useRef<HTMLVideoElement | null>(null); // Webcam
   const mediaVideoRef = useRef<HTMLVideoElement | null>(null); // Movie File
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -112,6 +119,10 @@ const App: React.FC = () => {
    - If asked for an image/photo, use 'routeRequest' with target='FLUX_IMAGE'.
    - If asked for a video/movie clip, use 'routeRequest' with target='VIDEO_GENERATION'.
 3. MEMORY: You are grounded in a persistent memory system.
+4. INPUT HANDLING: The user may speak and type simultaneously. 
+   - If you receive a text message or a file upload (image/doc) while the user is speaking, DO NOT ignore it. 
+   - Explicitly ACKNOWLEDGE receipt of any files or text inputs (e.g., "I received your document", "I see the image you sent").
+   - You can read and listen at the same time.
 `;
 
   const systemInstruction = `${generalInstructions}\n\n${agentInstructions || currentAgent?.system_instruction}${modeInstruction}\n${CAPABILITY_INSTRUCTION}`;
@@ -189,6 +200,90 @@ const App: React.FC = () => {
       ].filter(Boolean) as any
   };
 
+  const pythonTool: Tool = {
+      functionDeclarations: [
+          {
+              name: "execute_python",
+              description: "Execute Python code in a sandboxed environment. Use for calculations, data analysis, or logic.",
+              parameters: {
+                  type: Type.OBJECT,
+                  properties: {
+                      code: { type: Type.STRING, description: "The Python code to execute." }
+                  },
+                  required: ["code"]
+              }
+          }
+      ]
+  };
+
+  const filesystemTool: Tool = {
+      functionDeclarations: [
+          {
+              name: "read_file",
+              description: "Read contents of a file from the host filesystem.",
+              parameters: {
+                  type: Type.OBJECT,
+                  properties: { path: { type: Type.STRING } },
+                  required: ["path"]
+              }
+          },
+          {
+              name: "list_directory",
+              description: "List files and directories at a path.",
+              parameters: {
+                  type: Type.OBJECT,
+                  properties: { path: { type: Type.STRING } },
+                  required: ["path"]
+              }
+          },
+          {
+              name: "write_file",
+              description: "Write content to a file.",
+              parameters: {
+                  type: Type.OBJECT,
+                  properties: { 
+                      path: { type: Type.STRING },
+                      content: { type: Type.STRING }
+                  },
+                  required: ["path", "content"]
+              }
+          },
+          {
+              name: "get_file_info",
+              description: "Get metadata for a file.",
+              parameters: {
+                  type: Type.OBJECT,
+                  properties: { path: { type: Type.STRING } },
+                  required: ["path"]
+              }
+          },
+          {
+              name: "search_files",
+              description: "Recursively search for files.",
+              parameters: {
+                  type: Type.OBJECT,
+                  properties: { 
+                      path: { type: Type.STRING },
+                      pattern: { type: Type.STRING }
+                  },
+                  required: ["path", "pattern"]
+              }
+          }
+      ]
+  };
+
+  // Determine Active Tools based on Permissions
+  const activeTools = [retrievalTool, googleMapsTool, routeRequestTool, holodeckTools];
+  const canExecute = currentAgent ? AccessControl.canPerform(accessLevel, SomaActionType.EXEC_CODE) : false;
+  const hasExecPerm = currentAgent?.permissions?.includes('EXECUTE_CODE') || canExecute;
+  
+  if (hasExecPerm) {
+      activeTools.push(pythonTool);
+      if (filesystemTool.functionDeclarations) {
+          activeTools.push({ functionDeclarations: filesystemTool.functionDeclarations });
+      }
+  }
+
   // --- TOOL HANDLER ---
   const handleToolCall = async (toolCall: any): Promise<any[]> => {
       const responses = [];
@@ -234,6 +329,28 @@ const App: React.FC = () => {
                   }
               } catch (e: any) {
                   responses.push({ id: fc.id, name: fc.name, response: { error: e.message } });
+              }
+          }
+          else if (fc.name === 'execute_python') {
+              const code = (fc.args as any).code;
+              setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', text: `[PYTHON] Executing code...`, timestamp: Date.now() }]);
+              try {
+                  const result = await PythonSandbox.execute(code);
+                  setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', text: `[PYTHON RESULT] ${result.substring(0, 200)}${result.length > 200 ? '...' : ''}`, timestamp: Date.now() }]);
+                  responses.push({ id: fc.id, name: fc.name, response: { result: result } });
+              } catch (e: any) {
+                  responses.push({ id: fc.id, name: fc.name, response: { error: e.message } });
+              }
+          }
+          else if (['read_file', 'list_directory', 'write_file', 'search_files', 'get_file_info'].includes(fc.name)) {
+              setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', text: `[FILESYSTEM] Running ${fc.name}...`, timestamp: Date.now() }]);
+              try {
+                  const mcpResult = await McpClient.execute('filesystem', fc.name, fc.args as any);
+                  const resultStr = mcpResult.status === 'SUCCESS' ? JSON.stringify(mcpResult.result).substring(0, 2000) : `Error: ${mcpResult.error}`;
+                  setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', text: `[FS OUTPUT] ${resultStr}`, timestamp: Date.now() }]);
+                  responses.push({ id: fc.id, name: fc.name, response: { result: resultStr } });
+              } catch (e: any) {
+                  responses.push({ id: fc.id, name: fc.name, response: { result: `Error: ${e.message}` } });
               }
           }
           else if (fc.name === 'retrieve_knowledge') {
@@ -289,7 +406,7 @@ const App: React.FC = () => {
       modelName: 'gemini-2.5-flash-native-audio-preview-09-2025',
       systemInstruction,
       voiceName: selectedVoice,
-      tools: [retrievalTool, googleMapsTool, routeRequestTool, holodeckTools],
+      tools: activeTools,
       onLog: (log) => {
           setLogs(prev => {
               if (log.isStreaming) {
@@ -344,6 +461,21 @@ const App: React.FC = () => {
 
   useEffect(() => { loadAgentConfig(currentAgentId); }, [currentAgentId]);
   useEffect(() => { logEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [logs, layoutMode]);
+
+  // Sync Video Tracks with State
+  useEffect(() => {
+      if (mediaVideoRef.current) {
+          const vid = mediaVideoRef.current;
+          // Apply Loop
+          vid.loop = isLooping;
+          // Apply Captions if tracks exist
+          if (vid.textTracks) {
+              for (let i = 0; i < vid.textTracks.length; i++) {
+                  vid.textTracks[i].mode = showCaptions ? 'showing' : 'hidden';
+              }
+          }
+      }
+  }, [isLooping, showCaptions, streamFileUrl]);
 
   // STREAMING LOOP (VISION)
   useEffect(() => {
@@ -451,6 +583,21 @@ const App: React.FC = () => {
       if(mediaFileInputRef.current) mediaFileInputRef.current.value = '';
   };
 
+  const handleUnmountMedia = () => {
+      if (streamFileUrl) {
+          URL.revokeObjectURL(streamFileUrl);
+          setStreamFileUrl(null);
+      }
+      setVideoSource('camera');
+      // Reset controls
+      setIsLooping(false);
+      setShowCaptions(false);
+      // Ensure webcam is active if we were in video mode
+      if (isCameraOn) {
+          toggleCamera().then(toggleCamera); // Restart cam cycle to ensure clean state
+      }
+  };
+
   const handleSendText = async () => {
       if (!inputText.trim()) return;
       const text = inputText;
@@ -515,18 +662,24 @@ const App: React.FC = () => {
           }]);
 
           // Live Session Interactions
-          if (type === 'image') {
-              // Send Image to Live Session
-              sendRealtimeInput({ media: { mimeType: file.type, data } });
-          } else if (type === 'text') {
-              // Ingest Text
-              // 'data' here is the full text content because we use readAsText for text types
-              IngestionService.ingestText(data, file.name, currentAgentId, apiKey);
-              sendText(`[USER UPLOADED FILE: ${file.name}]\n${data.substring(0, 5000)}...`);
-          } else if (type === 'video' || type === 'audio') {
-              // For large media, we notify the model via text that it exists, rather than streaming the bytes
-              // sending the bytes via sendRealtimeInput for a large video might kill the connection.
-              sendText(`[System Notification] User uploaded a ${type} file: "${file.name}". It is stored in the Media Library.`);
+          if (connectionState === ConnectionState.CONNECTED) {
+              if (type === 'image') {
+                  // Send Image to Live Session
+                  sendRealtimeInput({ media: { mimeType: file.type, data } });
+                  // NEW: Trigger explicit acknowledgement request via Text Turn
+                  // This ensures the model knows an upload happened even if audio stream is active
+                  setTimeout(() => {
+                      sendText(`[SYSTEM NOTICE: User uploaded image "${file.name}". Please acknowledge receipt visually or verbally.]`);
+                  }, 200); 
+              } else if (type === 'text') {
+                  // Ingest Text
+                  IngestionService.ingestText(data, file.name, currentAgentId, apiKey);
+                  // Text input implicitly forces acknowledgement due to turn completion
+                  sendText(`[USER UPLOADED FILE: ${file.name}]\n${data.substring(0, 5000)}...`);
+              } else if (type === 'video' || type === 'audio') {
+                  // For large media, we notify the model via text that it exists
+                  sendText(`[System Notification] User uploaded a ${type} file: "${file.name}". It is stored in the Media Library. Please acknowledge receipt.`);
+              }
           }
       };
 
@@ -641,15 +794,45 @@ const App: React.FC = () => {
                                         </div>
                                     </>
                                 ) : streamFileUrl ? (
-                                    <>
+                                    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
                                         <video 
                                             ref={mediaVideoRef} 
                                             src={streamFileUrl} 
                                             autoPlay 
                                             playsInline 
                                             controls 
+                                            loop={isLooping}
                                             style={{ width: '100%', height: '100%', objectFit: 'contain' }} 
                                         />
+                                        
+                                        {/* VIDEO CONTROLS OVERLAY (Loop / CC / Eject) */}
+                                        <div style={{ position: 'absolute', top: '20px', right: '20px', display: 'flex', gap: '0.5rem', zIndex: 25 }}>
+                                             <button 
+                                                onClick={handleUnmountMedia}
+                                                className="btn btn-xs btn-danger"
+                                                style={{ fontWeight: 'bold', minWidth: '3rem' }}
+                                                title="Unmount / Eject Video"
+                                             >
+                                                ⏏ EJECT
+                                             </button>
+                                             <button 
+                                                onClick={() => setIsLooping(!isLooping)}
+                                                className={`btn btn-xs ${isLooping ? 'active-green' : 'btn-secondary'}`}
+                                                style={{ fontWeight: 'bold', minWidth: '3rem' }}
+                                                title="Toggle Video Loop"
+                                             >
+                                                {isLooping ? 'LOOP ON' : 'LOOP'}
+                                             </button>
+                                             <button 
+                                                onClick={() => setShowCaptions(!showCaptions)}
+                                                className={`btn btn-xs ${showCaptions ? 'active-green' : 'btn-secondary'}`}
+                                                style={{ fontWeight: 'bold', minWidth: '3rem' }}
+                                                title="Toggle Native Video Captions (if available)"
+                                             >
+                                                CC
+                                             </button>
+                                        </div>
+
                                         <div className="screening-overlay">
                                             {logs.slice(-3).map(log => (
                                                 <div key={log.id} className={`screening-log ${log.type}`}>
@@ -658,7 +841,7 @@ const App: React.FC = () => {
                                                 </div>
                                             ))}
                                         </div>
-                                    </>
+                                    </div>
                                 ) : (
                                     <div className="screening-placeholder" onClick={() => mediaFileInputRef.current?.click()} title="Click to Select Movie File">
                                         <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#333" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" style={{marginBottom: '1rem'}}>

@@ -68,6 +68,9 @@ export function useGeminiLive({
                 },
                 systemInstruction: configRef.current.systemInstruction,
                 tools: configRef.current.tools,
+                // Enable Transcriptions - Required for logs
+                inputAudioTranscription: {}, 
+                outputAudioTranscription: {} 
             };
 
             const sessionPromise = ai.live.connect({
@@ -78,19 +81,6 @@ export function useGeminiLive({
                         setConnectionState(ConnectionState.CONNECTED);
                         onLog({ id: crypto.randomUUID(), type: 'system', text: 'Live Session Connected', timestamp: Date.now() });
                         
-                        // Force Agent Acknowledgement
-                        sessionPromise.then(session => {
-                            session.send({
-                                clientContent: {
-                                    turns: [{
-                                        role: 'user',
-                                        parts: [{ text: "SYSTEM_NOTIFICATION: The user has connected. Greet them briefly and introduce yourself based on your persona." }]
-                                    }],
-                                    turnComplete: true
-                                }
-                            });
-                        });
-
                         // Start Mic Stream
                         if (inputContextRef.current) {
                             const source = inputContextRef.current.createMediaStreamSource(stream);
@@ -186,9 +176,14 @@ export function useGeminiLive({
     const sendText = useCallback(async (text: string) => {
         if (sessionPromiseRef.current) {
             const session = await sessionPromiseRef.current;
-            session.send({
-                clientContent: { turns: [{ role: 'user', parts: [{ text }] }], turnComplete: true }
-            });
+            // Check if send method exists to prevent crashes
+            if (typeof session.send === 'function') {
+                session.send({
+                    clientContent: { turns: [{ role: 'user', parts: [{ text }] }], turnComplete: true }
+                });
+            } else {
+                console.warn("session.send is not available in this SDK version. Text input ignored.");
+            }
         }
     }, []);
 

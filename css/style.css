@@ -265,6 +265,18 @@ html, body {
 .status-indicator.disconnected { color: #666; }
 .status-indicator.error { color: #f87171; }
 
+.status-banner {
+    padding: 0.75rem;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    text-align: center;
+    margin-bottom: 1rem;
+    animation: fadeIn 0.3s;
+}
+.status-banner.status-success { background: rgba(74, 222, 128, 0.1); color: #4ade80; border: 1px solid #4ade80; }
+.status-banner.status-error { background: rgba(248, 113, 113, 0.1); color: #f87171; border: 1px solid #f87171; }
+.status-banner.status-info { background: rgba(56, 189, 248, 0.1); color: #38bdf8; border: 1px solid #38bdf8; }
+
 .tray-controls { display: flex; justify-content: space-between; align-items: center; }
 .input-bar { display: flex; gap: 0.5rem; height: auto; align-items: center; }
 
@@ -425,6 +437,17 @@ html, body {
 .btn-ghost:hover { color: #f87171; background: rgba(255,255,255,0.05); }
 .btn.active { background: #333; color: #fff; border-color: #666; }
 .active-green { color: #4ade80; border-color: #4ade80; background: rgba(74, 222, 128, 0.1); }
+
+.spinner {
+    width: 2rem;
+    height: 2rem;
+    border: 3px solid rgba(255, 255, 255, 0.1);
+    border-radius: 50%;
+    border-top-color: #4ade80;
+    animation: spin 1s ease-in-out infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
 .flex-group { display: flex; gap: 0.5rem; align-items: center; }
 .flex-col { display: flex; flex-direction: column; gap: 0.5rem; }

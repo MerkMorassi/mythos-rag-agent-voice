@@ -64,6 +64,25 @@ export const McpManager: React.FC<McpManagerProps> = ({ isOpen, onOpen, onClose 
                         </div>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                             <div className="flex-group">
+                                <span style={{ fontSize: '0.8rem', fontWeight: 'bold', width: '120px', color: '#eee' }}>filesystem</span>
+                                <div style={{ display: 'flex', gap: '0.25rem' }}>
+                                    <button 
+                                        className="btn btn-xs btn-secondary" 
+                                        onClick={() => loadPreset('filesystem', 'list_directory', '{\n  "path": "."\n}')}
+                                        title="List Current Dir"
+                                    >
+                                        LS
+                                    </button>
+                                    <button 
+                                        className="btn btn-xs btn-secondary" 
+                                        onClick={() => loadPreset('filesystem', 'read_file', '{\n  "path": "package.json"\n}')}
+                                        title="Read Config"
+                                    >
+                                        READ
+                                    </button>
+                                </div>
+                            </div>
+                            <div className="flex-group">
                                 <span style={{ fontSize: '0.8rem', fontWeight: 'bold', width: '120px', color: '#eee' }}>google-maps</span>
                                 <div style={{ display: 'flex', gap: '0.25rem' }}>
                                     <button 

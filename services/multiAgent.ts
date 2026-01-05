@@ -6,6 +6,7 @@ import { RetrievalGate } from "./retrievalGate";
 import { ExternalRouter } from "./externalRouter";
 import { SomaKernel } from "./soma";
 import { McpClient } from "./mcpClient";
+import { PythonSandbox } from "./pythonSandbox";
 
 // Standard model for text chat - Upgraded to Pro for best reasoning
 const CHAT_MODEL = "gemini-3-pro-preview"; 
@@ -46,6 +47,18 @@ const routeRequestTool: FunctionDeclaration = {
             }
         },
         required: ["target", "prompt"]
+    }
+};
+
+const pythonTool: FunctionDeclaration = {
+    name: "execute_python",
+    description: "Execute Python code in a sandboxed environment. Use for calculations, data analysis, logic puzzles, or string processing.",
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            code: { type: Type.STRING, description: "The Python code to execute." }
+        },
+        required: ["code"]
     }
 };
 
@@ -122,6 +135,63 @@ export const updateCanvasTool: FunctionDeclaration = {
         },
         required: ["operation"]
     }
+};
+
+// FILESYSTEM MCP TOOLS
+const filesystemTool: Tool = {
+    functionDeclarations: [
+        {
+            name: "read_file",
+            description: "Read contents of a file from the host filesystem.",
+            parameters: {
+                type: Type.OBJECT,
+                properties: { path: { type: Type.STRING } },
+                required: ["path"]
+            }
+        },
+        {
+            name: "list_directory",
+            description: "List files and directories at a path.",
+            parameters: {
+                type: Type.OBJECT,
+                properties: { path: { type: Type.STRING } },
+                required: ["path"]
+            }
+        },
+        {
+            name: "write_file",
+            description: "Write content to a file.",
+            parameters: {
+                type: Type.OBJECT,
+                properties: { 
+                    path: { type: Type.STRING },
+                    content: { type: Type.STRING }
+                },
+                required: ["path", "content"]
+            }
+        },
+        {
+            name: "get_file_info",
+            description: "Get metadata for a file.",
+            parameters: {
+                type: Type.OBJECT,
+                properties: { path: { type: Type.STRING } },
+                required: ["path"]
+            }
+        },
+        {
+            name: "search_files",
+            description: "Recursively search for files.",
+            parameters: {
+                type: Type.OBJECT,
+                properties: { 
+                    path: { type: Type.STRING },
+                    pattern: { type: Type.STRING }
+                },
+                required: ["path", "pattern"]
+            }
+        }
+    ]
 };
 
 const googleMapsTool: Tool = {
@@ -348,6 +418,15 @@ ${agent.handle.toUpperCase()}:`;
                 tools.push({ functionDeclarations: [routeRequestTool] });
             }
             
+            // Authorization for Python Execution & Filesystem
+            if (kernel.authorize(agent.id, SomaActionType.EXEC_CODE)) {
+                tools.push({ functionDeclarations: [pythonTool] });
+                // Filesystem access is considered an advanced coding capability
+                if (filesystemTool.functionDeclarations) {
+                    tools.push({ functionDeclarations: filesystemTool.functionDeclarations });
+                }
+            }
+            
             // Authorization for Delegation (Synapse) & Holodeck (Collaboration)
             if (kernel.authorize(agent.id, SomaActionType.COLLABORATE)) {
                 tools.push({ functionDeclarations: [consultAgentTool, readCanvasTool, updateCanvasTool] });
@@ -417,6 +496,36 @@ ${agent.handle.toUpperCase()}:`;
                     } else {
                         return { agentId: agent.id, text: `[ERROR] Accessing ${args.target} failed: ${routerRes.error}` };
                     }
+                }
+                
+                // PYTHON INTERPRETER TOOL
+                else if (call.name === "execute_python") {
+                    if (!kernel.authorize(agent.id, SomaActionType.EXEC_CODE)) {
+                        return { agentId: agent.id, text: `[SYSTEM BLOCK] Python execution denied. Agent lacks EXEC_CODE permissions.` };
+                    }
+                    const args = call.args as any;
+                    const sandboxRes = await PythonSandbox.execute(args.code);
+                    
+                    const rePrompt = `
+${fullPrompt}
+
+[SYSTEM: You executed Python Code.]
+[CODE]:
+${args.code}
+
+[OUTPUT]:
+${sandboxRes}
+
+[INSTRUCTION]: Interpret this output for the user.
+${agent.handle.toUpperCase()}:`;
+
+                    const finalRes = await ai.models.generateContent({
+                        model: CHAT_MODEL,
+                        contents: [{ parts: [{ text: rePrompt }] }],
+                        config: { ...agentConfig.modelConfig, tools: undefined } 
+                    });
+                    
+                    return { agentId: agent.id, text: finalRes.text || "..." };
                 }
                 
                 // SYNAPSE: DELEGATION
@@ -565,6 +674,37 @@ ${agent.handle.toUpperCase()}:`;
 
                     } catch (e: any) {
                         return { agentId: agent.id, text: `[MAPS ERROR]: ${e.message}` };
+                    }
+                }
+
+                // FILESYSTEM TOOL (RE-PROMPT PATTERN)
+                else if (['read_file', 'list_directory', 'write_file', 'search_files', 'get_file_info'].includes(call.name)) {
+                    if (!kernel.authorize(agent.id, SomaActionType.EXEC_CODE)) {
+                        return { agentId: agent.id, text: `[SYSTEM BLOCK] File System Access Denied. Agent lacks EXEC_CODE permissions.` };
+                    }
+                    try {
+                        const mcpRes = await McpClient.execute('filesystem', call.name, call.args as any);
+                        const toolResult = mcpRes.status === 'SUCCESS' ? JSON.stringify(mcpRes.result) : `Error: ${mcpRes.error}`;
+                        
+                        const rePrompt = `
+${fullPrompt}
+
+[SYSTEM: You invoked the file system tool '${call.name}'.]
+[TOOL OUTPUT]: ${toolResult.substring(0, 8000)}
+
+[INSTRUCTION]: Incorporate this new information into your final response to the user.
+${agent.handle.toUpperCase()}:`;
+
+                        const secondResult = await ai.models.generateContent({
+                            model: CHAT_MODEL,
+                            contents: [{ parts: [{ text: rePrompt }] }],
+                            config: { ...agentConfig.modelConfig, tools: undefined } 
+                        });
+                        
+                        return { agentId: agent.id, text: secondResult.text || "..." };
+
+                    } catch (e: any) {
+                        return { agentId: agent.id, text: `[FILESYSTEM ERROR]: ${e.message}` };
                     }
                 }
             }
