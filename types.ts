@@ -124,7 +124,10 @@ export enum SomaActionType {
     // System
     SYSTEM_ADMIN = 'SYSTEM_ADMIN',
     BROADCAST = 'BROADCAST',
-    PUBLISH_CANON = 'PUBLISH_CANON'
+    PUBLISH_CANON = 'PUBLISH_CANON',
+    // Synapse
+    DELEGATE_TASK = 'DELEGATE_TASK',
+    COLLABORATE = 'COLLABORATE'
 }
 
 export interface Agent {

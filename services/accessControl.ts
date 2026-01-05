@@ -67,6 +67,12 @@ export const AccessControl = {
             case SomaActionType.BROADCAST:
                 return perms.includes('BROADCAST_COUNCIL');
             
+            // SYNAPSE PROTOCOL
+            // Collaboration requires the ability to Route (Bit 2 in Tools or System Broadcast)
+            case SomaActionType.COLLABORATE:
+            case SomaActionType.DELEGATE_TASK:
+                return perms.includes('ROUTE_EXTERNAL') || perms.includes('BROADCAST_COUNCIL');
+
             default:
                 return false;
         }

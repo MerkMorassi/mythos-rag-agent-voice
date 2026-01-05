@@ -500,7 +500,12 @@ ${focus.rules.map(r => "- " + r).join('\n')}
                 generalInstructions,
                 focusContext, 
                 currentRoster,
-                currentAttachment 
+                currentAttachment,
+                0, // Initial Depth
+                // VISUAL CALLBACK FOR DELEGATION
+                (delegatedTarget) => {
+                    updateMessage(msgId, `[SYNAPSE ACTIVE] Consulting ${delegatedTarget}...`);
+                }
             );
 
             if (response.error) {

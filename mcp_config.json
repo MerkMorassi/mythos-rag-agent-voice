@@ -6,6 +6,13 @@
         "-y",
         "chrome-devtools-mcp@latest"
       ]
+    },
+    "google-maps": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-google-maps"
+      ]
     }
   }
 }

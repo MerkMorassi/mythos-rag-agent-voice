@@ -1,15 +1,17 @@
 
-import { saveMediaAsset } from "./db";
+import { saveMediaAsset, getAgentConfig } from "./db";
 import { MediaAsset } from "../types";
 import { NumMarkX_GenerateID } from "../patterns/NumMarkX";
+import { ChatterboxService } from "./chatterbox";
 
 /**
  * EXTERNAL MODEL ROUTER
- * Routes prompts to specialized Hugging Face Spaces.
+ * Routes prompts to specialized Hugging Face Spaces or External APIs.
  * 
  * TARGETS:
  * 1. FLUX_IMAGE -> Mythos Engine (Custom SDXL)
- * 2. EXTERNAL_LLM -> Mythos Engine (Text Logic)
+ * 2. DOLPHIN_LLM -> Uncensored Text Generation (Venice/Dolphin)
+ * 3. CHATTERBOX_TTS -> High Fidelity Speech Synthesis
  */
 
 // User's specific Spaces
@@ -17,40 +19,64 @@ const MYTHOS_ENGINE_URL = "https://merkmorassi-mythos-engine.hf.space/api/predic
 
 export interface RouteResult {
     success: boolean;
-    data?: string; // Text response or Base64 image
-    type: 'text' | 'image';
+    data?: string; // Text response, Base64 image, or Audio URL
+    type: 'text' | 'image' | 'audio';
     error?: string;
 }
 
 export const ExternalRouter = {
 
-    async route(target: string, prompt: string, agent: { id: string, handle: string }): Promise<RouteResult> {
-        console.log(`[ROUTER] Routing to ${target}: ${prompt} (Agent: ${agent.handle})`);
+    getHeaders() {
+        const token = localStorage.getItem('hf_token') || process.env.HF_TOKEN;
+        const headers: Record<string, string> = { "Content-Type": "application/json" };
+        if (token) {
+            headers["Authorization"] = `Bearer ${token}`;
+        }
+        return headers;
+    },
+
+    async route(target: string, prompt: string, agent: { id: string, handle: string }, generateAudio: boolean = false): Promise<RouteResult> {
+        console.log(`[ROUTER] Routing to ${target}: ${prompt.substring(0, 50)}... (Audio: ${generateAudio})`);
         
         try {
+            // 1. IMAGE GENERATION
             if (target === 'FLUX_IMAGE') {
                 return await this.callMythosImageGen(prompt, agent);
-            } else if (target === 'EXTERNAL_LLM') {
-                return await this.callMythosText(prompt);
+            } 
+            
+            // 2. TEXT GENERATION (DOLPHIN/VENICE)
+            else if (target === 'DOLPHIN_LLM' || target === 'EXTERNAL_LLM') {
+                const textResult = await this.callDolphinText(prompt);
+                
+                // CHAINING: If Audio requested, pipe text result to Chatterbox
+                if (textResult.success && generateAudio && textResult.data) {
+                    return await this.callChatterboxTTS(textResult.data, agent);
+                }
+                return textResult;
+            } 
+            
+            // 3. DIRECT TTS
+            else if (target === 'CHATTERBOX_TTS') {
+                return await this.callChatterboxTTS(prompt, agent);
             }
-            return { success: false, type: 'text', error: "Unknown Target" };
+            
+            return { success: false, type: 'text', error: `Unknown Target: ${target}` };
         } catch (e: any) {
-            console.error("[ROUTER] Call failed", e);
+            console.error(`[ROUTER] Call to ${target} failed`, e);
             return { success: false, type: 'text', error: e.message };
         }
     },
 
     async callMythosImageGen(prompt: string, agent: { id: string, handle: string }): Promise<RouteResult> {
         // SDXL / Custom Image Gen on Mythos Engine
-        // Standard Gradio Payload for Image Gen usually involves [prompt, negative_prompt, ...]
         const response = await fetch(MYTHOS_ENGINE_URL, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: this.getHeaders(),
             body: JSON.stringify({
                 data: [
                     prompt,                                     // Prompt
-                    "blur, low quality, distortion, ugly",      // Negative Prompt (Standard Safety)
-                    true,                                       // Randomize Seed? (Common param)
+                    "blur, low quality, distortion, ugly",      // Negative Prompt
+                    true,                                       // Randomize Seed
                     1024,                                       // Width
                     1024,                                       // Height
                     7,                                          // Guidance Scale
@@ -62,54 +88,42 @@ export const ExternalRouter = {
         if (!response.ok) throw new Error(`Mythos Engine (Image) Unavailable: ${response.statusText}`);
 
         const json = await response.json();
-        
-        // Gradio often returns path to file or base64 data uri in the 'data' array
-        // Expecting: { data: [{ url: "..." }, ...] } OR { data: ["data:image/png;base64,..."] }
         const resultData = json.data?.[0]; 
-        
         let imageUrl = "";
         
         if (typeof resultData === 'string' && resultData.startsWith('data:')) {
             imageUrl = resultData;
         } else if (resultData && resultData.url) {
             imageUrl = resultData.url;
-        } else if (resultData && resultData.name) {
-             // Sometimes it returns a file reference on the space
-             imageUrl = resultData.name; 
         }
 
         if (imageUrl) {
-             // --- AUTO-SAVE TO GALLERY ---
              await this.saveGeneratedImage(imageUrl, prompt, agent);
              return { success: true, type: 'image', data: imageUrl }; 
         }
         
-        return { success: false, type: 'text', error: "Invalid response format from Mythos Engine" };
+        return { success: false, type: 'text', error: "Invalid response from Image Engine" };
     },
 
-    async callMythosText(prompt: string): Promise<RouteResult> {
+    async callDolphinText(prompt: string): Promise<RouteResult> {
         try {
-            // Gradio API Call Structure for Text/Logic on Mythos Engine
-            // Assuming same endpoint, different inputs or maybe just simple text input
             const response = await fetch(MYTHOS_ENGINE_URL, {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: this.getHeaders(),
                 body: JSON.stringify({
                     data: [
                         prompt, // Input Text
-                        0.7,    // Temperature
-                        2048,   // Max Tokens
+                        0.85,   // Higher Temp for Creative/Uncensored feel
+                        4096,   // Max Tokens
                         0.95,   // Top P
                         1.1     // Repetition Penalty
                     ]
                 })
             });
 
-            if (!response.ok) throw new Error(`Mythos Engine (Text) Unavailable: ${response.statusText}`);
+            if (!response.ok) throw new Error(`Dolphin Engine Unavailable: ${response.statusText}`);
             
             const json = await response.json();
-            
-            // Handle Gradio response format { data: [ "result_string", ... ] }
             let text = "";
             if (json.data && Array.isArray(json.data) && json.data.length > 0) {
                 text = json.data[0];
@@ -122,15 +136,62 @@ export const ExternalRouter = {
             return { success: true, type: 'text', data: text.trim() };
 
         } catch (e: any) {
-            console.error("Mythos Engine Error", e);
-            return { success: false, type: 'text', error: `Mythos Engine Error: ${e.message}` };
+            return { success: false, type: 'text', error: `Dolphin Error: ${e.message}` };
+        }
+    },
+
+    async callChatterboxTTS(text: string, agent: { id: string, handle: string }): Promise<RouteResult> {
+        try {
+            // 1. Get Agent Voice Config
+            const config = await getAgentConfig(agent.id);
+            const voiceRef = config.voiceReference;
+
+            if (!voiceRef) {
+                return { success: false, type: 'text', error: `No voice reference found for ${agent.handle}. Upload a sample in Settings.` };
+            }
+
+            // 2. Synthesize
+            const audioBuffer = await ChatterboxService.synthesize({
+                text: text,
+                audioRef: voiceRef,
+                language: 'en'
+            });
+
+            // 3. Convert to Blob URL
+            const blob = new Blob([audioBuffer], { type: 'audio/wav' });
+            
+            // 4. Save as Asset (Story Mode)
+            const base64 = await new Promise<string>((resolve) => {
+                const reader = new FileReader();
+                reader.onloadend = () => {
+                    const res = reader.result as string;
+                    resolve(res.split(',')[1]);
+                };
+                reader.readAsDataURL(blob);
+            });
+
+            const asset: MediaAsset = {
+                id: NumMarkX_GenerateID('AUD'),
+                type: 'audio',
+                data: base64,
+                prompt: `Story TTS: ${text.substring(0, 30)}...`,
+                agentId: agent.id,
+                timestamp: Date.now(),
+                tags: ['STORY_MODE', 'TTS', agent.handle.toUpperCase()]
+            };
+            await saveMediaAsset(asset);
+
+            const audioUrl = URL.createObjectURL(blob);
+            return { success: true, type: 'audio', data: audioUrl };
+
+        } catch (e: any) {
+            return { success: false, type: 'text', error: `TTS Error: ${e.message}` };
         }
     },
 
     // --- HELPER: KEYWORD EXTRACTION & SAVING ---
     async saveGeneratedImage(urlOrBase64: string, prompt: string, agent: { id: string, handle: string }) {
         try {
-            // 1. Extract Keywords
             const stopWords = new Set(['a', 'an', 'the', 'of', 'in', 'on', 'with', 'by', 'at', 'to', 'for', 'is', 'style', 'view', 'highly', 'detailed']);
             const cleanPrompt = prompt.replace(/[^a-zA-Z0-9, ]/g, '');
             const words = cleanPrompt.split(/[\s,]+/);
@@ -138,12 +199,11 @@ export const ExternalRouter = {
             const keywords = words
                 .map(w => w.trim())
                 .filter(w => w.length > 3 && !stopWords.has(w.toLowerCase()))
-                .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()); // Capitalize
+                .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
 
-            const uniqueTags = Array.from(new Set(keywords)).slice(0, 7); // Max 7 content tags
+            const uniqueTags = Array.from(new Set(keywords)).slice(0, 7);
             const finalTags = [agent.handle.toUpperCase(), ...uniqueTags];
 
-            // 2. Fetch Blob to store Base64 if it's a URL (for offline persistence)
             let finalData = urlOrBase64;
             if (urlOrBase64.startsWith('http')) {
                 try {
@@ -151,20 +211,16 @@ export const ExternalRouter = {
                     const blob = await imgRes.blob();
                     finalData = await new Promise((resolve) => {
                         const reader = new FileReader();
-                        reader.onloadend = () => {
-                            const res = reader.result as string;
-                            resolve(res.split(',')[1]); 
-                        };
+                        reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
                         reader.readAsDataURL(blob);
                     });
                 } catch (e) {
-                    console.warn("Could not convert URL to Base64 for persistence, saving URL.");
+                    console.warn("Could not convert URL to Base64");
                 }
             } else if (urlOrBase64.startsWith('data:image')) {
                 finalData = urlOrBase64.split(',')[1];
             }
 
-            // 3. Create Asset
             const asset: MediaAsset = {
                 id: NumMarkX_GenerateID('IMG'),
                 type: 'image',
@@ -176,8 +232,6 @@ export const ExternalRouter = {
             };
 
             await saveMediaAsset(asset);
-            console.log(`[GALLERY] Auto-saved image for ${agent.handle} with tags: ${finalTags.join(', ')}`);
-
         } catch (e) {
             console.error("Failed to auto-save generated image", e);
         }

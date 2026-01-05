@@ -19,6 +19,7 @@ import { RoomFocusConfig } from './components/RoomFocusConfig';
 import { McpManager } from './components/McpManager';
 import { Terminal } from './components/Terminal';
 import { MediaGallery } from './components/MediaGallery';
+import { MediaPlayer } from './components/MediaPlayer'; // Import Player
 import {
   saveActiveChat,
   getAgentConfig,
@@ -33,6 +34,8 @@ import {
 import { IngestionService } from './services/ingestion';
 import { NumMarkX_GenerateID } from './patterns/NumMarkX';
 import { useGeminiLive } from './hooks/useGeminiLive';
+import { McpClient } from './services/mcpClient';
+import { ExternalRouter } from './services/externalRouter';
 
 type ViewMode = 'ORCHESTRATOR' | 'COUNCIL';
 type ModelMode = 'STD' | 'DEEP' | 'EXT' | 'IMG';
@@ -56,8 +59,8 @@ const App: React.FC = () => {
   const [accessLevel, setAccessLevel] = useState(AGENTS[0].accessLevel);
   const [modelMode, setModelMode] = useState<ModelMode>('STD');
 
-  // Layout & View Modes
-  const [layoutMode, setLayoutMode] = useState<'VOICE' | 'CHAT' | 'HYBRID' | 'VIDEO'>('HYBRID');
+  // Layout & View Modes - Default to VOICE for immersive experience
+  const [layoutMode, setLayoutMode] = useState<'VOICE' | 'CHAT' | 'HYBRID' | 'VIDEO'>('VOICE');
   const [currentView, setCurrentView] = useState<ViewMode>('ORCHESTRATOR');
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
   const [activeSidePanel, setActiveSidePanel] = useState<string | null>(null);
@@ -68,6 +71,10 @@ const App: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const frameIntervalRef = useRef<number | null>(null);
   const isCameraOnRef = useRef(false); // Sync ref
+
+  // Story Audio State
+  const [storyAudioUrl, setStoryAudioUrl] = useState<string | null>(null);
+  const [interruptSignal, setInterruptSignal] = useState(false);
 
   // File Upload Ref
   const paperclipInputRef = useRef<HTMLInputElement>(null);
@@ -88,6 +95,8 @@ const App: React.FC = () => {
 
   const systemInstruction = `${generalInstructions}\n\n${agentInstructions || currentAgent?.system_instruction}${modeInstruction}`;
 
+  // --- TOOL DEFINITIONS ---
+
   const retrievalTool: Tool = {
       functionDeclarations: [
           {
@@ -102,11 +111,106 @@ const App: React.FC = () => {
       ]
   };
 
-  // --- TOOL HANDLER (GraphRAG) ---
+  const googleMapsTool: Tool = {
+      functionDeclarations: [
+          {
+              name: "maps_search_places",
+              description: "Search for places using Google Maps. Returns POIs, addresses, and ratings.",
+              parameters: {
+                  type: "OBJECT",
+                  properties: { 
+                      query: { type: "STRING", description: "Search term (e.g. 'Coffee near Berlin')" },
+                      radius: { type: "NUMBER", description: "Search radius in meters (optional, default 5000)" }
+                  },
+                  required: ["query"]
+              }
+          },
+          {
+              name: "maps_distancematrix",
+              description: "Calculate travel distance and time between two points.",
+              parameters: {
+                  type: "OBJECT",
+                  properties: { 
+                      origin: { type: "STRING", description: "Starting address or location" },
+                      destination: { type: "STRING", description: "Ending address or location" },
+                      mode: { type: "STRING", description: "Travel mode: 'driving', 'walking', 'bicycling', 'transit'" }
+                  },
+                  required: ["origin", "destination"]
+              }
+          }
+      ]
+  };
+
+  const routeRequestTool: Tool = {
+      functionDeclarations: [
+          {
+              name: "routeRequest",
+              description: "Route a complex request or image generation task to a specialized external model.",
+              parameters: {
+                  type: "OBJECT",
+                  properties: {
+                      target: {
+                          type: "STRING",
+                          description: "The target ID: 'FLUX_IMAGE' (Visuals), 'DOLPHIN_LLM' (NSFW/Uncensored Text), 'CHATTERBOX_TTS' (Audio Story).",
+                          enum: ["FLUX_IMAGE", "DOLPHIN_LLM", "CHATTERBOX_TTS", "EXTERNAL_LLM"]
+                      },
+                      prompt: {
+                          type: "STRING",
+                          description: "The specific prompt or text content to send."
+                      }
+                  },
+                  required: ["target", "prompt"]
+              }
+          }
+      ]
+  };
+
+  // --- TOOL HANDLER (GraphRAG + MCP + External) ---
   const handleToolCall = async (toolCall: any): Promise<any[]> => {
       const responses = [];
       for (const fc of toolCall.functionCalls) {
-          if (fc.name === 'retrieve_knowledge') {
+          
+          // 1. ROUTE REQUEST (External Models / TTS)
+          if (fc.name === 'routeRequest') {
+              const args = fc.args as any;
+              setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', text: `[ROUTING] ${args.target}...`, timestamp: Date.now() }]);
+              
+              const currentAgent = AGENTS.find(a => a.id === currentAgentId);
+              if(!currentAgent) return [];
+
+              try {
+                  const routerRes = await ExternalRouter.route(args.target, args.prompt, { id: currentAgentId, handle: currentAgent.handle });
+                  
+                  if (routerRes.success) {
+                      if (routerRes.type === 'audio' && routerRes.data) {
+                          // SET AUDIO URL TO PLAY
+                          setStoryAudioUrl(routerRes.data);
+                          responses.push({
+                              id: fc.id, name: fc.name,
+                              response: { result: "Audio generated and playing via Chatterbox Player." }
+                          });
+                      } else {
+                          responses.push({
+                              id: fc.id, name: fc.name,
+                              response: { result: routerRes.data }
+                          });
+                      }
+                  } else {
+                      responses.push({
+                          id: fc.id, name: fc.name,
+                          response: { error: routerRes.error }
+                      });
+                  }
+              } catch (e: any) {
+                  responses.push({
+                      id: fc.id, name: fc.name,
+                      response: { error: e.message }
+                  });
+              }
+          }
+
+          // 2. NATIVE KNOWLEDGE RETRIEVAL
+          else if (fc.name === 'retrieve_knowledge') {
               const query = (fc.args as any).query;
               
               setLogs(prev => [...prev, { 
@@ -144,6 +248,37 @@ const App: React.FC = () => {
                   });
               }
           }
+          // 3. GOOGLE MAPS MCP TOOLS
+          else if (fc.name.startsWith('maps_')) {
+              setLogs(prev => [...prev, { 
+                  id: crypto.randomUUID(), 
+                  type: 'system', 
+                  text: `[MCP BRIDGE] Calling Google Maps: ${fc.name}`, 
+                  timestamp: Date.now() 
+              }]);
+
+              try {
+                  // Forward to local MCP bridge
+                  const mcpResult = await McpClient.execute('google-maps', fc.name, fc.args as any);
+                  
+                  if (mcpResult.status === 'SUCCESS') {
+                       responses.push({
+                          id: fc.id,
+                          name: fc.name,
+                          response: { result: JSON.stringify(mcpResult.result).substring(0, 10000) } // Truncate large map responses
+                      });
+                  } else {
+                       throw new Error(mcpResult.error);
+                  }
+              } catch (e: any) {
+                  console.error("MCP Execution Failed", e);
+                  responses.push({
+                      id: fc.id,
+                      name: fc.name,
+                      response: { result: `Tool Execution Error: ${e.message}` }
+                  });
+              }
+          }
       }
       return responses;
   };
@@ -164,11 +299,16 @@ const App: React.FC = () => {
       modelName: 'gemini-2.5-flash-native-audio-preview-09-2025',
       systemInstruction,
       voiceName: selectedVoice,
-      tools: [retrievalTool],
+      tools: [retrievalTool, googleMapsTool, routeRequestTool],
       onLog: (log) => {
           // Handle streaming log updates logic
           setLogs(prev => {
               if (log.isStreaming) {
+                  // If user is speaking (streaming user log), we should interrupt story
+                  if (log.type === 'user') {
+                      setInterruptSignal(true);
+                  }
+                  
                   const last = prev[prev.length - 1];
                   if (last && last.type === log.type && last.isStreaming) {
                       return [...prev.slice(0, -1), { ...last, text: last.text + log.text }];
@@ -180,7 +320,6 @@ const App: React.FC = () => {
               }
               return [...prev, log];
           });
-          // Also handle turn completion clearing elsewhere if needed, but the hook handles raw events.
       },
       onToolCall: handleToolCall
   });
@@ -208,6 +347,37 @@ const App: React.FC = () => {
       window.addEventListener('keydown', handleKeyDown);
       return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
+
+  // Monitor mic input for interruption using Analyser
+  useEffect(() => {
+      if (connectionState === ConnectionState.CONNECTED && analyser && isMicOn) {
+          const bufferLength = analyser.frequencyBinCount;
+          const dataArray = new Uint8Array(bufferLength);
+          
+          const checkVolume = () => {
+              analyser.getByteFrequencyData(dataArray);
+              let sum = 0;
+              for(let i=0; i<bufferLength; i++) sum += dataArray[i];
+              const avg = sum / bufferLength;
+              
+              // Simple VAD Threshold - if mic input is loud enough, interrupt story
+              if (avg > 30) {
+                  setInterruptSignal(true);
+              } else {
+                  // If we wanted to auto-resume, we could set false here, but better to let user say "Resume"
+                  // or have a manual resume. But the Player component pauses on signal=true.
+                  // We need to reset signal to false after a bit if volume drops? 
+                  // No, because interruption is a state. We toggle it off when user stops talking?
+                  // Actually, let's just trigger pause once.
+                  setInterruptSignal(false); 
+              }
+          };
+          
+          // Poll volume every 200ms
+          const interval = setInterval(checkVolume, 200);
+          return () => clearInterval(interval);
+      }
+  }, [connectionState, analyser, isMicOn]);
 
   useEffect(() => {
     loadAgentConfig(currentAgentId);
@@ -372,8 +542,9 @@ const App: React.FC = () => {
       overflow: 'hidden',
       position: 'relative',
       transition: 'flex 0.3s ease',
-      // VISUAL CUE FOR THINKING
-      boxShadow: isThinking ? 'inset 0 0 50px rgba(250, 204, 21, 0.2)' : 'none'
+      // VISUAL CUE FOR THINKING - UPDATED TO AMBER GLOW
+      boxShadow: isThinking ? '0 0 50px rgba(255, 165, 0, 0.5)' : 'none',
+      borderColor: isThinking ? '#f59e0b' : '#333'
   };
 
   const renderTriggerBtn = (panelId: string, icon: React.ReactNode, title: string) => (
@@ -434,6 +605,14 @@ const App: React.FC = () => {
         {activeSidePanel === 'HISTORY' && <ChatHistoryManager isOpen={true} onOpen={()=>{}} onClose={()=>setActiveSidePanel(null)} currentLogs={logs} onLoadSession={setLogs} currentAgentId={currentAgentId} onUpdateKnowledge={()=>{}} />}
         {activeSidePanel === 'SETTINGS' && <SettingsManager isOpen={true} onOpen={()=>{}} onClose={()=>setActiveSidePanel(null)} modelConfig={modelConfig} setModelConfig={setModelConfig} disabled={connectionState === ConnectionState.CONNECTED} generalInstruction={generalInstructions} setGeneralInstruction={setGeneralInstructions} agentInstruction={agentInstructions} setAgentInstruction={setAgentInstructions} agentName={currentAgent?.handle || 'Unknown'} agentId={currentAgentId} agentAccessLevel={accessLevel} selectedVoice={selectedVoice} onVoiceChange={setSelectedVoice} onSave={handleSettingsSave} />}
 
+        {/* MEDIA PLAYER (Chatterbox) */}
+        <MediaPlayer 
+            audioUrl={storyAudioUrl} 
+            title="Narrative Playback" 
+            onClose={() => setStoryAudioUrl(null)} 
+            interruptSignal={interruptSignal} 
+        />
+
         {currentView === 'COUNCIL' ? (
             <MultiAgentConsole onExit={() => setCurrentView('ORCHESTRATOR')} />
         ) : (
@@ -444,6 +623,19 @@ const App: React.FC = () => {
                             VISUALIZER // {selectedVoice.toUpperCase()} // {isThinking ? 'THINKING...' : (isCameraOn ? 'CAM ON' : 'CAM OFF')}
                         </span>
                     </div>
+                    
+                    {/* VISUAL INDICATOR FOR THINKING */}
+                    {isThinking && (
+                        <div className="thinking-indicator" style={{
+                            position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+                            color: '#f59e0b', fontSize: '0.8rem', letterSpacing: '2px', fontWeight: 'bold',
+                            zIndex: 10, textShadow: '0 0 10px rgba(245, 158, 11, 0.8)',
+                            background: 'rgba(0,0,0,0.6)', padding: '0.5rem 1rem', borderRadius: '4px', border: '1px solid #f59e0b'
+                        }}>
+                            ACCESSING NEURAL LATTICE...
+                        </div>
+                    )}
+
                     <canvas ref={canvasRef} className="hidden" />
                     
                     {layoutMode === 'VIDEO' ? (

@@ -5,6 +5,11 @@ import { runMcpTool } from './mcpProxy';
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, (process as any).cwd(), '');
+  
+  // CRITICAL: Inject .env vars into process.env so mcpProxy subprocesses can inherit them
+  // This allows GOOGLE_MAPS_API_KEY in .env to be seen by the MCP server
+  Object.assign(process.env, env);
+
   return {
     plugins: [
         react(),

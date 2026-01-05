@@ -15,6 +15,15 @@ export interface ChatterboxRequest {
 
 export const ChatterboxService = {
   
+  getHeaders() {
+      const token = localStorage.getItem('hf_token') || process.env.HF_TOKEN;
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (token) {
+          headers["Authorization"] = `Bearer ${token}`;
+      }
+      return headers;
+  },
+
   async synthesize(req: ChatterboxRequest): Promise<ArrayBuffer> {
     try {
       // Gradio API usually expects a structure like { data: [param1, param2, ...] }
@@ -22,7 +31,7 @@ export const ChatterboxService = {
       
       const response = await fetch(HF_SPACE_URL, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: this.getHeaders(),
         body: JSON.stringify({
           data: [
             req.text,

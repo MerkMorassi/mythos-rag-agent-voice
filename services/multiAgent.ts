@@ -1,10 +1,11 @@
 
-import { GoogleGenAI, FunctionDeclaration, Type } from "@google/genai";
+import { GoogleGenAI, FunctionDeclaration, Type, Tool } from "@google/genai";
 import { Agent, MultiAgentMessage, SomaActionType } from "../types";
 import { searchDocuments, getAgentConfig, getGraphContext } from "./db";
 import { RetrievalGate } from "./retrievalGate";
 import { ExternalRouter } from "./externalRouter";
-import { SomaKernel } from "./soma"; // Import Kernel
+import { SomaKernel } from "./soma";
+import { McpClient } from "./mcpClient";
 
 // Standard model for text chat - Upgraded to Pro for best reasoning
 const CHAT_MODEL = "gemini-3-pro-preview"; 
@@ -13,6 +14,7 @@ export interface AgentResponse {
     agentId: string;
     text: string;
     error?: string;
+    audioUrl?: string; 
 }
 
 export interface AgentAttachment {
@@ -31,16 +33,74 @@ const routeRequestTool: FunctionDeclaration = {
         properties: {
             target: {
                 type: Type.STRING,
-                description: "The target model ID. Use 'FLUX_IMAGE' for images/visuals. Use 'EXTERNAL_LLM' for uncensored/specialized text.",
-                enum: ["FLUX_IMAGE", "EXTERNAL_LLM"]
+                description: "The target ID: 'FLUX_IMAGE' (Visuals), 'DOLPHIN_LLM' (NSFW/Uncensored Text), 'CHATTERBOX_TTS' (Audio Story).",
+                enum: ["FLUX_IMAGE", "DOLPHIN_LLM", "CHATTERBOX_TTS", "EXTERNAL_LLM"]
             },
             prompt: {
                 type: Type.STRING,
-                description: "The specific prompt to send to the external model."
+                description: "The specific prompt or text content to send."
+            },
+            generate_audio: {
+                type: Type.BOOLEAN,
+                description: "If TRUE, the output text will be automatically sent to Chatterbox TTS for audio generation."
             }
         },
         required: ["target", "prompt"]
     }
+};
+
+// SYNAPSE TOOL: Agent-to-Agent Protocol
+const consultAgentTool: FunctionDeclaration = {
+    name: "consult_agent",
+    description: "Delegate a sub-task or ask a question to another specialized agent. Use this for multi-step reasoning.",
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            targetId: {
+                type: Type.STRING,
+                description: "The ID of the agent to consult (e.g., 'ARCHIVAX', 'CLIO')."
+            },
+            query: {
+                type: Type.STRING,
+                description: "The specific question or instruction for the target agent."
+            },
+            context: {
+                type: Type.STRING,
+                description: "Optional context/constraints to pass."
+            }
+        },
+        required: ["targetId", "query"]
+    }
+};
+
+const googleMapsTool: Tool = {
+    functionDeclarations: [
+        {
+            name: "maps_search_places",
+            description: "Search for places using Google Maps. Returns POIs, addresses, and ratings.",
+            parameters: {
+                type: Type.OBJECT,
+                properties: { 
+                    query: { type: Type.STRING, description: "Search term (e.g. 'Coffee near Berlin')" },
+                    radius: { type: Type.NUMBER, description: "Search radius in meters (optional, default 5000)" }
+                },
+                required: ["query"]
+            }
+        },
+        {
+            name: "maps_distancematrix",
+            description: "Calculate travel distance and time between two points.",
+            parameters: {
+                type: Type.OBJECT,
+                properties: { 
+                    origin: { type: Type.STRING, description: "Starting address or location" },
+                    destination: { type: Type.STRING, description: "Ending address or location" },
+                    mode: { type: Type.STRING, description: "Travel mode: 'driving', 'walking', 'bicycling', 'transit'" }
+                },
+                required: ["origin", "destination"]
+            }
+        }
+    ]
 };
 
 export const MultiAgentService = {
@@ -53,16 +113,22 @@ export const MultiAgentService = {
         userMessage: string, 
         history: MultiAgentMessage[],
         globalInstructions: string,
-        roomFocusContext: string, // Parameter for focus
-        activeRoster: Agent[],    // <-- NEW: Parameter for active agents
-        attachment?: AgentAttachment | null
+        roomFocusContext: string,
+        activeRoster: Agent[],
+        attachment?: AgentAttachment | null,
+        depth: number = 0, // RECURSION GUARD
+        onDelegate?: (targetId: string) => void // VISUAL CALLBACK
     ): Promise<AgentResponse> {
         
         const kernel = SomaKernel.getInstance();
         
         // 0. HEARTBEAT & SYNC
-        // Ensure the kernel knows this agent is alive and has latest permissions
         await kernel.heartbeat(agent.id);
+
+        // RECURSION GUARD
+        if (depth > 3) {
+            return { agentId: agent.id, text: "[SYSTEM ERROR: Collaboration Depth Exceeded. Aborting chain.]" };
+        }
 
         // 1. SAFETY & ROUTING PRE-CHECK (NSFW GUARD)
         if (attachment && attachment.name && (
@@ -81,7 +147,7 @@ export const MultiAgentService = {
             
             try {
                 const routerRes = await ExternalRouter.route(
-                    'EXTERNAL_LLM', 
+                    'DOLPHIN_LLM', 
                     safetyPrompt, 
                     { id: agent.id, handle: agent.handle }
                 );
@@ -112,7 +178,6 @@ export const MultiAgentService = {
             let contextDocs: any[] = [];
             let graphContext = "";
             
-            // Check if agent has READ_LORE permission
             const canReadLore = kernel.authorize(agent.id, SomaActionType.QUERY_DB);
 
             if (userMessage.trim().length > 0 && canReadLore) {
@@ -130,15 +195,9 @@ export const MultiAgentService = {
                         console.warn(`[${agent.handle}] Embedding failed`, e);
                     }
 
-                    // STRATEGY SELECTION
                     if (gate.strategy === 'GRAPH_LOCAL') {
-                        // 1. Get Graph Context (Entities + Relations)
                         graphContext = await getGraphContext(userMessage, queryVector, agent.id);
-                        // 2. Fallback to Vector Search if graph is empty or sparse?
-                        // For now, let's mix both if graph found something, otherwise just vector
                     }
-                    
-                    // Always do vector search for general chunk coverage
                     contextDocs = await searchDocuments(userMessage, queryVector, agent.id);
                 }
             } 
@@ -147,7 +206,6 @@ export const MultiAgentService = {
             const agentConfig = await getAgentConfig(agent.id);
             const specificInstruction = agentConfig.instruction || "";
 
-            // --- ROSTER GENERATION ---
             const rosterString = activeRoster
                 .map(a => `- ${a.handle.toUpperCase()} (${a.pronouns || 'they/them'}): ${a.role}`)
                 .join('\n');
@@ -187,7 +245,7 @@ ${memorySection}
 
 === SOMA PROTOCOL ===
 You operate under the SOMA kernel. Your actions are restricted by your ACCESS_LEVEL.
-- If you lack permission for a tool (e.g. routing, coding), do not attempt to use it.
+- If you lack permission for a tool (e.g. routing, coding, delegation), do not attempt to use it.
 - To save the current conversation to permanent history, output exactly:
   [ACTION: SAVE_SESSION | title="Unique Title based on context"]
   (Requires WRITE_LORE permission)
@@ -199,7 +257,6 @@ You operate under the SOMA kernel. Your actions are restricted by your ACCESS_LE
 - If an image or video is provided, analyze it within the context of your Role.
 `;
 
-            // 4. HISTORY FORMATTING
             const transcript = history.slice(-15).map(m => {
                 let content = m.text;
                 if (m.attachment) content += `\n[Reference: Attachment Provided]`;
@@ -219,36 +276,36 @@ ${agent.handle.toUpperCase()}:`;
             
             if (attachment) {
                 if (attachment.type === 'image') {
-                    parts.push({
-                        inlineData: {
-                            mimeType: attachment.mimeType,
-                            data: attachment.content
-                        }
-                    });
+                    parts.push({ inlineData: { mimeType: attachment.mimeType, data: attachment.content } });
                 } else if (attachment.type === 'video') {
-                    parts.push({
-                        inlineData: {
-                            mimeType: attachment.mimeType,
-                            data: attachment.content
-                        }
-                    });
+                    parts.push({ inlineData: { mimeType: attachment.mimeType, data: attachment.content } });
                     parts.push({ text: `\n[VIDEO ATTACHED: ${attachment.name || 'video_clip'}]\n` });
                 } else if (attachment.type === 'text') {
-                    parts.push({
-                        text: `\n[USER ATTACHED FILE: ${attachment.name || 'document'}]\n${attachment.content}\n`
-                    });
+                    parts.push({ text: `\n[USER ATTACHED FILE: ${attachment.name || 'document'}]\n${attachment.content}\n` });
                 }
             }
 
             parts.push({ text: fullPrompt });
 
-            // 6. GENERATION WITH TOOLS
-            // Check if agent has ROUTE_REQUEST permission
-            const tools = [];
+            // 6. TOOL SETUP
+            const tools: Tool[] = [];
+            
+            // Authorization for RouteRequest
             if (kernel.authorize(agent.id, SomaActionType.ROUTE_REQUEST)) {
                 tools.push({ functionDeclarations: [routeRequestTool] });
             }
+            
+            // Authorization for Delegation (Synapse)
+            if (kernel.authorize(agent.id, SomaActionType.COLLABORATE)) {
+                tools.push({ functionDeclarations: [consultAgentTool] });
+            }
+            
+            // HARDCODED: Google Maps Tools
+            if (googleMapsTool.functionDeclarations) {
+                tools.push({ functionDeclarations: googleMapsTool.functionDeclarations });
+            }
 
+            // 7. GENERATION (PASS 1)
             const result = await ai.models.generateContent({
                 model: CHAT_MODEL,
                 contents: [{ parts }],
@@ -260,39 +317,130 @@ ${agent.handle.toUpperCase()}:`;
                 }
             });
 
-            // 7. TOOL HANDLING
+            // 8. TOOL HANDLING LOOP
             const functionCalls = result.functionCalls;
             if (functionCalls && functionCalls.length > 0) {
                 const call = functionCalls[0];
+                
+                // ROUTER TOOL
                 if (call.name === "routeRequest") {
-                    
                     if (!kernel.authorize(agent.id, SomaActionType.ROUTE_REQUEST)) {
                         return { agentId: agent.id, text: `[SYSTEM NOTICE] Tool use blocked: Insufficient SOMA permissions (Need ROUTE_EXTERNAL).` };
                     }
-
                     const args = call.args as any;
-                    const target = args.target;
-                    const prompt = args.prompt;
-                    
-                    const routerRes = await ExternalRouter.route(target, prompt, { id: agent.id, handle: agent.handle });
+                    const routerRes = await ExternalRouter.route(
+                        args.target, 
+                        args.prompt, 
+                        { id: agent.id, handle: agent.handle },
+                        args.generate_audio // Pass the audio flag
+                    );
                     
                     if (routerRes.success && routerRes.data) {
-                        if (routerRes.type === 'image') {
+                        if (routerRes.type === 'audio') {
                             return {
                                 agentId: agent.id,
-                                text: `[GENERATED IMAGE: ${routerRes.data}] I have visualized this request: ${prompt}`
+                                text: `[STORY GENERATED] I have synthesized the audio for this narrative using my high-fidelity voice module (Chatterbox).`,
+                                audioUrl: routerRes.data
+                            };
+                        } else if (routerRes.type === 'image') {
+                            return { 
+                                agentId: agent.id, 
+                                text: `[GENERATED IMAGE] I have visualized this request: ${args.prompt}`,
                             };
                         } else {
-                            return {
-                                agentId: agent.id,
-                                text: routerRes.data
-                            };
+                            // Text Response (Dolphin/Venice)
+                            return { agentId: agent.id, text: `[UNRESTRICTED MODEL]: ${routerRes.data}` };
                         }
                     } else {
-                        return {
-                            agentId: agent.id,
-                            text: `[ERROR] I attempted to access ${target} but failed: ${routerRes.error}`
-                        };
+                        return { agentId: agent.id, text: `[ERROR] Accessing ${args.target} failed: ${routerRes.error}` };
+                    }
+                }
+                
+                // SYNAPSE: DELEGATION
+                else if (call.name === "consult_agent") {
+                    if (!kernel.authorize(agent.id, SomaActionType.COLLABORATE)) {
+                        return { agentId: agent.id, text: `[SYSTEM BLOCK] Synapse Failure: Agent ${agent.handle} lacks COLLABORATE permissions.` };
+                    }
+                    
+                    const args = call.args as any;
+                    const targetId = args.targetId.toUpperCase();
+                    
+                    // Identify Target
+                    const targetAgent = activeRoster.find(a => a.id === targetId) || activeRoster.find(a => a.handle.toUpperCase() === targetId);
+                    
+                    if (!targetAgent) {
+                        return { agentId: agent.id, text: `[SYSTEM ERROR] Target Agent '${targetId}' is not available in the active roster.` };
+                    }
+
+                    // VISUAL CALLBACK
+                    if (onDelegate) onDelegate(targetAgent.handle);
+
+                    // RECURSIVE CALL
+                    // We pass an empty history or minimal context to the sub-agent so they focus purely on the query
+                    const subPrompt = `[DIRECT DELEGATION FROM ${agent.handle}]: ${args.query}\nCONTEXT: ${args.context || "None"}`;
+                    
+                    try {
+                        const subResponse = await MultiAgentService.queryAgent(
+                            targetAgent,
+                            subPrompt,
+                            [], // Empty history to force focus on the specific query
+                            globalInstructions,
+                            "FOCUS: SUB-QUERY DELEGATION",
+                            activeRoster,
+                            null,
+                            depth + 1, // INCREMENT DEPTH
+                            onDelegate
+                        );
+
+                        // FEEDBACK LOOP
+                        const feedbackPrompt = `
+${fullPrompt}
+
+[SYSTEM: You successfully delegated to ${targetAgent.handle}.]
+[RESPONSE FROM ${targetAgent.handle}]:
+${subResponse.text}
+
+[INSTRUCTION]: Incorporate this delegated knowledge into your final response to the user.
+${agent.handle.toUpperCase()}:`;
+
+                        const finalRes = await ai.models.generateContent({
+                            model: CHAT_MODEL,
+                            contents: [{ parts: [{ text: feedbackPrompt }] }],
+                            config: { ...agentConfig.modelConfig, tools: undefined } // Disable tools to prevent loops
+                        });
+
+                        return { agentId: agent.id, text: finalRes.text || "..." };
+
+                    } catch(e: any) {
+                        return { agentId: agent.id, text: `[DELEGATION FAILED]: ${e.message}` };
+                    }
+                }
+
+                // GOOGLE MAPS TOOL (RE-PROMPT PATTERN)
+                else if (call.name.startsWith("maps_")) {
+                    try {
+                        const mcpRes = await McpClient.execute('google-maps', call.name, call.args as any);
+                        const toolResult = mcpRes.status === 'SUCCESS' ? JSON.stringify(mcpRes.result) : `Error: ${mcpRes.error}`;
+                        
+                        const rePrompt = `
+${fullPrompt}
+
+[SYSTEM: You invoked the tool '${call.name}'.]
+[TOOL OUTPUT]: ${toolResult.substring(0, 8000)}
+
+[INSTRUCTION]: Incorporate this new information into your final response to the user.
+${agent.handle.toUpperCase()}:`;
+
+                        const secondResult = await ai.models.generateContent({
+                            model: CHAT_MODEL,
+                            contents: [{ parts: [{ text: rePrompt }] }],
+                            config: { ...agentConfig.modelConfig, tools: undefined } 
+                        });
+                        
+                        return { agentId: agent.id, text: secondResult.text || "..." };
+
+                    } catch (e: any) {
+                        return { agentId: agent.id, text: `[MAPS ERROR]: ${e.message}` };
                     }
                 }
             }
