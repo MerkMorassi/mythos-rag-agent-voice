@@ -9,9 +9,9 @@ interface McpManagerProps {
 }
 
 export const McpManager: React.FC<McpManagerProps> = ({ isOpen, onOpen, onClose }) => {
-    const [serverName, setServerName] = useState('filesystem');
-    const [toolName, setToolName] = useState('read_file');
-    const [argsJson, setArgsJson] = useState('{\n  "path": "README.md"\n}');
+    const [serverName, setServerName] = useState('google-maps');
+    const [toolName, setToolName] = useState('maps_search_places');
+    const [argsJson, setArgsJson] = useState('{\n  "query": "Restaurants in Paris",\n  "radius": 5000\n}');
     const [output, setOutput] = useState<string>('');
     const [isLoading, setIsLoading] = useState(false);
 
@@ -34,6 +34,12 @@ export const McpManager: React.FC<McpManagerProps> = ({ isOpen, onOpen, onClose 
         }
     };
 
+    const loadPreset = (server: string, tool: string, args: string) => {
+        setServerName(server);
+        setToolName(tool);
+        setArgsJson(args);
+    };
+
     if (!isOpen) return null;
 
     return (
@@ -51,11 +57,41 @@ export const McpManager: React.FC<McpManagerProps> = ({ isOpen, onOpen, onClose 
 
                 <div className="modal-body-area">
                     
-                    <div className="section-panel" style={{ borderColor: '#38bdf8', padding: '1rem' }}>
-                        <p style={{ fontSize: '0.75rem', color: '#ccc', marginBottom: '0.5rem' }}>
-                            Connect to external data sources and tools via the Orchestrator Bridge. 
-                            Add servers to <code>mcp_config.json</code> in the root directory.
-                        </p>
+                    <div className="section-panel" style={{ borderColor: '#38bdf8', padding: '1rem', background: 'rgba(56, 189, 248, 0.05)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                            <span className="section-header-title" style={{ color: '#38bdf8' }}>INSTALLED SERVERS</span>
+                            <span style={{ fontSize: '0.65rem', color: '#666' }}>mcp_config.json</span>
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                            <div className="flex-group">
+                                <span style={{ fontSize: '0.8rem', fontWeight: 'bold', width: '120px', color: '#eee' }}>google-maps</span>
+                                <div style={{ display: 'flex', gap: '0.25rem' }}>
+                                    <button 
+                                        className="btn btn-xs btn-secondary" 
+                                        onClick={() => loadPreset('google-maps', 'maps_search_places', '{\n  "query": "Coffee shops in Tokyo",\n  "radius": 1000\n}')}
+                                    >
+                                        SEARCH
+                                    </button>
+                                    <button 
+                                        className="btn btn-xs btn-secondary" 
+                                        onClick={() => loadPreset('google-maps', 'maps_distancematrix', '{\n  "origin": "New York, NY",\n  "destination": "Boston, MA",\n  "mode": "driving"\n}')}
+                                    >
+                                        DISTANCE
+                                    </button>
+                                </div>
+                            </div>
+                            <div className="flex-group">
+                                <span style={{ fontSize: '0.8rem', fontWeight: 'bold', width: '120px', color: '#eee' }}>chrome-devtools</span>
+                                <div style={{ display: 'flex', gap: '0.25rem' }}>
+                                    <button 
+                                        className="btn btn-xs btn-secondary" 
+                                        onClick={() => loadPreset('chrome-devtools', 'Page.reload', '{}')}
+                                    >
+                                        RELOAD
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
                     </div>
 
                     <div className="flex-col">

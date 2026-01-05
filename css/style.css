@@ -92,6 +92,73 @@ html, body {
     display: none;
 }
 
+/* SCREENING ROOM STYLES */
+.screening-room {
+    width: 100%;
+    height: 100%;
+    background: #000;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+
+.screening-placeholder {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    background: radial-gradient(circle at center, #111 0%, #000 70%);
+    border: 1px dashed #333;
+    transition: all 0.3s;
+}
+.screening-placeholder:hover {
+    background: radial-gradient(circle at center, #1a1a1a 0%, #000 70%);
+    border-color: #666;
+}
+
+.screening-overlay {
+    position: absolute;
+    bottom: 2rem;
+    left: 2rem;
+    width: 40%;
+    max-height: 50%;
+    pointer-events: none; /* Let clicks pass through to video controls */
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    mask-image: linear-gradient(to top, black 80%, transparent 100%);
+    -webkit-mask-image: linear-gradient(to top, black 80%, transparent 100%);
+}
+
+.screening-log {
+    background: rgba(0, 0, 0, 0.6);
+    color: #eee;
+    padding: 0.5rem 1rem;
+    border-radius: 4px;
+    font-size: 0.9rem;
+    line-height: 1.4;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+    border-left: 3px solid transparent;
+    animation: fadeOutUp 10s forwards; /* Disappear after 10s */
+    backdrop-filter: blur(2px);
+}
+
+.screening-log.user { border-left-color: #38bdf8; }
+.screening-log.model { border-left-color: #4ade80; }
+.screening-log.system { border-left-color: #facc15; font-style: italic; opacity: 0.8; }
+
+@keyframes fadeOutUp {
+    0% { opacity: 1; transform: translateY(0); }
+    80% { opacity: 1; transform: translateY(0); }
+    100% { opacity: 0; transform: translateY(-20px); }
+}
+
 /* MODALS / SIDE PANELS (Constrained to Viewport) */
 .modal-overlay {
     position: absolute; /* Relative to main-viewport */
@@ -519,7 +586,6 @@ html, body {
 
 /* --- RESPONSIVE / MOBILE OPTIMIZATION --- */
 
-/* IMAGE SCALING GLOBAL (Mobile & Desktop) */
 img, video, canvas {
     max-width: 100%;
     height: auto;
@@ -531,7 +597,6 @@ img, video, canvas {
 }
 
 @media screen and (max-width: 768px) {
-    /* 1. RESET SIZING */
     :root {
         --header-height: 3rem;
         --btn-h-xl: 3rem;
@@ -539,23 +604,20 @@ img, video, canvas {
         --btn-h-md: 2rem;
     }
 
-    /* 2. HEADER COMPACTNESS */
     .app-header {
         padding: 0 0.5rem;
         font-size: 0.8rem;
     }
-    .logo-text { display: none; } /* Hide big text to fit controls */
+    .logo-text { display: none; }
     
-    /* 3. COMMAND DECK (FOOTER) REFLOW */
     .command-deck {
         padding: 0.5rem;
         gap: 0.25rem;
     }
 
-    /* Force horizontal scroll for controls row to prevent vertical layout explosion */
     .tray-controls {
         display: flex;
-        flex-wrap: nowrap; /* CRITICAL: Prevent wrapping */
+        flex-wrap: nowrap;
         overflow-x: auto;
         gap: 0.5rem;
         justify-content: flex-start;
@@ -565,14 +627,12 @@ img, video, canvas {
     }
     .tray-controls::-webkit-scrollbar { display: none; }
 
-    /* Prevent buttons from shrinking/squashing */
     .tray-controls .btn, 
     .tray-controls .mode-selector, 
     .tray-controls .flex-group {
         flex-shrink: 0;
     }
 
-    /* 4. MODALS - FULL SCREEN FOCUS */
     .modal-content {
         max-width: 100%;
         width: 100%;
@@ -580,7 +640,6 @@ img, video, canvas {
     }
     .modal-header-area { padding: 0.5rem 1rem; }
 
-    /* 5. COUNCIL LAYOUT TRANSFORM -> Vertical Stack */
     .council-layout {
         display: flex;
         flex-direction: column;
@@ -589,14 +648,13 @@ img, video, canvas {
         overflow: hidden;
     }
 
-    /* Roster becomes a top horizontal scrolling strip */
     .council-sidebar {
-        flex: 0 0 auto; /* Don't grow */
+        flex: 0 0 auto;
         width: 100%;
         height: auto;
         min-height: 85px; 
         max-height: 100px;
-        flex-direction: row; /* Horizontal Items */
+        flex-direction: row;
         border-right: none;
         border-bottom: 1px solid #333;
         overflow-x: auto;
@@ -605,9 +663,7 @@ img, video, canvas {
         gap: 0.5rem;
     }
     
-    /* Structural Hacks for specific child divs in Sidebar */
     .council-sidebar > div:first-child {
-        /* Header 'COUNCIL ROSTER' vertical block */
         min-width: 80px;
         border-bottom: none !important;
         border-right: 1px solid #333;
@@ -624,14 +680,12 @@ img, video, canvas {
     }
     
     .council-sidebar > div:last-child {
-        /* Agent List Container */
         display: flex !important;
         flex-direction: row !important;
         gap: 0.5rem;
         align-items: center;
     }
 
-    /* Horizontal Agent Card */
     .agent-card {
         min-width: 140px;
         height: 90%;
@@ -640,10 +694,9 @@ img, video, canvas {
         padding: 0.5rem;
     }
 
-    /* 6. COUNCIL MAIN AREA */
     .council-main {
-        flex: 1; /* Take remaining height */
-        min-height: 0; /* Allow shrinking for inner scroll */
+        flex: 1;
+        min-height: 0;
         display: flex;
         flex-direction: column;
     }
@@ -659,7 +712,6 @@ img, video, canvas {
         padding: 0.75rem;
     }
 
-    /* 7. INPUT AREAS */
     .council-input-area {
         padding: 0.5rem;
         flex: 0 0 auto;
@@ -669,7 +721,6 @@ img, video, canvas {
     }
 }
 
-/* Extra small screens */
 @media screen and (max-width: 480px) {
     .modal-body-area > div[style*="grid-template-columns"] {
         grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)) !important;

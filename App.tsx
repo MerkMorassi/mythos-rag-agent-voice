@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { GoogleGenAI, Tool } from "@google/genai";
+import { GoogleGenAI, Tool, Type } from "@google/genai";
 import { AGENTS } from './agents';
 import { 
   LogMessage, 
@@ -63,7 +63,7 @@ const App: React.FC = () => {
   const [accessLevel, setAccessLevel] = useState(AGENTS[0].accessLevel);
   const [modelMode, setModelMode] = useState<ModelMode>('STD');
 
-  // Layout & View Modes - Default to VOICE for immersive experience
+  // Layout & View Modes
   const [layoutMode, setLayoutMode] = useState<'VOICE' | 'CHAT' | 'HYBRID' | 'VIDEO'>('VOICE');
   const [currentView, setCurrentView] = useState<ViewMode>('ORCHESTRATOR');
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
@@ -73,46 +73,50 @@ const App: React.FC = () => {
   const [isHolodeckOpen, setIsHolodeckOpen] = useState(false);
   const [holodeckRefresh, setHolodeckRefresh] = useState(0);
 
-  // Video State
+  // Vision / Stream State
   const [isCameraOn, setIsCameraOn] = useState(false);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [videoSource, setVideoSource] = useState<'camera' | 'media'>('camera');
+  const [streamFileUrl, setStreamFileUrl] = useState<string | null>(null);
+  
+  const videoRef = useRef<HTMLVideoElement | null>(null); // Webcam
+  const mediaVideoRef = useRef<HTMLVideoElement | null>(null); // Movie File
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const frameIntervalRef = useRef<number | null>(null);
-  const isCameraOnRef = useRef(false); // Sync ref
+  
+  // Inputs
+  const paperclipInputRef = useRef<HTMLInputElement>(null);
+  const mediaFileInputRef = useRef<HTMLInputElement>(null);
+  const logEndRef = useRef<HTMLDivElement>(null);
 
   // Story Audio State
   const [storyAudioUrl, setStoryAudioUrl] = useState<string | null>(null);
   const [interruptSignal, setInterruptSignal] = useState(false);
 
-  // File Upload Ref
-  const paperclipInputRef = useRef<HTMLInputElement>(null);
-  const logEndRef = useRef<HTMLDivElement>(null);
-
   // --- PREPARE LIVE CONFIG ---
   const currentAgent = AGENTS.find(a => a.id === currentAgentId);
   
-  // Construct instructions based on mode
   let modeInstruction = "";
-  if (modelMode === 'DEEP') {
-      modeInstruction = "\n\n[OPERATIONAL MODE: DEEP REASONING]\nACTIVATE 'Gemini 3 Pro' SIMULATION PROTOCOL.\n- Prioritize complex analysis.\n- THINK before speaking.";
-  } else if (modelMode === 'EXT') {
-      modeInstruction = "\n\n[OPERATIONAL MODE: EXTERNAL TOOLING]\nACTIVATE 'Router' PROTOCOL.\n- Use tools aggressively.";
-  } else if (modelMode === 'IMG') {
-      modeInstruction = "\n\n[OPERATIONAL MODE: VISUALIZER]\nACTIVATE 'Image Generation' PROTOCOL.\n- Prioritize visual descriptions.";
-  }
+  if (modelMode === 'DEEP') modeInstruction = "\n\n[MODE: DEEP REASONING]\nACTIVATE 'Gemini 3 Pro' PROTOCOL.";
+  else if (modelMode === 'EXT') modeInstruction = "\n\n[MODE: TOOLING]\nACTIVATE 'Router' PROTOCOL.";
+  else if (modelMode === 'IMG') modeInstruction = "\n\n[MODE: VISUAL]\nACTIVATE 'Image Generation' PROTOCOL.";
 
-  const systemInstruction = `${generalInstructions}\n\n${agentInstructions || currentAgent?.system_instruction}${modeInstruction}`;
+  const LIVE_MEMORY_INSTRUCTION = `
+[SYSTEM CAPABILITY: MYTHOS KNOWLEDGE GRAPH]
+You are grounded in a persistent memory system (IndexedDB/Vector Store).
+You have access to the 'retrieve_knowledge' tool. Use it for queries about past events, lore, or uploaded files.
+`;
+
+  const systemInstruction = `${generalInstructions}\n\n${agentInstructions || currentAgent?.system_instruction}${modeInstruction}\n${LIVE_MEMORY_INSTRUCTION}`;
 
   // --- TOOL DEFINITIONS ---
-
   const retrievalTool: Tool = {
       functionDeclarations: [
           {
               name: "retrieve_knowledge",
               description: "Access the MythOS Knowledge Graph. Use whenever asked about past events, lore, or documents.",
               parameters: {
-                  type: "OBJECT",
-                  properties: { query: { type: "STRING", description: "The search query." } },
+                  type: Type.OBJECT,
+                  properties: { query: { type: Type.STRING, description: "The search query." } },
                   required: ["query"]
               }
           }
@@ -123,25 +127,25 @@ const App: React.FC = () => {
       functionDeclarations: [
           {
               name: "maps_search_places",
-              description: "Search for places using Google Maps. Returns POIs, addresses, and ratings.",
+              description: "Search for places using Google Maps.",
               parameters: {
-                  type: "OBJECT",
+                  type: Type.OBJECT,
                   properties: { 
-                      query: { type: "STRING", description: "Search term (e.g. 'Coffee near Berlin')" },
-                      radius: { type: "NUMBER", description: "Search radius in meters (optional, default 5000)" }
+                      query: { type: Type.STRING, description: "Search term" },
+                      radius: { type: Type.NUMBER, description: "Radius in meters" }
                   },
                   required: ["query"]
               }
           },
           {
               name: "maps_distancematrix",
-              description: "Calculate travel distance and time between two points.",
+              description: "Calculate travel distance/time.",
               parameters: {
-                  type: "OBJECT",
+                  type: Type.OBJECT,
                   properties: { 
-                      origin: { type: "STRING", description: "Starting address or location" },
-                      destination: { type: "STRING", description: "Ending address or location" },
-                      mode: { type: "STRING", description: "Travel mode: 'driving', 'walking', 'bicycling', 'transit'" }
+                      origin: { type: Type.STRING },
+                      destination: { type: Type.STRING },
+                      mode: { type: Type.STRING }
                   },
                   required: ["origin", "destination"]
               }
@@ -153,19 +157,12 @@ const App: React.FC = () => {
       functionDeclarations: [
           {
               name: "routeRequest",
-              description: "Route a complex request or image generation task to a specialized external model.",
+              description: "Route a request to external models.",
               parameters: {
-                  type: "OBJECT",
+                  type: Type.OBJECT,
                   properties: {
-                      target: {
-                          type: "STRING",
-                          description: "The target ID: 'FLUX_IMAGE' (Visuals), 'DOLPHIN_LLM' (NSFW/Uncensored Text), 'CHATTERBOX_TTS' (Audio Story).",
-                          enum: ["FLUX_IMAGE", "DOLPHIN_LLM", "CHATTERBOX_TTS", "EXTERNAL_LLM"]
-                      },
-                      prompt: {
-                          type: "STRING",
-                          description: "The specific prompt or text content to send."
-                      }
+                      target: { type: Type.STRING, enum: ["FLUX_IMAGE", "DOLPHIN_LLM", "CHATTERBOX_TTS", "EXTERNAL_LLM"] },
+                      prompt: { type: Type.STRING }
                   },
                   required: ["target", "prompt"]
               }
@@ -173,7 +170,6 @@ const App: React.FC = () => {
       ]
   };
   
-  // Reconstruct Holodeck Tools from exported definitions
   const holodeckTools: Tool = {
       functionDeclarations: [
           readCanvasTool.functionDeclarations ? readCanvasTool.functionDeclarations[0] : readCanvasTool,
@@ -181,202 +177,92 @@ const App: React.FC = () => {
       ].filter(Boolean) as any
   };
 
-  // --- TOOL HANDLER (GraphRAG + MCP + External + Holodeck) ---
+  // --- TOOL HANDLER ---
   const handleToolCall = async (toolCall: any): Promise<any[]> => {
       const responses = [];
       for (const fc of toolCall.functionCalls) {
-          
-          // 1. ROUTE REQUEST (External Models / TTS)
           if (fc.name === 'routeRequest') {
               const args = fc.args as any;
               setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', text: `[ROUTING] ${args.target}...`, timestamp: Date.now() }]);
-              
-              const currentAgent = AGENTS.find(a => a.id === currentAgentId);
-              if(!currentAgent) return [];
-
               try {
+                  const currentAgent = AGENTS.find(a => a.id === currentAgentId)!;
                   const routerRes = await ExternalRouter.route(args.target, args.prompt, { id: currentAgentId, handle: currentAgent.handle });
                   
                   if (routerRes.success) {
                       if (routerRes.type === 'audio' && routerRes.data) {
-                          // SET AUDIO URL TO PLAY
                           setStoryAudioUrl(routerRes.data);
-                          responses.push({
-                              id: fc.id, name: fc.name,
-                              response: { result: "Audio generated and playing via Chatterbox Player." }
-                          });
+                          responses.push({ id: fc.id, name: fc.name, response: { result: "Audio generated and playing." } });
                       } else {
-                          responses.push({
-                              id: fc.id, name: fc.name,
-                              response: { result: routerRes.data }
-                          });
+                          responses.push({ id: fc.id, name: fc.name, response: { result: routerRes.data } });
                       }
                   } else {
-                      responses.push({
-                          id: fc.id, name: fc.name,
-                          response: { error: routerRes.error }
-                      });
+                      responses.push({ id: fc.id, name: fc.name, response: { error: routerRes.error } });
                   }
               } catch (e: any) {
-                  responses.push({
-                      id: fc.id, name: fc.name,
-                      response: { error: e.message }
-                  });
+                  responses.push({ id: fc.id, name: fc.name, response: { error: e.message } });
               }
           }
-
-          // 2. NATIVE KNOWLEDGE RETRIEVAL
           else if (fc.name === 'retrieve_knowledge') {
               const query = (fc.args as any).query;
-              
-              setLogs(prev => [...prev, { 
-                  id: crypto.randomUUID(), 
-                  type: 'system', 
-                  text: `[GRAPH ACCESS] Traversal: "${query}"`, 
-                  timestamp: Date.now() 
-              }]);
-
+              setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', text: `[GRAPH] Searching: "${query}"`, timestamp: Date.now() }]);
               try {
                   const embedAi = new GoogleGenAI({ apiKey });
-                  const embedRes = await embedAi.models.embedContent({
-                      model: 'text-embedding-004',
-                      contents: [{ parts: [{ text: query }] }]
-                  });
+                  const embedRes = await embedAi.models.embedContent({ model: 'text-embedding-004', contents: [{ parts: [{ text: query }] }] });
                   const vec = embedRes.embeddings?.[0]?.values;
-
-                  // Hybrid Retrieval
                   const graphText = await getGraphContext(query, vec, currentAgentId);
                   const vectorDocs = await searchDocuments(query, vec, currentAgentId);
-                  
-                  const combinedContext = `### KNOWLEDGE GRAPH ###\n${graphText || "No direct graph connections found."}\n\n### RELEVANT DOCUMENTS ###\n${vectorDocs.map(d => `- ${d.content.substring(0,400)}...`).join('\n')}`;
-
-                  responses.push({
-                      id: fc.id,
-                      name: fc.name,
-                      response: { result: combinedContext }
-                  });
+                  const combined = `### GRAPH ###\n${graphText}\n### DOCS ###\n${vectorDocs.map(d => `- ${d.content.substring(0,400)}...`).join('\n')}`;
+                  responses.push({ id: fc.id, name: fc.name, response: { result: combined } });
               } catch(e: any) {
-                  console.error("Retrieval Failed", e);
-                  responses.push({
-                      id: fc.id,
-                      name: fc.name,
-                      response: { result: `Error accessing knowledge base: ${e.message}` }
-                  });
+                  responses.push({ id: fc.id, name: fc.name, response: { result: `Error: ${e.message}` } });
               }
           }
-          // 3. GOOGLE MAPS MCP TOOLS
           else if (fc.name.startsWith('maps_')) {
-              setLogs(prev => [...prev, { 
-                  id: crypto.randomUUID(), 
-                  type: 'system', 
-                  text: `[MCP BRIDGE] Calling Google Maps: ${fc.name}`, 
-                  timestamp: Date.now() 
-              }]);
-
               try {
-                  // Forward to local MCP bridge
                   const mcpResult = await McpClient.execute('google-maps', fc.name, fc.args as any);
-                  
-                  if (mcpResult.status === 'SUCCESS') {
-                       responses.push({
-                          id: fc.id,
-                          name: fc.name,
-                          response: { result: JSON.stringify(mcpResult.result).substring(0, 10000) } // Truncate large map responses
-                      });
-                  } else {
-                       throw new Error(mcpResult.error);
-                  }
+                  responses.push({ id: fc.id, name: fc.name, response: { result: JSON.stringify(mcpResult.result).substring(0, 10000) } });
               } catch (e: any) {
-                  console.error("MCP Execution Failed", e);
-                  responses.push({
-                      id: fc.id,
-                      name: fc.name,
-                      response: { result: `Tool Execution Error: ${e.message}` }
-                  });
+                  responses.push({ id: fc.id, name: fc.name, response: { result: `Error: ${e.message}` } });
               }
           }
-          
-          // 4. HOLODECK TOOLS
           else if (fc.name === "read_canvas") {
               const canvas = await getCanvas();
-              const summary = `=== HOLODECK: ${canvas.title} ===\n` + 
-                  canvas.sections.map(s => `[ID: ${s.id}] ## ${s.title}\n${s.content}`).join('\n\n');
-              responses.push({
-                  id: fc.id, name: fc.name, response: { result: summary }
-              });
+              const summary = `=== HOLODECK ===\n` + canvas.sections.map(s => `## ${s.title}\n${s.content}`).join('\n');
+              responses.push({ id: fc.id, name: fc.name, response: { result: summary } });
           }
           else if (fc.name === "update_canvas") {
               const args = fc.args as any;
               const canvas = await getCanvas();
-              
-              if (args.operation === 'SET_TITLE') {
-                  canvas.title = args.title || canvas.title;
-              } else if (args.operation === 'ADD_SECTION') {
-                  const newId = args.sectionId || `sec_${Date.now()}`;
-                  canvas.sections.push({
-                      id: newId,
-                      title: args.title || "Untitled",
-                      content: args.content || "",
-                      lastEditor: currentAgentId,
-                      timestamp: Date.now()
-                  });
-              } else if (args.operation === 'UPDATE_SECTION') {
+              if (args.operation === 'SET_TITLE') canvas.title = args.title || canvas.title;
+              else if (args.operation === 'ADD_SECTION') canvas.sections.push({ id: args.sectionId || `sec_${Date.now()}`, title: args.title || "Untitled", content: args.content || "", lastEditor: currentAgentId, timestamp: Date.now() });
+              else if (args.operation === 'UPDATE_SECTION') {
                   const idx = canvas.sections.findIndex(s => s.id === args.sectionId);
-                  if (idx !== -1) {
-                      if(args.title) canvas.sections[idx].title = args.title;
-                      if(args.content) canvas.sections[idx].content = args.content;
-                      canvas.sections[idx].lastEditor = currentAgentId;
-                      canvas.sections[idx].timestamp = Date.now();
-                  }
-              } else if (args.operation === 'DELETE_SECTION') {
-                  canvas.sections = canvas.sections.filter(s => s.id !== args.sectionId);
-              }
+                  if (idx !== -1) { if(args.title) canvas.sections[idx].title = args.title; if(args.content) canvas.sections[idx].content = args.content; }
+              } else if (args.operation === 'DELETE_SECTION') canvas.sections = canvas.sections.filter(s => s.id !== args.sectionId);
               
               canvas.lastModified = Date.now();
               await updateCanvas(canvas);
-              setHolodeckRefresh(prev => prev + 1); // TRIGGER UI REFRESH
-              setIsHolodeckOpen(true); // Auto-open on update
-              
-              responses.push({
-                  id: fc.id, name: fc.name, response: { result: "Canvas Updated Successfully." }
-              });
+              setHolodeckRefresh(prev => prev + 1);
+              setIsHolodeckOpen(true);
+              responses.push({ id: fc.id, name: fc.name, response: { result: "Canvas Updated." } });
           }
       }
       return responses;
   };
 
-  // --- USE GEMINI LIVE HOOK ---
-  const { 
-      connect, 
-      disconnect, 
-      connectionState, 
-      analyser, 
-      sendText, 
-      sendRealtimeInput, 
-      isMicOn, 
-      setIsMicOn,
-      isThinking // The "Amber Flash" Indicator state
-  } = useGeminiLive({
+  const { connect, disconnect, connectionState, analyser, sendText, sendRealtimeInput, isMicOn, setIsMicOn, isThinking } = useGeminiLive({
       apiKey,
       modelName: 'gemini-2.5-flash-native-audio-preview-09-2025',
       systemInstruction,
       voiceName: selectedVoice,
       tools: [retrievalTool, googleMapsTool, routeRequestTool, holodeckTools],
       onLog: (log) => {
-          // Handle streaming log updates logic
           setLogs(prev => {
               if (log.isStreaming) {
-                  // If user is speaking (streaming user log), we should interrupt story
-                  if (log.type === 'user') {
-                      setInterruptSignal(true);
-                  }
-                  
+                  if (log.type === 'user') setInterruptSignal(true);
                   const last = prev[prev.length - 1];
-                  if (last && last.type === log.type && last.isStreaming) {
-                      return [...prev.slice(0, -1), { ...last, text: last.text + log.text }];
-                  }
+                  if (last && last.type === log.type && last.isStreaming) return [...prev.slice(0, -1), { ...last, text: last.text + log.text }];
               } else if (log.type === 'system' && log.text === '[Interrupted]') {
-                  // Mark previous streams as done
                   const last = prev[prev.length - 1];
                   if(last && last.isStreaming) return [...prev.slice(0, -1), { ...last, isStreaming: false, text: last.text + ' [Interrupted]' }];
               }
@@ -386,97 +272,64 @@ const App: React.FC = () => {
       onToolCall: handleToolCall
   });
 
-  // --- EFFECTS ---
+  // --- EFFECTS & HANDLERS ---
 
   useEffect(() => {
-      // Auto-load config
       const init = async () => {
-          await ensureVectorIndex(); // Migration check
+          await ensureVectorIndex();
           const gen = await getGeneralInstructions();
           setGeneralInstructions(gen);
           loadAgentConfig(currentAgentId);
       };
       init();
-
-      const handleKeyDown = (e: KeyboardEvent) => {
-          if (e.key === '`' || e.key === '~') {
-              if (document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') {
-                  e.preventDefault();
-                  setIsTerminalOpen(prev => !prev);
-              }
-          }
-      };
+      const handleKeyDown = (e: KeyboardEvent) => { if (e.key === '`' || e.key === '~') { if (document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') { e.preventDefault(); setIsTerminalOpen(prev => !prev); } } };
       window.addEventListener('keydown', handleKeyDown);
       return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // Monitor mic input for interruption using Analyser
+  // VAD Interruption
   useEffect(() => {
       if (connectionState === ConnectionState.CONNECTED && analyser && isMicOn) {
           const bufferLength = analyser.frequencyBinCount;
           const dataArray = new Uint8Array(bufferLength);
-          
-          const checkVolume = () => {
+          const interval = setInterval(() => {
               analyser.getByteFrequencyData(dataArray);
-              let sum = 0;
-              for(let i=0; i<bufferLength; i++) sum += dataArray[i];
-              const avg = sum / bufferLength;
-              
-              // Simple VAD Threshold - if mic input is loud enough, interrupt story
-              if (avg > 30) {
-                  setInterruptSignal(true);
-              } else {
-                  // If we wanted to auto-resume, we could set false here, but better to let user say "Resume"
-                  // or have a manual resume. But the Player component pauses on signal=true.
-                  // We need to reset signal to false after a bit if volume drops? 
-                  // No, because interruption is a state. We toggle it off when user stops talking?
-                  // Actually, let's just trigger pause once.
-                  setInterruptSignal(false); 
-              }
-          };
-          
-          // Poll volume every 200ms
-          const interval = setInterval(checkVolume, 200);
+              let sum = 0; for(let i=0; i<bufferLength; i++) sum += dataArray[i];
+              if ((sum / bufferLength) > 30) setInterruptSignal(true); else setInterruptSignal(false);
+          }, 200);
           return () => clearInterval(interval);
       }
   }, [connectionState, analyser, isMicOn]);
 
-  useEffect(() => {
-    loadAgentConfig(currentAgentId);
-  }, [currentAgentId]);
+  useEffect(() => { loadAgentConfig(currentAgentId); }, [currentAgentId]);
+  useEffect(() => { logEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [logs, layoutMode]);
 
+  // STREAMING LOOP (VISION)
   useEffect(() => {
-    if (logEndRef.current) {
-        logEndRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [logs, layoutMode]);
-
-  useEffect(() => { isCameraOnRef.current = isCameraOn; }, [isCameraOn]);
-
-  // Video Stream Logic
-  useEffect(() => {
-      if (isCameraOn && videoRef.current && canvasRef.current && connectionState === ConnectionState.CONNECTED) {
-          const video = videoRef.current;
+      if (isCameraOn && connectionState === ConnectionState.CONNECTED && canvasRef.current) {
           const canvas = canvasRef.current;
           const ctx = canvas.getContext('2d');
           
           if (frameIntervalRef.current) clearInterval(frameIntervalRef.current);
 
-          // Stream Frames at 1 FPS
           frameIntervalRef.current = window.setInterval(() => {
-              if (ctx && video.readyState === video.HAVE_ENOUGH_DATA) {
-                  canvas.width = video.videoWidth;
-                  canvas.height = video.videoHeight;
-                  ctx.drawImage(video, 0, 0);
+              // Determine source
+              const source = videoSource === 'camera' ? videoRef.current : mediaVideoRef.current;
+              
+              if (ctx && source && source.readyState >= source.HAVE_CURRENT_DATA) {
+                  // For media file, check if paused to save tokens? Or allow analyzing paused frames.
+                  // Allow analysis of paused frames for discussion.
+                  
+                  canvas.width = source.videoWidth || 640;
+                  canvas.height = source.videoHeight || 480;
+                  ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
                   const base64 = canvas.toDataURL('image/jpeg', 0.5).split(',')[1];
                   sendRealtimeInput({ media: { mimeType: 'image/jpeg', data: base64 } });
               }
           }, 1000); 
       }
-      return () => {
-          if (frameIntervalRef.current) clearInterval(frameIntervalRef.current);
-      };
-  }, [isCameraOn, connectionState, sendRealtimeInput]);
+      return () => { if (frameIntervalRef.current) clearInterval(frameIntervalRef.current); };
+  }, [isCameraOn, connectionState, sendRealtimeInput, videoSource]);
 
   const loadAgentConfig = async (id: string) => {
       const cfg = await getAgentConfig(id);
@@ -498,34 +351,38 @@ const App: React.FC = () => {
       if (speed) setVoiceSpeed(speed);
       if (pitch) setVoicePitch(pitch);
       await saveAgentConfig(currentAgentId, {
-          instruction: agentInstructions,
-          modelConfig,
-          voiceName: selectedVoice,
-          voiceReference: voiceRef,
-          accessLevel: newAccessLevel,
-          voiceSpeed: speed,
-          voicePitch: pitch
+          instruction: agentInstructions, modelConfig, voiceName: selectedVoice, voiceReference: voiceRef, accessLevel: newAccessLevel, voiceSpeed: speed, voicePitch: pitch
       });
       await saveGeneralInstructions(generalInstructions);
       setAccessLevel(newAccessLevel || '400');
   };
 
   const toggleCamera = async () => {
-      if (isCameraOn) {
+      if (isCameraOn && videoSource === 'camera') {
           setIsCameraOn(false);
-          if (videoRef.current && videoRef.current.srcObject) {
-              (videoRef.current.srcObject as MediaStream).getTracks().forEach(t => t.stop());
-              videoRef.current.srcObject = null;
-          }
+          if (videoRef.current?.srcObject) (videoRef.current.srcObject as MediaStream).getTracks().forEach(t => t.stop());
       } else {
+          setVideoSource('camera');
           try {
               const stream = await navigator.mediaDevices.getUserMedia({ video: true });
               if (videoRef.current) videoRef.current.srcObject = stream;
               setIsCameraOn(true);
-          } catch (e) {
-              alert("Camera access denied.");
-          }
+          } catch (e) { alert("Camera denied."); }
       }
+  };
+
+  const handleMediaFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (file) {
+          const url = URL.createObjectURL(file);
+          setStreamFileUrl(url);
+          setVideoSource('media');
+          setLayoutMode('VIDEO'); // Auto-switch to Screening Room
+          setIsCameraOn(true); // Auto-enable vision
+          // Auto-play the media video ref when it loads
+          setTimeout(() => mediaVideoRef.current?.play(), 500);
+      }
+      if(mediaFileInputRef.current) mediaFileInputRef.current.value = '';
   };
 
   const handleSendText = async () => {
@@ -536,66 +393,40 @@ const App: React.FC = () => {
       sendText(text);
   };
 
-  // --- PAPERCLIP UPLOAD LOGIC ---
-  const handlePaperclipClick = () => paperclipInputRef.current?.click();
+  const handlePaperclipClick = () => {
+      paperclipInputRef.current?.click();
+  };
 
   const handlePaperclipUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
       const files = e.target.files;
       if (!files || files.length === 0) return;
       const file = files[0];
-      
       const reader = new FileReader();
       reader.onload = async (evt) => {
           const res = evt.target?.result as string;
           let data = res;
-          let type: MediaAsset['type'] = 'text'; // Default
-          
+          let type: MediaAsset['type'] = 'text'; 
           if (file.type.startsWith('image/')) type = 'image';
           else if (file.type.includes('pdf')) type = 'pdf';
           
-          if ((type === 'image' || type === 'pdf') && res.includes('base64,')) {
-              data = res.split(',')[1];
-          }
+          if ((type === 'image' || type === 'pdf') && res.includes('base64,')) data = res.split(',')[1];
 
-          // Save to Gallery
-          const asset: MediaAsset = {
-              id: NumMarkX_GenerateID('UP'),
-              type,
-              data,
-              prompt: file.name,
-              agentId: 'USER',
-              timestamp: Date.now(),
-              tags: ['CHAT_UPLOAD']
-          };
+          const asset: MediaAsset = { id: NumMarkX_GenerateID('UP'), type, data, prompt: file.name, agentId: 'USER', timestamp: Date.now(), tags: ['CHAT_UPLOAD'] };
           await saveMediaAsset(asset);
+          setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'user', text: `[Attached ${type.toUpperCase()}: ${file.name}]`, timestamp: Date.now(), attachment: data, attachmentType: type }]);
 
-          setLogs(prev => [...prev, {
-              id: crypto.randomUUID(),
-              type: 'user',
-              text: `[Attached ${type.toUpperCase()}: ${file.name}]`,
-              timestamp: Date.now(),
-              attachment: data,
-              attachmentType: type
-          }]);
-
-          if (type === 'image') {
-              sendRealtimeInput({ media: { mimeType: file.type, data } });
-          } else if (type === 'text') {
+          if (type === 'image') sendRealtimeInput({ media: { mimeType: file.type, data } });
+          else if (type === 'text') {
               const content = await file.text();
-              // Ingest full text
               IngestionService.ingestText(content, file.name, currentAgentId, apiKey);
-              // Send truncated context
-              const truncated = content.substring(0, 5000);
-              sendText(`[USER UPLOADED FILE: ${file.name}]\n${truncated}... (Full text ingested)`);
+              sendText(`[USER UPLOADED FILE: ${file.name}]\n${content.substring(0, 5000)}...`);
           }
       };
-      
-      if (file.type.startsWith('image/') || file.type.includes('pdf')) reader.readAsDataURL(file);
-      else reader.readAsText(file);
+      if (file.type.startsWith('image/') || file.type.includes('pdf')) reader.readAsDataURL(file); else reader.readAsText(file);
       if(paperclipInputRef.current) paperclipInputRef.current.value = '';
   };
 
-  // --- LAYOUT STYLES ---
+  // Styles
   const visualizerStyle: React.CSSProperties = {
       flex: (layoutMode === 'VOICE' || layoutMode === 'HYBRID' || layoutMode === 'VIDEO') ? '1 1 0' : '0 0 auto',
       height: layoutMode === 'CHAT' ? '0px' : 'auto',
@@ -604,18 +435,12 @@ const App: React.FC = () => {
       overflow: 'hidden',
       position: 'relative',
       transition: 'flex 0.3s ease',
-      // VISUAL CUE FOR THINKING - UPDATED TO AMBER GLOW
       boxShadow: isThinking ? '0 0 50px rgba(255, 165, 0, 0.5)' : 'none',
       borderColor: isThinking ? '#f59e0b' : '#333'
   };
 
   const renderTriggerBtn = (panelId: string, icon: React.ReactNode, title: string) => (
-      <button 
-          onClick={() => setActiveSidePanel(panelId)}
-          className={`btn btn-secondary btn-icon ${activeSidePanel === panelId ? 'active' : ''}`}
-          title={title}
-          style={activeSidePanel === panelId ? {borderColor: '#facc15', color: '#facc15'} : {}}
-      >
+      <button onClick={() => setActiveSidePanel(panelId)} className={`btn btn-secondary btn-icon ${activeSidePanel === panelId ? 'active' : ''}`} title={title} style={activeSidePanel === panelId ? {borderColor: '#facc15', color: '#facc15'} : {}}>
           {icon}
       </button>
   );
@@ -628,34 +453,16 @@ const App: React.FC = () => {
             <span className="logo-text">MYTHOS</span>
             <span className="divider">|</span>
             {currentView === 'ORCHESTRATOR' ? (
-                <select 
-                    value={currentAgentId} 
-                    onChange={(e) => handleAgentChange(e.target.value)}
-                    className="agent-selector"
-                >
-                    {AGENTS.map(agent => (
-                        <option key={agent.id} value={agent.id}>{agent.handle.toUpperCase()}</option>
-                    ))}
+                <select value={currentAgentId} onChange={(e) => handleAgentChange(e.target.value)} className="agent-selector">
+                    {AGENTS.map(agent => <option key={agent.id} value={agent.id}>{agent.handle.toUpperCase()}</option>)}
                 </select>
-            ) : (
-                <span className="status-indicator" style={{ color: '#38bdf8', borderColor: '#38bdf8' }}>COMMS HUB</span>
-            )}
+            ) : ( <span className="status-indicator" style={{ color: '#38bdf8', borderColor: '#38bdf8' }}>COMMS HUB</span> )}
         </div>
-
         <div className="flex-group">
-            <div className={`status-indicator ${connectionState.toLowerCase()}`}>
-                {connectionState}
-            </div>
-            
-            <button 
-                onClick={() => setIsHolodeckOpen(prev => !prev)}
-                className={`btn btn-secondary btn-icon ${isHolodeckOpen ? 'active' : ''}`}
-                title="Toggle Holodeck"
-                style={isHolodeckOpen ? {borderColor: '#38bdf8', color: '#38bdf8'} : {}}
-            >
+            <div className={`status-indicator ${connectionState.toLowerCase()}`}>{connectionState}</div>
+            <button onClick={() => setIsHolodeckOpen(prev => !prev)} className={`btn btn-secondary btn-icon ${isHolodeckOpen ? 'active' : ''}`} title="Toggle Holodeck" style={isHolodeckOpen ? {borderColor: '#38bdf8', color: '#38bdf8'} : {}}>
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><line x1="9" y1="21" x2="9" y2="9"></line></svg>
             </button>
-
             {renderTriggerBtn('VOICE', <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>, "Voice Commands")}
             {renderTriggerBtn('FOCUS', <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>, "Room Focus")}
             {renderTriggerBtn('MEDIA', <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect><line x1="7" y1="2" x2="7" y2="22"></line><line x1="17" y1="2" x2="17" y2="22"></line><line x1="2" y1="12" x2="22" y2="12"></line><line x1="2" y1="7" x2="7" y2="7"></line><line x1="2" y1="17" x2="7" y2="17"></line><line x1="17" y1="17" x2="22" y2="17"></line><line x1="17" y1="7" x2="22" y2="7"></line></svg>, "Media Gallery")}
@@ -668,6 +475,7 @@ const App: React.FC = () => {
 
       {/* MAIN VIEWPORT */}
       <main className="main-viewport">
+        {/* SIDE PANELS */}
         {activeSidePanel === 'VOICE' && <VoiceCommandList isOpen={true} onOpen={()=>{}} onClose={()=>setActiveSidePanel(null)} />}
         {activeSidePanel === 'FOCUS' && <RoomFocusConfig isOpen={true} onOpen={()=>{}} onClose={()=>setActiveSidePanel(null)} />}
         {activeSidePanel === 'MEDIA' && <MediaGallery isOpen={true} onOpen={()=>{}} onClose={()=>setActiveSidePanel(null)} currentAgentId={currentAgentId} />}
@@ -676,13 +484,7 @@ const App: React.FC = () => {
         {activeSidePanel === 'HISTORY' && <ChatHistoryManager isOpen={true} onOpen={()=>{}} onClose={()=>setActiveSidePanel(null)} currentLogs={logs} onLoadSession={setLogs} currentAgentId={currentAgentId} onUpdateKnowledge={()=>{}} />}
         {activeSidePanel === 'SETTINGS' && <SettingsManager isOpen={true} onOpen={()=>{}} onClose={()=>setActiveSidePanel(null)} modelConfig={modelConfig} setModelConfig={setModelConfig} disabled={connectionState === ConnectionState.CONNECTED} generalInstruction={generalInstructions} setGeneralInstruction={setGeneralInstructions} agentInstruction={agentInstructions} setAgentInstruction={setAgentInstructions} agentName={currentAgent?.handle || 'Unknown'} agentId={currentAgentId} agentAccessLevel={accessLevel} selectedVoice={selectedVoice} onVoiceChange={setSelectedVoice} onSave={handleSettingsSave} />}
 
-        {/* MEDIA PLAYER (Chatterbox) */}
-        <MediaPlayer 
-            audioUrl={storyAudioUrl} 
-            title="Narrative Playback" 
-            onClose={() => setStoryAudioUrl(null)} 
-            interruptSignal={interruptSignal} 
-        />
+        <MediaPlayer audioUrl={storyAudioUrl} title="Narrative Playback" onClose={() => setStoryAudioUrl(null)} interruptSignal={interruptSignal} />
 
         {currentView === 'COUNCIL' ? (
             <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
@@ -696,18 +498,12 @@ const App: React.FC = () => {
                     <div style={visualizerStyle}>
                         <div className="panel-overlay top-left">
                             <span className="overlay-label">
-                                VISUALIZER // {selectedVoice.toUpperCase()} // {isThinking ? 'THINKING...' : (isCameraOn ? 'CAM ON' : 'CAM OFF')}
+                                VISUALIZER // {selectedVoice.toUpperCase()} // {isThinking ? 'THINKING...' : (isCameraOn ? (videoSource === 'media' ? 'MEDIA STREAM' : 'LIVE CAM') : 'OFFLINE')}
                             </span>
                         </div>
                         
-                        {/* VISUAL INDICATOR FOR THINKING */}
                         {isThinking && (
-                            <div className="thinking-indicator" style={{
-                                position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-                                color: '#f59e0b', fontSize: '0.8rem', letterSpacing: '2px', fontWeight: 'bold',
-                                zIndex: 10, textShadow: '0 0 10px rgba(245, 158, 11, 0.8)',
-                                background: 'rgba(0,0,0,0.6)', padding: '0.5rem 1rem', borderRadius: '4px', border: '1px solid #f59e0b'
-                            }}>
+                            <div className="thinking-indicator" style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', color: '#f59e0b', fontSize: '0.8rem', letterSpacing: '2px', fontWeight: 'bold', zIndex: 10, textShadow: '0 0 10px rgba(245, 158, 11, 0.8)', background: 'rgba(0,0,0,0.6)', padding: '0.5rem 1rem', borderRadius: '4px', border: '1px solid #f59e0b' }}>
                                 ACCESSING NEURAL LATTICE...
                             </div>
                         )}
@@ -715,31 +511,56 @@ const App: React.FC = () => {
                         <canvas ref={canvasRef} className="hidden" />
                         
                         {layoutMode === 'VIDEO' ? (
-                            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', color: '#333' }}>
-                                <div className="animate-pulse" style={{ width: '100px', height: '100px', borderRadius: '50%', border: `2px dashed ${isThinking ? '#facc15' : '#333'}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                    <div style={{ width: '80px', height: '80px', borderRadius: '50%', background: '#111' }}></div>
-                                </div>
-                                <div style={{ marginTop: '1rem', fontSize: '0.7rem', letterSpacing: '2px', color: isThinking ? '#facc15' : '#444' }}>
-                                    {isThinking ? 'ACCESSING KNOWLEDGE GRAPH...' : 'VIDEO FEED STANDBY'}
-                                </div>
+                            <div className="screening-room">
+                                {streamFileUrl ? (
+                                    <>
+                                        <video 
+                                            ref={mediaVideoRef} 
+                                            src={streamFileUrl} 
+                                            autoPlay 
+                                            playsInline 
+                                            controls 
+                                            style={{ width: '100%', height: '100%', objectFit: 'contain' }} 
+                                        />
+                                        <div className="screening-overlay">
+                                            {logs.slice(-3).map(log => (
+                                                <div key={log.id} className={`screening-log ${log.type}`}>
+                                                    <span style={{fontWeight:'bold', marginRight:'0.5rem'}}>{log.type.toUpperCase()}:</span>
+                                                    {log.text}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </>
+                                ) : (
+                                    <div className="screening-placeholder" onClick={() => mediaFileInputRef.current?.click()}>
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#333" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" style={{marginBottom: '1rem'}}>
+                                            <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect>
+                                            <line x1="7" y1="2" x2="7" y2="22"></line>
+                                            <line x1="17" y1="2" x2="17" y2="22"></line>
+                                            <line x1="2" y1="12" x2="22" y2="12"></line>
+                                            <line x1="2" y1="7" x2="7" y2="7"></line>
+                                            <line x1="2" y1="17" x2="7" y2="17"></line>
+                                            <line x1="17" y1="17" x2="22" y2="17"></line>
+                                            <line x1="17" y1="7" x2="22" y2="7"></line>
+                                        </svg>
+                                        <div style={{fontSize:'1.2rem', fontWeight:'bold', letterSpacing:'2px', color:'#444'}}>LOAD DAILIES</div>
+                                        <div style={{fontSize:'0.8rem', color:'#666'}}>CLICK TO OPEN FILE PICKER</div>
+                                    </div>
+                                )}
                             </div>
                         ) : (
                             <Visualizer analyser={analyser} isActive={connectionState === ConnectionState.CONNECTED} />
                         )}
 
-                        <div style={{ position: 'absolute', bottom: '10px', right: '10px', width: '160px', height: '120px', background: '#000', border: '1px solid #4ade80', display: isCameraOn ? 'block' : 'none', zIndex: 30, boxShadow: '0 0 10px rgba(0,0,0,0.5)' }}>
+                        {/* WEBCAM PREVIEW - Hidden in VIDEO Mode to focus on movie */}
+                        <div style={{ position: 'absolute', bottom: '10px', right: '10px', width: '160px', height: '120px', background: '#000', border: '1px solid #4ade80', display: (isCameraOn && videoSource === 'camera' && layoutMode !== 'VIDEO') ? 'block' : 'none', zIndex: 30, boxShadow: '0 0 10px rgba(0,0,0,0.5)' }}>
                             <video ref={videoRef} autoPlay playsInline muted style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                         </div>
                     </div>
 
                     <div style={layoutMode === 'CHAT' || layoutMode === 'HYBRID' ? { flex: '1 1 0', display: 'flex', flexDirection: 'column', overflow: 'hidden' } : { display: 'none' }}>
                         <div className={`logs-container ${logs.length === 1 && logs[0].type === 'system' ? 'centered-single' : ''}`}>
-                            {logs.length === 0 && (
-                                <div className="empty-state">
-                                    <p>SYSTEM READY.</p>
-                                    <p>INITIALIZE CONNECTION TO BEGIN.</p>
-                                </div>
-                            )}
+                            {logs.length === 0 && <div className="empty-state"><p>SYSTEM READY.</p><p>INITIALIZE CONNECTION TO BEGIN.</p></div>}
                             {logs.map(log => (
                                 <div key={log.id} className={`log-entry ${log.type}`}>
                                     <div style={{display:'flex', justifyContent:'space-between'}}>
@@ -748,11 +569,7 @@ const App: React.FC = () => {
                                     </div>
                                     {log.attachment && (
                                         <div style={{ margin: '0.5rem 0', borderRadius: '4px', overflow: 'hidden', border: '1px solid #333', maxWidth: '300px' }}>
-                                            {log.attachmentType === 'image' ? (
-                                                <img src={`data:image/jpeg;base64,${log.attachment}`} style={{ width: '100%', display: 'block' }} />
-                                            ) : (
-                                                <div style={{ padding: '1rem', fontSize: '0.8rem', background: '#111', color: '#eee' }}>File Attached</div>
-                                            )}
+                                            {log.attachmentType === 'image' ? <img src={`data:image/jpeg;base64,${log.attachment}`} style={{ width: '100%', display: 'block' }} /> : <div style={{ padding: '1rem', fontSize: '0.8rem', background: '#111', color: '#eee' }}>File Attached</div>}
                                         </div>
                                     )}
                                     <span className="log-text">{log.text}</span>
@@ -763,23 +580,29 @@ const App: React.FC = () => {
                         </div>
                     </div>
                 </div>
-                
-                {/* HOLODECK RIGHT PANE */}
                 <Holodeck isOpen={isHolodeckOpen} refreshTrigger={holodeckRefresh} />
             </div>
         )}
       </main>
 
-      {/* FOOTER */}
+      {/* FOOTER - COMMAND DECK */}
       <footer className={`command-deck ${currentView === 'COUNCIL' ? 'hidden' : ''}`}>
           <div className="tray-controls">
               <div className="flex-group">
+                  {/* MIC */}
                   <button onClick={() => setIsMicOn(!isMicOn)} className={`btn btn-icon ${isMicOn ? 'active-green' : 'btn-danger'}`} title="Mic Toggle">
                       {isMicOn ? <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg> : <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="1" y1="1" x2="23" y2="23"></line><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"></path><path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>}
                   </button>
-                  <button onClick={toggleCamera} className={`btn btn-icon ${isCameraOn ? 'active-green' : ''}`} title="Cam Toggle">
+                  {/* CAMERA */}
+                  <button onClick={toggleCamera} className={`btn btn-icon ${isCameraOn && videoSource === 'camera' ? 'active-green' : ''}`} title="Webcam Toggle">
                       <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
                   </button>
+                  {/* MOVIE CAMERA (MEDIA STREAM) */}
+                  <button onClick={() => mediaFileInputRef.current?.click()} className={`btn btn-icon ${isCameraOn && videoSource === 'media' ? 'active-green' : ''}`} title="Stream Movie File">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect><line x1="7" y1="2" x2="7" y2="22"></line><line x1="17" y1="2" x2="17" y2="22"></line><line x1="2" y1="12" x2="22" y2="12"></line><line x1="2" y1="7" x2="7" y2="7"></line><line x1="2" y1="17" x2="7" y2="17"></line><line x1="17" y1="17" x2="22" y2="17"></line><line x1="17" y1="7" x2="22" y2="7"></line></svg>
+                  </button>
+                  {/* Hidden Input for Movie Camera */}
+                  <input type="file" accept="video/*" ref={mediaFileInputRef} className="hidden" onChange={handleMediaFileSelect} />
               </div>
               
               <div className="flex-group">
@@ -788,9 +611,7 @@ const App: React.FC = () => {
               </div>
 
               <div className="mode-selector">
-                  {['STD', 'DEEP', 'IMG', 'EXT'].map(m => (
-                      <button key={m} onClick={() => setModelMode(m as ModelMode)} className={modelMode === m ? `active ${m.toLowerCase()}` : ''}>{m}</button>
-                  ))}
+                  {['STD', 'DEEP', 'IMG', 'EXT'].map(m => ( <button key={m} onClick={() => setModelMode(m as ModelMode)} className={modelMode === m ? `active ${m.toLowerCase()}` : ''}>{m}</button> ))}
               </div>
 
               <div className="flex-group">

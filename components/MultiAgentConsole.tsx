@@ -22,8 +22,8 @@ interface MultiAgentConsoleProps {
 const CONFERENCE_ID = 'CONFERENCE_MAIN';
 const ARCHIVAX_ID = 'ARCHIVAX';
 
-// Filter out Gemini Core for the Multi-Agent Conference
-const CONFERENCE_AGENTS = AGENTS.filter(a => a.id !== 'GEMINI_CORE');
+// Agents for conference - All active agents
+const CONFERENCE_AGENTS = AGENTS;
 
 export const MultiAgentConsole: React.FC<MultiAgentConsoleProps> = ({ onExit }) => {
     const [messages, setMessages] = useState<MultiAgentMessage[]>([]);
