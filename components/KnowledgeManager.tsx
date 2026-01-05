@@ -80,6 +80,9 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
     startTime: number;
   } | null>(null);
 
+  // Retrofit State
+  const [retrofitProgress, setRetrofitProgress] = useState<{current: number, total: number} | null>(null);
+
   // Cloud Files State
   const [cloudFiles, setCloudFiles] = useState<CloudFile[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -138,9 +141,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
       }
   };
 
-  // --- CORE IMPORT LOGIC REUSED FOR LOREPACKS ---
   const processBatch = async (batch: KnowledgeDoc[], ai: GoogleGenAI | null) => {
-      // If we have an AI client, try to generate missing embeddings
       if (ai) {
           const docsNeedingEmbed = batch.filter(d => !d.embedding);
           if (docsNeedingEmbed.length > 0) {
@@ -150,7 +151,6 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                       contents: docsNeedingEmbed.map(d => ({ parts: [{ text: d.content }] })),
                       config: { taskType: 'RETRIEVAL_DOCUMENT' }
                   });
-                  // Map back
                   batchResult.embeddings?.forEach((e, idx) => {
                       docsNeedingEmbed[idx].embedding = e.values;
                   });
@@ -160,6 +160,31 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
           }
       }
       await bulkAddDocuments(batch);
+  };
+
+  const handleRetrofit = async () => {
+      if (docs.length === 0) return showStatus("No docs to retrofit.", 'error');
+      if (!window.confirm("Run INJECT GRAPH Protocol?\n\nThis will scan your existing memory specifically to build the Knowledge Graph. It will SKIP any documents that have already been processed.")) return;
+
+      const apiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY;
+      if (!apiKey) return showStatus("API Key required.", 'error');
+
+      setIsProcessing(true);
+      setStatusMsg({ text: "Injecting Graph Nodes... (Incremental)", type: 'info' });
+
+      try {
+          await IngestionService.retrofitAgentMemory(currentAgentId, apiKey, (c, t) => {
+              setRetrofitProgress({ current: c, total: t });
+          });
+          
+          await fetchDocs();
+          showStatus("Graph Injection Complete.", 'success');
+      } catch (e: any) {
+          showStatus(`Injection Failed: ${e.message}`, 'error');
+      } finally {
+          setIsProcessing(false);
+          setRetrofitProgress(null);
+      }
   };
 
   const handleExportLorePack = async () => {
@@ -248,10 +273,6 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
       }
   };
 
-  /**
-   * EXCLUSIVE MOUNTING
-   * Wipes previous active memory for this agent and loads the new pack.
-   */
   const handleMountPack = async (pack: LorePack) => {
       const count = pack.sacred_archive.length;
       if (!window.confirm(`MOUNT CARTRIDGE "${pack.header.name}"?\n\nThis will UNMOUNT (delete) current active memory for ${currentAgentId} and load this LorePack (${count} nodes).`)) return;
@@ -260,12 +281,9 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
       setStatusMsg({ text: "Unmounting previous memory...", type: 'info' });
 
       try {
-          // 1. UNMOUNT (Purge current agent's active docs)
           await deleteDocumentsByAgentId(currentAgentId);
-          
           setStatusMsg({ text: `Mounting "${pack.header.name}"...`, type: 'info' });
 
-          // 2. NORMALIZE & LOAD
           const newDocs = pack.sacred_archive.map(d => ({ 
               ...d, 
               agentId: currentAgentId, 
@@ -275,7 +293,6 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
           const apiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY;
           const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
           
-          // Batch process
           const BATCH_SIZE = 50;
           for (let i = 0; i < newDocs.length; i += BATCH_SIZE) {
               const batch = newDocs.slice(i, i + BATCH_SIZE);
@@ -283,8 +300,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
           }
 
           showStatus(`Successfully Mounted "${pack.header.name}"`, 'success');
-          
-          setActiveTab('local'); // Switch view to show mounted docs
+          setActiveTab('local'); 
           await fetchDocs(); 
           onUpdate();
       } catch (e: any) {
@@ -314,64 +330,16 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
     setIsProcessing(true);
     setStatusMsg(null);
     try {
-      const ai = new GoogleGenAI({ apiKey });
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
         await new Promise(resolve => setTimeout(resolve, 0));
         const text = await file.text();
-        const chunks = IngestionService.chunkText(text);
         const startTime = Date.now();
-        setUploadProgress({ fileName: file.name, current: 0, total: chunks.length, startTime });
-        const BATCH_SIZE = 10; 
-        for (let j = 0; j < chunks.length; j += BATCH_SIZE) {
-            await new Promise(resolve => setTimeout(resolve, 0));
-            const batchChunks = chunks.slice(j, j + BATCH_SIZE);
-            try {
-                const batchResult = await ai.models.embedContent({
-                    model: 'text-embedding-004',
-                    contents: batchChunks.map(c => ({ parts: [{ text: c }] })),
-                    config: { taskType: 'RETRIEVAL_DOCUMENT', title: file.name }
-                });
-                const embeddings = batchResult.embeddings;
-                for (let k = 0; k < batchChunks.length; k++) {
-                    const embedding = embeddings?.[k]?.values;
-                    const chunkContent = batchChunks[k];
-                    const sigil = NumMarkX_GenerateSigil(chunkContent);
-                    await addDocument({
-                        id: crypto.randomUUID(),
-                        agentId: currentAgentId,
-                        title: `${file.name} (Part ${j + k + 1}/${chunks.length})`,
-                        content: chunkContent,
-                        embedding: embedding,
-                        timestamp: Date.now(),
-                        numMarkId: sigil
-                    });
-                }
-            } catch(err: any) {
-                console.error("Batch embedding failed", err);
-                for (let k = 0; k < batchChunks.length; k++) {
-                    const chunkContent = batchChunks[k];
-                    const sigil = NumMarkX_GenerateSigil(chunkContent);
-                    await addDocument({
-                         id: crypto.randomUUID(),
-                         agentId: currentAgentId,
-                         title: `${file.name} (Part ${j + k + 1}/${chunks.length})`,
-                         content: chunkContent,
-                         timestamp: Date.now(),
-                         numMarkId: sigil
-                    });
-                }
-                if (err.message && err.message.includes('429')) {
-                    showStatus("Rate limit hit. Saving remaining chunks without vectors.", 'info');
-                } else if (err.message && err.message.includes('payload')) {
-                    showStatus("Chunk too large. Saving without vectors.", 'info');
-                }
-            }
-            setUploadProgress(prev => {
-                if (!prev) return null;
-                return { ...prev, current: Math.min(chunks.length, j + batchChunks.length) };
-            });
-        }
+        
+        // Use IngestionService to handle chunking, embedding, AND Graph extraction
+        const count = await IngestionService.ingestText(text, file.name, currentAgentId, apiKey);
+        
+        setUploadProgress({ fileName: file.name, current: count, total: count, startTime });
       }
       await fetchDocs();
       onUpdate();
@@ -390,7 +358,6 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
     
-    // Explicit Confirmation for File Import
     if(!window.confirm("Importing a LorePack file. Do you want to REPLACE the current active memory with this pack? (Cancel to abort)")) return;
 
     setIsProcessing(true);
@@ -398,7 +365,6 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
     setStreamedDocsCount(0);
     
     try {
-        // Unmount First
         await deleteDocumentsByAgentId(currentAgentId);
         
         const BATCH_SIZE = 20; 
@@ -406,7 +372,6 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
         let count = 0;
         let foundHeader = null;
         
-        // Auto-embed configuration
         const apiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY;
         const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
 
@@ -502,14 +467,6 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
     }
   };
 
-  const calculateETA = () => {
-      if (!uploadProgress || uploadProgress.current === 0) return 'Calculating...';
-      const elapsed = Date.now() - uploadProgress.startTime;
-      const speed = uploadProgress.current / elapsed;
-      const remaining = uploadProgress.total - uploadProgress.current;
-      return `${Math.ceil((remaining / speed) / 1000)}s remaining`;
-  };
-
   const filteredDocs = docs.filter(doc => 
     doc.title.toLowerCase().includes(filterQuery.toLowerCase()) || 
     doc.content.toLowerCase().includes(filterQuery.toLowerCase())
@@ -532,7 +489,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
           </button>
         </div>
 
-        {isStreamingImport || isProcessing ? (
+        {isStreamingImport || (isProcessing && !uploadProgress && !retrofitProgress) ? (
             <div style={{ padding: '2rem', flex: 1, display: 'flex', flexDirection: 'column', gap: '1.5rem', justifyContent: 'center', alignItems: 'center', height: '100%', animation: 'fadeIn 0.3s' }}>
                 <div style={{ textAlign: 'center' }}>
                     <h3 style={{ color: '#4ade80', marginBottom: '0.5rem' }}>{isStreamingImport ? 'STREAMING INGESTION' : 'PROCESSING'}</h3>
@@ -635,7 +592,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                                 <span style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#a3a3a3' }}>
                                 {isProcessing && uploadProgress ? 'PROCESSING...' : 'DROP .TXT / .MD / .JSON'}
                                 </span>
-                                <span style={{ fontSize: '0.7rem', color: '#666' }}>Smart Recursive Chunking & Embedding</span>
+                                <span style={{ fontSize: '0.7rem', color: '#666' }}>Smart Recursive Chunking & Graph Extraction</span>
                             </div>
                             </label>
 
@@ -648,7 +605,18 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                                     <div style={{ width: '100%', height: '4px', background: '#333' }}>
                                         <div style={{ width: `${(uploadProgress.current / uploadProgress.total) * 100}%`, height: '100%', background: '#4ade80' }} />
                                     </div>
-                                    <div style={{ textAlign: 'right', fontSize: '0.7rem', color: '#666' }}>ETA: {calculateETA()}</div>
+                                </div>
+                            )}
+                            
+                            {retrofitProgress && (
+                                <div className="flex-col" style={{ gap: '0.25rem' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', color: '#facc15' }}>
+                                        <span>RETROFITTING...</span>
+                                        <span>{retrofitProgress.current}/{retrofitProgress.total}</span>
+                                    </div>
+                                    <div style={{ width: '100%', height: '4px', background: '#333' }}>
+                                        <div style={{ width: `${(retrofitProgress.current / retrofitProgress.total) * 100}%`, height: '100%', background: '#facc15' }} />
+                                    </div>
                                 </div>
                             )}
                         </div>
@@ -684,6 +652,17 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                                         IMPORT LP
                                         <input type="file" accept=".json" onChange={handleSelectLorePack} ref={importInputRef} className="hidden" />
                                     </label>
+                                    
+                                    <button 
+                                        onClick={handleRetrofit}
+                                        className="btn btn-secondary"
+                                        style={{ fontSize: '0.65rem', borderColor: '#facc15', color: '#facc15' }}
+                                        title="Inject Graph Data into existing documents (Incremental)"
+                                        disabled={isProcessing}
+                                    >
+                                        INJECT GRAPH
+                                    </button>
+
                                     <button onClick={handlePurgeAll} className="btn btn-danger" style={{ fontSize: '0.65rem' }} title="Delete ALL knowledge for this agent">PURGE ALL</button>
                                 </div>
                             </div>

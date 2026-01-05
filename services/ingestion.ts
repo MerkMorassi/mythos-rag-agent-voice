@@ -2,7 +2,7 @@
 import { KnowledgeDoc, LorePack, LorePackHeader, GraphNode, GraphEdge } from '../types';
 import { NumMarkX_GenerateHeader, NumMarkX_GenerateID, NumMarkX_GenerateSigil } from '../patterns/NumMarkX';
 import { GoogleGenAI, Type } from "@google/genai";
-import { addDocument, saveGraphNode, saveGraphEdge } from "./db";
+import { addDocument, saveGraphNode, saveGraphEdge, getDocumentsByAgentId } from "./db";
 
 export interface IngestionResult {
     success: boolean;
@@ -19,9 +19,65 @@ export interface IngestionResult {
 
 export class IngestionService {
 
-    // ... (Keep existing methods: parseLorePack, streamLorePack, normalizeNode, exportLorePack, ingestText, extractAndSaveGraph - assuming they are unchanged for this task) ...
-    // RE-INJECTING UNCHANGED METHODS FOR COMPLETENESS OF FILE, BUT FOCUSING ON CHUNKTEXT CHANGE BELOW.
-    // DUE TO CONTEXT LIMIT, I WILL REWRITE THE FILE WITH THE CHUNKTEXT IMPROVEMENT.
+    /**
+     * RETROFIT PROTOCOL (INCREMENTAL)
+     * Upgrades existing documents to include Graph Data and NumMark Sigils.
+     * Skips documents tagged with 'GRAPH_EXTRACTED' to allow resuming.
+     */
+    static async retrofitAgentMemory(agentId: string, apiKey: string, onProgress?: (current: number, total: number) => void): Promise<number> {
+        const docs = await getDocumentsByAgentId(agentId);
+        if (docs.length === 0) return 0;
+
+        const ai = new GoogleGenAI({ apiKey });
+        let processed = 0;
+
+        // Process sequentially to avoid rate limits on the Graph Extraction Model
+        for (const doc of docs) {
+            
+            // OPTIMIZATION: Skip if already has graph data
+            if (doc.tags && doc.tags.includes('GRAPH_EXTRACTED')) {
+                processed++;
+                if (onProgress) onProgress(processed, docs.length);
+                continue;
+            }
+
+            let updated = false;
+
+            // 1. Generate Sigil if missing (Safety check, though you said they exist)
+            if (!doc.numMarkId) {
+                doc.numMarkId = NumMarkX_GenerateSigil(doc.content);
+                updated = true;
+            }
+
+            // 2. Extract Graph
+            try {
+                await this.extractAndSaveGraph(doc.content, doc.id, agentId, ai);
+                
+                // Mark as processed
+                if (!doc.tags) doc.tags = [];
+                if (!doc.tags.includes('GRAPH_EXTRACTED')) {
+                    doc.tags.push('GRAPH_EXTRACTED');
+                    updated = true;
+                }
+            } catch (e) {
+                console.warn(`[Retrofit] Graph extraction failed for ${doc.id}`, e);
+                // We do NOT mark as extracted so it can be retried later
+            }
+
+            // 3. Save Update if we changed tags or sigil
+            if (updated) {
+                await addDocument(doc);
+            }
+            
+            processed++;
+            if (onProgress) onProgress(processed, docs.length);
+            
+            // Throttle slightly
+            await new Promise(r => setTimeout(r, 800));
+        }
+
+        return processed;
+    }
 
     static async parseLorePack(input: string | Blob, defaultAgentId: string = 'UNKNOWN'): Promise<IngestionResult> {
         try {
@@ -110,17 +166,18 @@ export class IngestionService {
                         content: chunk,
                         embedding: embeddings?.[k]?.values,
                         timestamp: Date.now(),
-                        tags: ['AUTO_INGEST', 'CHAT_UPLOAD']
+                        tags: ['AUTO_INGEST', 'CHAT_UPLOAD', 'GRAPH_EXTRACTED'], // Auto-mark new ingestions
+                        numMarkId: NumMarkX_GenerateSigil(chunk)
                     };
                     await addDocument(doc);
-                    if ((i + k) % 2 === 0) {
-                       this.extractAndSaveGraph(chunk, docId, agentId, ai).catch(e => console.warn("Graph extract failed", e));
-                    }
+                    // Generate Graph for every chunk to build dense connections
+                    this.extractAndSaveGraph(chunk, docId, agentId, ai).catch(e => console.warn("Graph extract failed", e));
                 });
                 await Promise.all(savePromises);
                 savedCount += batch.length;
             } catch (e) {
                 console.warn(`[Ingestion] Batch failed for ${filename}:`, e);
+                // Fallback save without vector
                 const savePromises = batch.map((chunk, k) => {
                     const doc: KnowledgeDoc = {
                         id: crypto.randomUUID(),
@@ -128,7 +185,8 @@ export class IngestionService {
                         title: `${filename} (Part ${i + k + 1})`,
                         content: chunk,
                         timestamp: Date.now(),
-                        tags: ['AUTO_INGEST', 'CHAT_UPLOAD', 'NO_VECTOR']
+                        tags: ['AUTO_INGEST', 'CHAT_UPLOAD', 'NO_VECTOR', 'GRAPH_EXTRACTED'],
+                        numMarkId: NumMarkX_GenerateSigil(chunk)
                     };
                     return addDocument(doc);
                 });
@@ -140,22 +198,11 @@ export class IngestionService {
     }
 
     static async extractAndSaveGraph(text: string, sourceDocId: string, agentId: string, ai: GoogleGenAI) {
+        // Reduced Prompt for Speed/Cost
         const prompt = `
-        EXTRACT KNOWLEDGE GRAPH DATA.
-        Analyze the text below. Identify key ENTITIES (Person, Location, Organization, Event, Concept) and RELATIONSHIPS.
-        
-        Output strictly JSON:
-        {
-          "entities": [
-            { "name": "Exact Name", "label": "TYPE", "description": "Brief summary" }
-          ],
-          "relationships": [
-            { "source": "Entity Name 1", "target": "Entity Name 2", "relation": "ACTION_OR_LINK", "description": "Context" }
-          ]
-        }
-        
-        TEXT:
-        ${text.substring(0, 2000)}
+        Identify key ENTITIES (Person, Place, Object, Event) and RELATIONSHIPS in the text.
+        Return JSON: { "entities": [{"name": "X", "label": "Y", "description": "Z"}], "relationships": [{"source": "X", "target": "A", "relation": "B"}] }
+        TEXT: ${text.substring(0, 1500)}
         `;
 
         try {
@@ -285,22 +332,13 @@ export class IngestionService {
         return new Blob(parts, { type: 'application/json' });
     }
 
-    /**
-     * SEMANTIC AWARE CHUNKER
-     * Recursively splits by Paragraphs (\n\n) -> Sentences (. ) -> Punctuation (, ) -> Chars
-     */
     static chunkText(text: string, maxChunkSize: number = 1000, overlap: number = 100): string[] {
         if (text.includes('\0')) throw new Error("Binary content detected.");
 
         const chunks: string[] = [];
-        
-        // 1. Primary Split: Paragraphs (Markdown Headers included in regex)
-        // Split by double newlines or headers
         let sections = text.split(/(?=^#{1,3}\s)|\n\s*\n/gm);
         
-        // Safety check for single massive line file
         if (sections.length === 1 && text.length > maxChunkSize * 5) {
-             // Force split by period if no paragraphs found
              sections = text.split(/(?<=[.?!])\s+/);
         }
 
@@ -310,19 +348,16 @@ export class IngestionService {
             const trimmed = section.trim();
             if (!trimmed) continue;
 
-            // Simple Case: Fits in chunk
             if (currentChunk.length + trimmed.length <= maxChunkSize) {
                 currentChunk += (currentChunk ? "\n\n" : "") + trimmed;
                 continue;
             }
 
-            // Overflow Case: Push current if valid
             if (currentChunk) {
                 chunks.push(currentChunk);
                 currentChunk = "";
             }
 
-            // If section itself is huge, Semantic Recursion required
             if (trimmed.length > maxChunkSize) {
                 const subChunks = this.semanticSplit(trimmed, maxChunkSize, overlap);
                 chunks.push(...subChunks);
@@ -336,12 +371,8 @@ export class IngestionService {
         return chunks;
     }
 
-    // Helper for recursive sentence splitting
     private static semanticSplit(text: string, limit: number, overlap: number): string[] {
         const results: string[] = [];
-        
-        // Attempt split by Sentence Endings
-        // Look for . ? ! followed by space
         const sentenceRegex = /(?<=[.?!])\s+/;
         const sentences = text.split(sentenceRegex);
         
@@ -351,28 +382,22 @@ export class IngestionService {
             if (buffer.length + sentence.length <= limit) {
                 buffer += (buffer ? " " : "") + sentence;
             } else {
-                // If single sentence is massive (code blob, base64, etc), hard split
                 if (sentence.length > limit) {
                     if (buffer) results.push(buffer);
                     buffer = "";
-                    
-                    // Char chop
                     let i = 0;
                     while (i < sentence.length) {
                         results.push(sentence.substring(i, i + limit));
                         i += limit - overlap;
                     }
                 } else {
-                    // Flush buffer
                     results.push(buffer);
-                    // Start new buffer with overlap context (approx last 100 chars)
                     const overlapTxt = buffer.slice(-overlap);
                     buffer = overlapTxt + " " + sentence; 
                 }
             }
         }
         if (buffer) results.push(buffer);
-        
         return results;
     }
 }
