@@ -11,7 +11,8 @@ export interface McpResponse {
     error?: string;
 }
 
-const BRIDGE_URL = 'http://localhost:4000/mcp/execute';
+// Use relative path so it works on any port (4000, 7860, etc.)
+const BRIDGE_URL = '/mcp/execute';
 
 export const McpClient = {
     async execute(server: string, tool: string, args: Record<string, any> = {}): Promise<McpResponse> {
@@ -23,14 +24,20 @@ export const McpClient = {
             });
             
             if (!response.ok) {
-                const err = await response.json();
-                throw new Error(err.error || response.statusText);
+                // Try to parse error details if available
+                let errorMessage = response.statusText;
+                try {
+                    const err = await response.json();
+                    if (err.error) errorMessage = err.error;
+                } catch (e) {}
+                
+                throw new Error(`Server Error (${response.status}): ${errorMessage}`);
             }
             
             return await response.json();
         } catch (e: any) {
             console.error("MCP Client Error:", e);
-            return { status: 'ERROR', error: e.message };
+            return { status: 'ERROR', error: e.message || "Network request failed" };
         }
     }
 };
