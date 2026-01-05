@@ -77,6 +77,7 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
   const [geminiKey, setGeminiKey] = useState('');
   const [hfToken, setHfToken] = useState('');
   const [openlKey, setOpenlKey] = useState('');
+  const [veniceKey, setVeniceKey] = useState('');
 
   useEffect(() => {
       if (isOpen) {
@@ -88,6 +89,7 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
           setGeminiKey(localStorage.getItem('gemini_api_key') || '');
           setHfToken(localStorage.getItem('hf_token') || '');
           setOpenlKey(localStorage.getItem('openl_api_key') || '');
+          setVeniceKey(localStorage.getItem('venice_api_key') || '');
       }
   }, [isOpen, agentId, agentAccessLevel]);
 
@@ -186,6 +188,9 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
         if (openlKey) localStorage.setItem('openl_api_key', openlKey);
         else localStorage.removeItem('openl_api_key');
 
+        if (veniceKey) localStorage.setItem('venice_api_key', veniceKey);
+        else localStorage.removeItem('venice_api_key');
+
         await onSave(voiceBase64, localAccessLevel, voiceSpeed, voicePitch);
         setSaveSuccess(true);
         setTimeout(() => setSaveSuccess(false), 2000);
@@ -262,6 +267,17 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
                             value={geminiKey}
                             onChange={(e) => setGeminiKey(e.target.value)}
                             placeholder="AIza..."
+                            className="form-input"
+                            style={{ fontFamily: 'monospace' }}
+                        />
+                    </div>
+                    <div>
+                        <label className="form-label">VENICE AI API KEY (Uncensored / NSFW)</label>
+                        <input 
+                            type="password"
+                            value={veniceKey}
+                            onChange={(e) => setVeniceKey(e.target.value)}
+                            placeholder="Key..."
                             className="form-input"
                             style={{ fontFamily: 'monospace' }}
                         />
