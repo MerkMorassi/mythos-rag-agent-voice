@@ -91,10 +91,11 @@ export const VoiceCommandList: React.FC<VoiceCommandListProps> = ({ isOpen, onOp
                                 borderColor: isEditing ? '#facc15' : '#333',
                                 color: isEditing ? '#facc15' : '#888'
                             }}
+                            title="Toggle Edit Mode"
                         >
                             {isEditing ? 'DONE EDITING' : 'EDIT CARDS'}
                         </button>
-                        <button onClick={onClose} className="close-btn">
+                        <button onClick={onClose} className="close-btn" title="Close">
                             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                         </button>
                     </div>
@@ -104,7 +105,7 @@ export const VoiceCommandList: React.FC<VoiceCommandListProps> = ({ isOpen, onOp
                     
                     {isEditing && (
                         <div style={{ marginBottom: '1rem', textAlign: 'center' }}>
-                            <button onClick={handleAddSection} className="btn btn-primary" style={{ width: '100%', borderStyle: 'dashed', opacity: 0.8 }}>+ CREATE NEW COMMAND CARD</button>
+                            <button onClick={handleAddSection} className="btn btn-primary" style={{ width: '100%', borderStyle: 'dashed', opacity: 0.8 }} title="Add a new command section">+ CREATE NEW COMMAND CARD</button>
                         </div>
                     )}
 
@@ -249,6 +250,7 @@ export const VoiceCommandList: React.FC<VoiceCommandListProps> = ({ isOpen, onOp
                                             onClick={() => handleAddItem(section.id)}
                                             className="btn btn-ghost"
                                             style={{ width: '100%', padding: '0.5rem', marginTop: '0.5rem', fontSize: '0.75rem', border: '1px dashed #333' }}
+                                            title="Add a new voice trigger"
                                         >
                                             + ADD COMMAND ITEM
                                         </button>

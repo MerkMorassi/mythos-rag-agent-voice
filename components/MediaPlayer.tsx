@@ -75,7 +75,7 @@ export const MediaPlayer: React.FC<MediaPlayerProps> = ({ audioUrl, title, onClo
                 <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#facc15' }}>
                     CHATTERBOX: {title || 'NARRATION'}
                 </span>
-                <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer' }}>×</button>
+                <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer' }} title="Close Player">×</button>
             </div>
 
             <audio 
@@ -90,6 +90,7 @@ export const MediaPlayer: React.FC<MediaPlayerProps> = ({ audioUrl, title, onClo
                     onClick={togglePlay}
                     className="btn btn-icon btn-sm"
                     style={{ background: isPlaying ? 'rgba(250, 204, 21, 0.2)' : 'transparent', borderColor: '#facc15', color: '#facc15' }}
+                    title="Play/Pause"
                 >
                     {isPlaying ? '⏸' : '▶'}
                 </button>

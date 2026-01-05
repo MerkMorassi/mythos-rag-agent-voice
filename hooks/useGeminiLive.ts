@@ -78,6 +78,19 @@ export function useGeminiLive({
                         setConnectionState(ConnectionState.CONNECTED);
                         onLog({ id: crypto.randomUUID(), type: 'system', text: 'Live Session Connected', timestamp: Date.now() });
                         
+                        // Force Agent Acknowledgement
+                        sessionPromise.then(session => {
+                            session.send({
+                                clientContent: {
+                                    turns: [{
+                                        role: 'user',
+                                        parts: [{ text: "SYSTEM_NOTIFICATION: The user has connected. Greet them briefly and introduce yourself based on your persona." }]
+                                    }],
+                                    turnComplete: true
+                                }
+                            });
+                        });
+
                         // Start Mic Stream
                         if (inputContextRef.current) {
                             const source = inputContextRef.current.createMediaStreamSource(stream);

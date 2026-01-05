@@ -92,7 +92,7 @@ export const RoomFocusConfig: React.FC<RoomFocusConfigProps> = ({ isOpen, onOpen
                     <div className="flex-group">
                         <span className="modal-section-title" style={{ color: '#facc15' }}>ROOM FOCUS PROTOCOL</span>
                     </div>
-                    <button onClick={onClose} className="close-btn">
+                    <button onClick={onClose} className="close-btn" title="Close">
                         <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                     </button>
                 </div>
@@ -158,8 +158,8 @@ export const RoomFocusConfig: React.FC<RoomFocusConfigProps> = ({ isOpen, onOpen
                     </div>
 
                     <div className="flex-group" style={{ marginTop: '0.5rem' }}>
-                        <button className="btn btn-secondary" onClick={handleSave} style={{flex:1}}>SAVE / UPDATE</button>
-                        <button className="btn btn-danger" onClick={handleDelete} disabled={selectedId === 'OPEN'} style={{width:'4rem'}}>DEL</button>
+                        <button className="btn btn-secondary" onClick={handleSave} style={{flex:1}} title="Save Profile">SAVE / UPDATE</button>
+                        <button className="btn btn-danger" onClick={handleDelete} disabled={selectedId === 'OPEN'} style={{width:'4rem'}} title="Delete Profile">DEL</button>
                     </div>
                     
                     <button 
@@ -167,6 +167,7 @@ export const RoomFocusConfig: React.FC<RoomFocusConfigProps> = ({ isOpen, onOpen
                         onClick={handleApply}
                         disabled={selectedId === activeId}
                         style={{ width: '100%' }}
+                        title="Set as Active Room Focus"
                     >
                         {selectedId === activeId ? 'CURRENTLY ACTIVE' : `APPLY "${selectedId}" TO ROOM`}
                     </button>

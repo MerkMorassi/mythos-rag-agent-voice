@@ -92,6 +92,7 @@ export const Terminal: React.FC<TerminalProps> = ({ isOpen, onClose, onSwitchAge
                     className="btn btn-ghost"
                     style={{ fontSize: '0.8rem', padding: '0.25rem 0.5rem', fontWeight: 'bold' }}
                     onClick={onClose}
+                    title="Close Terminal"
                 >
                     [CLOSE X]
                 </button>

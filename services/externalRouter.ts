@@ -3,24 +3,19 @@ import { saveMediaAsset, getAgentConfig } from "./db";
 import { MediaAsset } from "../types";
 import { NumMarkX_GenerateID } from "../patterns/NumMarkX";
 import { ChatterboxService } from "./chatterbox";
+import { GoogleGenAI } from "@google/genai";
 
 /**
- * EXTERNAL MODEL ROUTER
- * Routes prompts to specialized Hugging Face Spaces or External APIs.
- * 
- * TARGETS:
- * 1. FLUX_IMAGE -> Mythos Engine (Custom SDXL)
- * 2. DOLPHIN_LLM -> Uncensored Text Generation (Venice/Dolphin)
- * 3. CHATTERBOX_TTS -> High Fidelity Speech Synthesis
+ * EXTERNAL MODEL ROUTER & FALLBACK SYSTEM
+ * Routes prompts to specialized Hugging Face Spaces, or falls back to Native Gemini Models.
  */
 
-// User's specific Spaces
 const MYTHOS_ENGINE_URL = "https://merkmorassi-mythos-engine.hf.space/api/predict";
 
 export interface RouteResult {
     success: boolean;
     data?: string; // Text response, Base64 image, or Audio URL
-    type: 'text' | 'image' | 'audio';
+    type: 'text' | 'image' | 'audio' | 'video';
     error?: string;
 }
 
@@ -36,26 +31,35 @@ export const ExternalRouter = {
     },
 
     async route(target: string, prompt: string, agent: { id: string, handle: string }, generateAudio: boolean = false): Promise<RouteResult> {
-        console.log(`[ROUTER] Routing to ${target}: ${prompt.substring(0, 50)}... (Audio: ${generateAudio})`);
+        console.log(`[ROUTER] Routing to ${target}: ${prompt.substring(0, 50)}...`);
         
         try {
-            // 1. IMAGE GENERATION
+            // --- IMAGE GENERATION ---
             if (target === 'FLUX_IMAGE') {
-                return await this.callMythosImageGen(prompt, agent);
+                // 1. Attempt External (Flux/Stable Diffusion)
+                const extResult = await this.callMythosImageGen(prompt, agent);
+                if (extResult.success) return extResult;
+
+                // 2. Fallback to Gemini Nano (Native)
+                console.log("[ROUTER] External Image Gen failed/offline. Switching to Gemini Native...");
+                return await this.callGeminiImage(prompt, agent);
             } 
             
-            // 2. TEXT GENERATION (DOLPHIN/VENICE)
+            // --- VIDEO GENERATION ---
+            else if (target === 'VIDEO_GENERATION') {
+                return await this.callVeoVideo(prompt, agent);
+            }
+
+            // --- TEXT GENERATION (Uncensored/Creative) ---
             else if (target === 'DOLPHIN_LLM' || target === 'EXTERNAL_LLM') {
                 const textResult = await this.callDolphinText(prompt);
-                
-                // CHAINING: If Audio requested, pipe text result to Chatterbox
                 if (textResult.success && generateAudio && textResult.data) {
                     return await this.callChatterboxTTS(textResult.data, agent);
                 }
                 return textResult;
             } 
             
-            // 3. DIRECT TTS
+            // --- TTS ---
             else if (target === 'CHATTERBOX_TTS') {
                 return await this.callChatterboxTTS(prompt, agent);
             }
@@ -67,42 +71,158 @@ export const ExternalRouter = {
         }
     },
 
+    // --- NATIVE GEMINI IMAGE (FALLBACK) ---
+    async callGeminiImage(prompt: string, agent: { id: string, handle: string }): Promise<RouteResult> {
+        try {
+            const apiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY;
+            if (!apiKey) return { success: false, type: 'text', error: "No API Key configured for Native Generation." };
+
+            const ai = new GoogleGenAI({ apiKey });
+            // Using 'gemini-2.5-flash-image' for image generation as per spec
+            const response = await ai.models.generateContent({
+                model: 'gemini-2.5-flash-image',
+                contents: { parts: [{ text: prompt }] }
+            });
+
+            // Extract Image from Response
+            let base64Image = "";
+            const candidates = response.candidates;
+            if (candidates && candidates.length > 0) {
+                for (const part of candidates[0].content.parts) {
+                    if (part.inlineData) {
+                        base64Image = part.inlineData.data;
+                        break;
+                    }
+                }
+            }
+
+            if (!base64Image) {
+                // If text returned instead of image, it might be a refusal
+                const text = response.text;
+                if (text && (text.includes("policy") || text.includes("safety") || text.includes("unable"))) {
+                    return { success: false, type: 'text', error: `Request refused by Safety Guidelines: ${text}` };
+                }
+                return { success: false, type: 'text', error: "Model did not return an image." };
+            }
+
+            await this.saveGeneratedImage(`data:image/jpeg;base64,${base64Image}`, prompt, agent);
+            return { success: true, type: 'image', data: `data:image/jpeg;base64,${base64Image}` };
+
+        } catch (e: any) {
+            if (e.message?.includes('400') || e.message?.includes('SAFETY')) {
+                return { success: false, type: 'text', error: "I cannot generate that image due to Google's Safety Policies regarding generated content." };
+            }
+            return { success: false, type: 'text', error: `Native Image Gen Failed: ${e.message}` };
+        }
+    },
+
+    // --- NATIVE VEO VIDEO ---
+    async callVeoVideo(prompt: string, agent: { id: string, handle: string }): Promise<RouteResult> {
+        try {
+            const apiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY;
+            if (!apiKey) return { success: false, type: 'text', error: "No API Key configured for Veo." };
+
+            const ai = new GoogleGenAI({ apiKey });
+            
+            // Start Operation
+            let operation = await ai.models.generateVideos({
+                model: 'veo-3.1-fast-generate-preview',
+                prompt: prompt,
+                config: {
+                    numberOfVideos: 1,
+                    aspectRatio: '16:9',
+                    resolution: '720p'
+                }
+            });
+
+            // Poll for Completion
+            console.log("[VEO] Generating video...");
+            while (!operation.done) {
+                await new Promise(resolve => setTimeout(resolve, 5000)); // 5s poll
+                operation = await ai.operations.getVideosOperation({ operation: operation });
+            }
+
+            if (operation.error) {
+                throw new Error(operation.error.message);
+            }
+
+            const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri;
+            if (!videoUri) throw new Error("No video URI returned.");
+
+            // Construct accessible URL (Proxy via fetch not strictly needed if we just display, but we need to download to save)
+            const downloadUrl = `${videoUri}&key=${apiKey}`;
+            
+            // Fetch blob to save locally
+            const vidRes = await fetch(downloadUrl);
+            const blob = await vidRes.blob();
+            const base64 = await new Promise<string>((resolve) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
+                reader.readAsDataURL(blob);
+            });
+
+            const asset: MediaAsset = {
+                id: NumMarkX_GenerateID('VID'),
+                type: 'video',
+                data: base64, // Save actual bytes
+                prompt: prompt,
+                agentId: agent.id,
+                timestamp: Date.now(),
+                tags: [agent.handle.toUpperCase(), 'VEO', 'GENERATED']
+            };
+            await saveMediaAsset(asset);
+
+            return { success: true, type: 'video', data: `data:video/mp4;base64,${base64}` };
+
+        } catch (e: any) {
+            console.error("Veo Error:", e);
+            if (e.message?.includes('SAFETY') || e.message?.includes('policy')) {
+                return { success: false, type: 'text', error: "I cannot generate that video due to safety policies." };
+            }
+            return { success: false, type: 'text', error: `Video Generation Failed: ${e.message}` };
+        }
+    },
+
+    // --- EXTERNAL CALLS ---
+
     async callMythosImageGen(prompt: string, agent: { id: string, handle: string }): Promise<RouteResult> {
-        // SDXL / Custom Image Gen on Mythos Engine
-        const response = await fetch(MYTHOS_ENGINE_URL, {
-            method: "POST",
-            headers: this.getHeaders(),
-            body: JSON.stringify({
-                data: [
-                    prompt,                                     // Prompt
-                    "blur, low quality, distortion, ugly",      // Negative Prompt
-                    true,                                       // Randomize Seed
-                    1024,                                       // Width
-                    1024,                                       // Height
-                    7,                                          // Guidance Scale
-                    30                                          // Steps
-                ]
-            })
-        });
+        try {
+            const response = await fetch(MYTHOS_ENGINE_URL, {
+                method: "POST",
+                headers: this.getHeaders(),
+                body: JSON.stringify({
+                    data: [
+                        prompt,                                     
+                        "blur, low quality, distortion, ugly, nsfw",      
+                        true,                                       
+                        1024, 1024, 7, 30                                          
+                    ]
+                })
+            });
 
-        if (!response.ok) throw new Error(`Mythos Engine (Image) Unavailable: ${response.statusText}`);
+            if (!response.ok) {
+                return { success: false, type: 'text', error: `External Engine Offline (${response.status}).` };
+            }
 
-        const json = await response.json();
-        const resultData = json.data?.[0]; 
-        let imageUrl = "";
-        
-        if (typeof resultData === 'string' && resultData.startsWith('data:')) {
-            imageUrl = resultData;
-        } else if (resultData && resultData.url) {
-            imageUrl = resultData.url;
+            const json = await response.json();
+            const resultData = json.data?.[0]; 
+            let imageUrl = "";
+            
+            if (typeof resultData === 'string' && resultData.startsWith('data:')) {
+                imageUrl = resultData;
+            } else if (resultData && resultData.url) {
+                imageUrl = resultData.url;
+            }
+
+            if (imageUrl) {
+                 await this.saveGeneratedImage(imageUrl, prompt, agent);
+                 return { success: true, type: 'image', data: imageUrl }; 
+            }
+            
+            return { success: false, type: 'text', error: "Invalid data format." };
+        } catch (e: any) {
+            return { success: false, type: 'text', error: `External Gen Failed: ${e.message}` };
         }
-
-        if (imageUrl) {
-             await this.saveGeneratedImage(imageUrl, prompt, agent);
-             return { success: true, type: 'image', data: imageUrl }; 
-        }
-        
-        return { success: false, type: 'text', error: "Invalid response from Image Engine" };
     },
 
     async callDolphinText(prompt: string): Promise<RouteResult> {
@@ -110,63 +230,39 @@ export const ExternalRouter = {
             const response = await fetch(MYTHOS_ENGINE_URL, {
                 method: "POST",
                 headers: this.getHeaders(),
-                body: JSON.stringify({
-                    data: [
-                        prompt, // Input Text
-                        0.85,   // Higher Temp for Creative/Uncensored feel
-                        4096,   // Max Tokens
-                        0.95,   // Top P
-                        1.1     // Repetition Penalty
-                    ]
-                })
+                body: JSON.stringify({ data: [ prompt, 0.85, 4096, 0.95, 1.1 ] })
             });
 
-            if (!response.ok) throw new Error(`Dolphin Engine Unavailable: ${response.statusText}`);
+            if (!response.ok) return { success: false, type: 'text', error: `Text Engine Offline: ${response.statusText}` };
             
             const json = await response.json();
-            let text = "";
-            if (json.data && Array.isArray(json.data) && json.data.length > 0) {
-                text = json.data[0];
-            } else if (json.generated_text) {
-                text = json.generated_text;
-            } else {
-                text = JSON.stringify(json);
-            }
-            
+            let text = json.data?.[0] || json.generated_text || "No response.";
             return { success: true, type: 'text', data: text.trim() };
 
         } catch (e: any) {
-            return { success: false, type: 'text', error: `Dolphin Error: ${e.message}` };
+            return { success: false, type: 'text', error: `Text Gen Failed: ${e.message}` };
         }
     },
 
     async callChatterboxTTS(text: string, agent: { id: string, handle: string }): Promise<RouteResult> {
         try {
-            // 1. Get Agent Voice Config
             const config = await getAgentConfig(agent.id);
             const voiceRef = config.voiceReference;
 
             if (!voiceRef) {
-                return { success: false, type: 'text', error: `No voice reference found for ${agent.handle}. Upload a sample in Settings.` };
+                return { success: false, type: 'text', error: `No voice reference found for ${agent.handle}.` };
             }
 
-            // 2. Synthesize
             const audioBuffer = await ChatterboxService.synthesize({
                 text: text,
                 audioRef: voiceRef,
                 language: 'en'
             });
 
-            // 3. Convert to Blob URL
             const blob = new Blob([audioBuffer], { type: 'audio/wav' });
-            
-            // 4. Save as Asset (Story Mode)
             const base64 = await new Promise<string>((resolve) => {
                 const reader = new FileReader();
-                reader.onloadend = () => {
-                    const res = reader.result as string;
-                    resolve(res.split(',')[1]);
-                };
+                reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
                 reader.readAsDataURL(blob);
             });
 
@@ -185,38 +281,21 @@ export const ExternalRouter = {
             return { success: true, type: 'audio', data: audioUrl };
 
         } catch (e: any) {
-            return { success: false, type: 'text', error: `TTS Error: ${e.message}` };
+            return { success: false, type: 'text', error: `TTS Failed: ${e.message}` };
         }
     },
 
-    // --- HELPER: KEYWORD EXTRACTION & SAVING ---
     async saveGeneratedImage(urlOrBase64: string, prompt: string, agent: { id: string, handle: string }) {
         try {
-            const stopWords = new Set(['a', 'an', 'the', 'of', 'in', 'on', 'with', 'by', 'at', 'to', 'for', 'is', 'style', 'view', 'highly', 'detailed']);
-            const cleanPrompt = prompt.replace(/[^a-zA-Z0-9, ]/g, '');
-            const words = cleanPrompt.split(/[\s,]+/);
-            
-            const keywords = words
-                .map(w => w.trim())
-                .filter(w => w.length > 3 && !stopWords.has(w.toLowerCase()))
-                .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
-
-            const uniqueTags = Array.from(new Set(keywords)).slice(0, 7);
-            const finalTags = [agent.handle.toUpperCase(), ...uniqueTags];
-
             let finalData = urlOrBase64;
             if (urlOrBase64.startsWith('http')) {
-                try {
-                    const imgRes = await fetch(urlOrBase64);
-                    const blob = await imgRes.blob();
-                    finalData = await new Promise((resolve) => {
-                        const reader = new FileReader();
-                        reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
-                        reader.readAsDataURL(blob);
-                    });
-                } catch (e) {
-                    console.warn("Could not convert URL to Base64");
-                }
+                const imgRes = await fetch(urlOrBase64);
+                const blob = await imgRes.blob();
+                finalData = await new Promise((resolve) => {
+                    const reader = new FileReader();
+                    reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
+                    reader.readAsDataURL(blob);
+                });
             } else if (urlOrBase64.startsWith('data:image')) {
                 finalData = urlOrBase64.split(',')[1];
             }
@@ -228,7 +307,7 @@ export const ExternalRouter = {
                 prompt: prompt,
                 agentId: agent.id,
                 timestamp: Date.now(),
-                tags: finalTags
+                tags: [agent.handle.toUpperCase(), 'GENERATED']
             };
 
             await saveMediaAsset(asset);

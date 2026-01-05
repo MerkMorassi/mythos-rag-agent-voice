@@ -50,7 +50,7 @@ export const McpManager: React.FC<McpManagerProps> = ({ isOpen, onOpen, onClose 
                     <div className="flex-group">
                         <span className="modal-section-title" style={{ color: '#38bdf8' }}>MODEL CONTEXT PROTOCOL (MCP)</span>
                     </div>
-                    <button onClick={onClose} className="close-btn">
+                    <button onClick={onClose} className="close-btn" title="Close">
                         <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                     </button>
                 </div>
@@ -69,12 +69,14 @@ export const McpManager: React.FC<McpManagerProps> = ({ isOpen, onOpen, onClose 
                                     <button 
                                         className="btn btn-xs btn-secondary" 
                                         onClick={() => loadPreset('google-maps', 'maps_search_places', '{\n  "query": "Coffee shops in Tokyo",\n  "radius": 1000\n}')}
+                                        title="Load Search Preset"
                                     >
                                         SEARCH
                                     </button>
                                     <button 
                                         className="btn btn-xs btn-secondary" 
                                         onClick={() => loadPreset('google-maps', 'maps_distancematrix', '{\n  "origin": "New York, NY",\n  "destination": "Boston, MA",\n  "mode": "driving"\n}')}
+                                        title="Load Distance Preset"
                                     >
                                         DISTANCE
                                     </button>
@@ -86,6 +88,7 @@ export const McpManager: React.FC<McpManagerProps> = ({ isOpen, onOpen, onClose 
                                     <button 
                                         className="btn btn-xs btn-secondary" 
                                         onClick={() => loadPreset('chrome-devtools', 'Page.reload', '{}')}
+                                        title="Load Reload Preset"
                                     >
                                         RELOAD
                                     </button>
@@ -128,6 +131,7 @@ export const McpManager: React.FC<McpManagerProps> = ({ isOpen, onOpen, onClose 
                         className="btn btn-cyan" 
                         onClick={handleExecute} 
                         disabled={isLoading}
+                        title="Execute the configured tool"
                     >
                         {isLoading ? 'EXECUTING ON SERVER...' : 'RUN MCP TOOL'}
                     </button>

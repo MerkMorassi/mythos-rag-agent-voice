@@ -208,7 +208,7 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
           <div className="flex-group">
              <span className="modal-section-title">SYSTEM CONFIGURATION</span>
           </div>
-          <button onClick={onClose} className="close-btn">
+          <button onClick={onClose} className="close-btn" title="Close">
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         </div>
@@ -347,6 +347,7 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
                         onClick={() => voiceInputRef.current?.click()}
                         className="btn btn-secondary"
                         style={{ textAlign: 'center', cursor: 'pointer', padding: '0.75rem', height: 'auto', marginBottom: '0.5rem' }}
+                        title="Upload audio for voice cloning"
                     >
                         {voiceFile ? `SELECTED: ${voiceFile.name}` : (voiceBase64 ? "CHANGE REFERENCE AUDIO" : "UPLOAD SAMPLE (WAV/MP3)")}
                     </div>
@@ -358,6 +359,7 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
                             disabled={!voiceBase64 || isCloning}
                             className="btn btn-accent btn-sm"
                             style={{ flex: 1, borderColor: '#a78bfa', color: '#a78bfa' }}
+                            title="Generate test audio with current settings"
                         >
                             {isCloning ? 'SYNTHESIZING...' : 'TEST CLONE (CHATTERBOX)'}
                         </button>
@@ -405,6 +407,7 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
                                 type="button" 
                                 onClick={() => handleDeletePrompt(p.id)}
                                 style={{ background: 'none', border: 'none', color: '#f87171', fontSize: '0.6rem', cursor: 'pointer' }}
+                                title="Delete Saved Prompt"
                               >
                                   ×
                               </button>
@@ -479,6 +482,7 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
                     type="button"
                     disabled={disabled}
                     style={{ flex: 1 }}
+                    title="Reset Model Parameters"
                   >
                     RESET DEFAULTS
                   </button>
@@ -487,6 +491,7 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
                     disabled={isSaving}
                     className="btn btn-primary"
                     style={{ flex: 2 }}
+                    title="Save settings to database"
                   >
                     {isSaving ? 'SAVING...' : (disabled ? 'UPDATE LIVE SESSION' : 'SAVE CONFIGURATION')}
                   </button>

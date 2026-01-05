@@ -295,6 +295,7 @@ export const MediaGallery: React.FC<MediaGalleryProps> = ({ isOpen, onOpen, onCl
                         style={{ position: 'absolute', left: '2rem', top: '50%', transform: 'translateY(-50%)', opacity: 0.5, borderColor: '#fff', color: '#fff' }}
                         onClick={(e) => { e.stopPropagation(); handlePrev(); }}
                         disabled={getCurrentIndex() <= 0}
+                        title="Previous"
                     >
                         ❮
                     </button>
@@ -303,6 +304,7 @@ export const MediaGallery: React.FC<MediaGalleryProps> = ({ isOpen, onOpen, onCl
                         style={{ position: 'absolute', right: '2rem', top: '50%', transform: 'translateY(-50%)', opacity: 0.5, borderColor: '#fff', color: '#fff' }}
                         onClick={(e) => { e.stopPropagation(); handleNext(); }}
                         disabled={getCurrentIndex() >= filteredAssets.length - 1}
+                        title="Next"
                     >
                         ❯
                     </button>
@@ -315,6 +317,7 @@ export const MediaGallery: React.FC<MediaGalleryProps> = ({ isOpen, onOpen, onCl
                         <button 
                             className={`btn btn-sm ${isPlaying ? 'active-green' : 'btn-secondary'}`}
                             onClick={() => setIsPlaying(!isPlaying)}
+                            title="Toggle Slideshow"
                         >
                             {isPlaying ? 'PAUSE ⏸' : 'PLAY SLIDESHOW ▶'}
                         </button>
@@ -386,8 +389,8 @@ export const MediaGallery: React.FC<MediaGalleryProps> = ({ isOpen, onOpen, onCl
                                     placeholder="Tags (comma separated)"
                                 />
                                 <div className="flex-group">
-                                    <button onClick={handleUpdateAsset} className="btn btn-primary" style={{flex: 1}}>SAVE</button>
-                                    <button onClick={() => setIsEditing(false)} className="btn btn-secondary" style={{flex: 1}}>CANCEL</button>
+                                    <button onClick={handleUpdateAsset} className="btn btn-primary" style={{flex: 1}} title="Save Changes">SAVE</button>
+                                    <button onClick={() => setIsEditing(false)} className="btn btn-secondary" style={{flex: 1}} title="Cancel Editing">CANCEL</button>
                                 </div>
                             </div>
                         ) : (
@@ -404,13 +407,14 @@ export const MediaGallery: React.FC<MediaGalleryProps> = ({ isOpen, onOpen, onCl
                                      </div>
                                 )}
                                 <div className="flex-group" style={{ marginTop: '1rem', justifyContent: 'center' }}>
-                                    <button onClick={() => setIsEditing(true)} className="btn btn-secondary btn-sm">EDIT METADATA</button>
-                                    <button onClick={(e) => handleDelete(viewingAsset.id, e)} className="btn btn-danger btn-sm">DELETE</button>
+                                    <button onClick={() => setIsEditing(true)} className="btn btn-secondary btn-sm" title="Edit Title and Tags">EDIT METADATA</button>
+                                    <button onClick={(e) => handleDelete(viewingAsset.id, e)} className="btn btn-danger btn-sm" title="Delete Asset">DELETE</button>
                                     <a 
                                         href={viewingAsset.data.startsWith('http') ? viewingAsset.data : (viewingAsset.type === 'text' ? `data:text/plain;charset=utf-8,${encodeURIComponent(viewingAsset.data)}` : (viewingAsset.type === 'pdf' ? `data:application/pdf;base64,${viewingAsset.data}` : (viewingAsset.type === 'audio' ? `data:audio/wav;base64,${viewingAsset.data}` : `data:application/octet-stream;base64,${viewingAsset.data}`)))} 
                                         download={viewingAsset.prompt}
                                         className="btn btn-secondary btn-sm"
                                         onClick={e => e.stopPropagation()}
+                                        title="Download File"
                                     >
                                         DOWNLOAD
                                     </a>
@@ -423,6 +427,7 @@ export const MediaGallery: React.FC<MediaGalleryProps> = ({ isOpen, onOpen, onCl
                         onClick={() => { setViewingAsset(null); setIsPlaying(false); }}
                         className="btn btn-icon btn-lg"
                         style={{ position: 'absolute', top: '2rem', right: '2rem', borderColor: '#fff', color: '#fff' }}
+                        title="Close Preview"
                     >
                         ✕
                     </button>
@@ -435,7 +440,7 @@ export const MediaGallery: React.FC<MediaGalleryProps> = ({ isOpen, onOpen, onCl
                     <div className="flex-group">
                         <span className="modal-section-title" style={{ color: '#e879f9' }}>MEDIA GALLERY</span>
                     </div>
-                    <button onClick={onClose} className="close-btn">
+                    <button onClick={onClose} className="close-btn" title="Close">
                         <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                     </button>
                 </div>
@@ -449,6 +454,7 @@ export const MediaGallery: React.FC<MediaGalleryProps> = ({ isOpen, onOpen, onCl
                         onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
                         onDragLeave={(e) => { e.preventDefault(); setIsDragging(false); }}
                         onDrop={handleDrop}
+                        title="Click or Drag files to upload"
                     >
                         <input 
                             type="file" 
@@ -480,7 +486,7 @@ export const MediaGallery: React.FC<MediaGalleryProps> = ({ isOpen, onOpen, onCl
                                 <option key={a.id} value={a.id}>{a.handle.toUpperCase()}</option>
                             ))}
                         </select>
-                        <button onClick={refresh} className="btn btn-secondary btn-sm">REFRESH</button>
+                        <button onClick={refresh} className="btn btn-secondary btn-sm" title="Reload Asset List">REFRESH</button>
                     </div>
 
                     {isLoading && <div className="empty-state">LOADING...</div>}

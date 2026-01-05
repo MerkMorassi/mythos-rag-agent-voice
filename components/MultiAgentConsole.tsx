@@ -580,6 +580,7 @@ ${focus.rules.map(r => "- " + r).join('\n')}
                                 onClick={() => setMissingLoreModal({ isOpen: false, missingIds: [] })} 
                                 className="btn btn-secondary"
                                 style={{ flex: 1 }}
+                                title="Close Modal"
                             >
                                 CANCEL
                             </button>
@@ -592,8 +593,8 @@ ${focus.rules.map(r => "- " + r).join('\n')}
                 <div style={{ paddingBottom: '1rem', borderBottom: '1px solid #333' }}>
                     <div className="section-header-title" style={{ marginBottom: '0.5rem', color: '#38bdf8' }}>COUNCIL ROSTER</div>
                     <div className="flex-group">
-                        <button className="btn btn-secondary btn-xs" style={{ flex: 1 }} onClick={handleSelectAll}>SELECT ALL</button>
-                        <button className="btn btn-secondary btn-xs" style={{ flex: 1 }} onClick={() => setActiveAgents(new Set())}>NONE</button>
+                        <button className="btn btn-secondary btn-xs" style={{ flex: 1 }} onClick={handleSelectAll} title="Activate all agents">SELECT ALL</button>
+                        <button className="btn btn-secondary btn-xs" style={{ flex: 1 }} onClick={() => setActiveAgents(new Set())} title="Deactivate all agents">NONE</button>
                     </div>
                 </div>
                 
@@ -610,6 +611,7 @@ ${focus.rules.map(r => "- " + r).join('\n')}
                                 key={agent.id} 
                                 onClick={() => !isLoading && handleAgentClick(agent.id)}
                                 className={`agent-card ${isActive ? 'active' : ''} ${!hasLore && !isLoading ? 'disabled' : ''} ${isLoading ? 'loading' : ''}`}
+                                title={!hasLore ? "Agent offline (Missing Lore)" : (isActive ? "Deactivate Agent" : "Activate Agent")}
                             >
                                 <div className="agent-avatar">
                                     {isInit || isLoading ? <span className="animate-pulse">●</span> : agent.handle.substring(0,2).toUpperCase()}
@@ -636,8 +638,8 @@ ${focus.rules.map(r => "- " + r).join('\n')}
                         </span>
                     </div>
                     <div className="flex-group">
-                        <button onClick={handleClearHistory} className="btn btn-danger btn-xs">CLEAR TRANSCRIPT</button>
-                        <button onClick={onExit} className="btn btn-secondary btn-xs" style={{ borderColor: '#facc15', color: '#facc15' }}>EXIT TO UPLINK</button>
+                        <button onClick={handleClearHistory} className="btn btn-danger btn-xs" title="Clear visual transcript (Does not wipe memory)">CLEAR TRANSCRIPT</button>
+                        <button onClick={onExit} className="btn btn-secondary btn-xs" style={{ borderColor: '#facc15', color: '#facc15' }} title="Return to Main View">EXIT TO UPLINK</button>
                     </div>
                 </div>
 
@@ -684,7 +686,7 @@ ${focus.rules.map(r => "- " + r).join('\n')}
                                 <span style={{ fontSize: '0.75rem', color: '#4ade80' }}>
                                     ATTACHED: {attachment.name || attachment.type.toUpperCase()}
                                 </span>
-                                <button onClick={clearAttachment} style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', fontWeight: 'bold' }}>×</button>
+                                <button onClick={clearAttachment} style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', fontWeight: 'bold' }} title="Remove Attachment">×</button>
                             </div>
                         )}
                         <textarea 
@@ -708,6 +710,7 @@ ${focus.rules.map(r => "- " + r).join('\n')}
                         onClick={handleBroadcast} 
                         disabled={isProcessing || (!input.trim() && !attachment)} 
                         style={{ fontWeight: 'bold', fontSize: '0.9rem', marginLeft: '0.5rem' }}
+                        title="Send message to all active agents"
                     >
                         {isProcessing ? 'PROCESSING' : 'BROADCAST'}
                     </button>

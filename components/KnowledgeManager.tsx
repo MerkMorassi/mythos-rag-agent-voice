@@ -137,6 +137,30 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
       }
   };
 
+  // --- CORE IMPORT LOGIC REUSED FOR LOREPACKS ---
+  const processBatch = async (batch: KnowledgeDoc[], ai: GoogleGenAI | null) => {
+      // If we have an AI client, try to generate missing embeddings
+      if (ai) {
+          const docsNeedingEmbed = batch.filter(d => !d.embedding);
+          if (docsNeedingEmbed.length > 0) {
+              try {
+                  const batchResult = await ai.models.embedContent({
+                      model: 'text-embedding-004',
+                      contents: docsNeedingEmbed.map(d => ({ parts: [{ text: d.content }] })),
+                      config: { taskType: 'RETRIEVAL_DOCUMENT' }
+                  });
+                  // Map back
+                  batchResult.embeddings?.forEach((e, idx) => {
+                      docsNeedingEmbed[idx].embedding = e.values;
+                  });
+              } catch (e) {
+                  console.warn("Auto-embed failed for batch, saving without vectors.", e);
+              }
+          }
+      }
+      await bulkAddDocuments(batch);
+  };
+
   const handleExportLorePack = async () => {
       if (docs.length === 0) {
           showStatus("No documents to export.", 'error');
@@ -165,29 +189,79 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
   const handleSaveToLibrary = async () => {
       if (docs.length === 0) return showStatus("No active memory to bundle.", 'error');
       if (!packName.trim()) return showStatus("Pack Name required.", 'error');
-      const header = NumMarkX_GenerateHeader(currentAgentId, currentAgentId, packName);
-      header.name = packName; 
-      const pack: LorePack = { id: header.id, header: header, sacred_archive: docs };
-      await saveLorePack(pack);
-      setPackName('');
-      showStatus("Saved LorePack to Library.", 'success');
+      
+      try {
+          const header = NumMarkX_GenerateHeader(currentAgentId, currentAgentId, packName);
+          header.name = packName; 
+          const pack: LorePack = { id: header.id, header: header, sacred_archive: docs };
+          await saveLorePack(pack);
+          
+          setPackName('');
+          showStatus(`Saved "${packName}" to Library (${docs.length} nodes).`, 'success');
+          
+          // Refresh library in background so it's ready when tab switches
+          fetchSavedPacks();
+      } catch(e: any) {
+          showStatus(`Save Failed: ${e.message}`, 'error');
+      }
   };
 
-  const handleLoadFromLibrary = async (pack: LorePack, mode: 'append' | 'replace') => {
-      if (mode === 'replace') {
-          if(!window.confirm("Replace ALL active memory with this pack?")) return;
+  /**
+   * EXCLUSIVE MOUNTING
+   * Wipes previous active memory for this agent and loads the new pack.
+   */
+  const handleMountPack = async (pack: LorePack) => {
+      const count = pack.sacred_archive.length;
+      if (!window.confirm(`MOUNT CARTRIDGE "${pack.header.name}"?\n\nThis will UNMOUNT (delete) current active memory for ${currentAgentId} and load this LorePack (${count} nodes).`)) return;
+
+      setIsProcessing(true);
+      setStatusMsg({ text: "Unmounting previous memory...", type: 'info' });
+
+      try {
+          // 1. UNMOUNT (Purge current agent's active docs)
           await deleteDocumentsByAgentId(currentAgentId);
+          
+          setStatusMsg({ text: `Mounting "${pack.header.name}"...`, type: 'info' });
+
+          // 2. NORMALIZE & LOAD
+          const newDocs = pack.sacred_archive.map(d => ({ 
+              ...d, 
+              agentId: currentAgentId, 
+              timestamp: Date.now() 
+          }));
+          
+          const apiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY;
+          const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
+          
+          // Batch process
+          const BATCH_SIZE = 50;
+          for (let i = 0; i < newDocs.length; i += BATCH_SIZE) {
+              const batch = newDocs.slice(i, i + BATCH_SIZE);
+              await processBatch(batch, ai);
+          }
+
+          showStatus(`Successfully Mounted "${pack.header.name}"`, 'success');
+          
+          setActiveTab('local'); // Switch view to show mounted docs
+          await fetchDocs(); 
+          onUpdate();
+      } catch (e: any) {
+          console.error(e);
+          showStatus(`Mount Failed: ${e.message}`, 'error');
+      } finally {
+          setIsProcessing(false);
       }
-      const newDocs = pack.sacred_archive.map(d => ({ ...d, agentId: currentAgentId, timestamp: Date.now() }));
-      await bulkAddDocuments(newDocs);
-      showStatus(`Loaded ${newDocs.length} nodes from "${pack.header.name || 'LorePack'}".`, 'success');
-      setActiveTab('local');
   };
 
   const handleDeletePack = async (id: string) => {
-      if(!window.confirm("Delete this saved LorePack?")) return;
-      await deleteLorePack(id);
-      fetchSavedPacks();
+      if(!window.confirm("Delete this saved LorePack permanently?")) return;
+      try {
+          await deleteLorePack(id);
+          fetchSavedPacks();
+          showStatus("LorePack deleted.", 'success');
+      } catch(e: any) {
+          showStatus("Delete failed.", 'error');
+      }
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -274,19 +348,27 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
   const handleSelectLorePack = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    
+    // Explicit Confirmation for File Import
+    if(!window.confirm("Importing a LorePack file. Do you want to REPLACE the current active memory with this pack? (Cancel to abort)")) return;
+
     setIsProcessing(true);
     setIsStreamingImport(true);
     setStreamedDocsCount(0);
-    const BATCH_SIZE = 20; // Reduced for safer embedding
-    let batch: KnowledgeDoc[] = [];
-    let count = 0;
-    let foundHeader = null;
     
-    // Auto-embed configuration
-    const apiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY;
-    const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
-
     try {
+        // Unmount First
+        await deleteDocumentsByAgentId(currentAgentId);
+        
+        const BATCH_SIZE = 20; 
+        let batch: KnowledgeDoc[] = [];
+        let count = 0;
+        let foundHeader = null;
+        
+        // Auto-embed configuration
+        const apiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY;
+        const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
+
         for await (const obj of IngestionService.streamLorePack(file)) {
             if (obj.schema === 'MYTHOS.LOREPACK.v1' || (obj.agentId && obj.handle)) {
                 foundHeader = obj;
@@ -308,18 +390,10 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
             setStreamedDocsCount(count);
         }
         
-        if (count === 0) {
-             showStatus("Warning: No valid nodes found in stream. Check JSON format.", 'error');
-        } else {
-             const embedsMsg = ai ? "" : " (No Embeddings generated - missing API Key)";
-             if (foundHeader && foundHeader.agentId !== currentAgentId) {
-                 showStatus(`Imported ${count} nodes (Agent: ${foundHeader.agentId})${embedsMsg}`, 'info');
-             } else {
-                 showStatus(`Streamed ${count} nodes successfully.${embedsMsg}`, 'success');
-             }
-             await fetchDocs();
-             onUpdate();
-        }
+        showStatus(`Pack Mounted. ${count} nodes loaded.`, 'success');
+        await fetchDocs();
+        onUpdate();
+
     } catch (err: any) {
         console.error(err);
         showStatus(`Streaming Failed: ${err.message}`, 'error');
@@ -328,29 +402,6 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
         setIsStreamingImport(false);
         if(importInputRef.current) importInputRef.current.value = '';
     }
-  };
-
-  const processBatch = async (batch: KnowledgeDoc[], ai: GoogleGenAI | null) => {
-      // If we have an AI client, try to generate missing embeddings
-      if (ai) {
-          const docsNeedingEmbed = batch.filter(d => !d.embedding);
-          if (docsNeedingEmbed.length > 0) {
-              try {
-                  const batchResult = await ai.models.embedContent({
-                      model: 'text-embedding-004',
-                      contents: docsNeedingEmbed.map(d => ({ parts: [{ text: d.content }] })),
-                      config: { taskType: 'RETRIEVAL_DOCUMENT' }
-                  });
-                  // Map back
-                  batchResult.embeddings?.forEach((e, idx) => {
-                      docsNeedingEmbed[idx].embedding = e.values;
-                  });
-              } catch (e) {
-                  console.warn("Auto-embed failed for batch, saving without vectors.", e);
-              }
-          }
-      }
-      await bulkAddDocuments(batch);
   };
 
   const handlePurgeAll = async () => {
@@ -435,23 +486,28 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
           <div className="flex-group">
              <span className="modal-section-title" style={{ color: '#4ade80' }}>KNOWLEDGE MANAGER</span>
           </div>
-          <button onClick={onClose} className="close-btn">
+          <button onClick={onClose} className="close-btn" title="Close Manager">
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         </div>
 
-        {/* ... (Keep existing body logic, ensure it's inside .modal-body-area) ... */}
-        {isStreamingImport ? (
+        {isStreamingImport || isProcessing ? (
             <div style={{ padding: '2rem', flex: 1, display: 'flex', flexDirection: 'column', gap: '1.5rem', justifyContent: 'center', alignItems: 'center', height: '100%', animation: 'fadeIn 0.3s' }}>
                 <div style={{ textAlign: 'center' }}>
-                    <h3 style={{ color: '#4ade80', marginBottom: '0.5rem' }}>STREAMING INGESTION</h3>
-                    <p style={{ color: '#ccc', fontSize: '0.8rem' }}>Processing Large LorePack...</p>
+                    <h3 style={{ color: '#4ade80', marginBottom: '0.5rem' }}>{isStreamingImport ? 'STREAMING INGESTION' : 'PROCESSING'}</h3>
+                    <p style={{ color: '#ccc', fontSize: '0.8rem' }}>Integrating Knowledge...</p>
                 </div>
                 
                 <div className="section-panel" style={{ borderColor: '#4ade80', width: '80%', padding: '2rem' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', fontSize: '0.85rem', alignItems: 'center' }}>
-                        <div style={{ fontSize: '2.5rem', fontWeight: 'bold', color: '#fff' }}>{streamedDocsCount}</div>
-                        <div style={{ color: '#666', letterSpacing: '1px' }}>NODES PROCESSED</div>
+                        {isStreamingImport ? (
+                            <>
+                                <div style={{ fontSize: '2.5rem', fontWeight: 'bold', color: '#fff' }}>{streamedDocsCount}</div>
+                                <div style={{ color: '#666', letterSpacing: '1px' }}>NODES PROCESSED</div>
+                            </>
+                        ) : (
+                            <div style={{ color: '#fff' }}>{statusMsg?.text || 'Processing...'}</div>
+                        )}
                         <div className="spinner" style={{ marginTop: '1.5rem' }} />
                     </div>
                 </div>
@@ -461,6 +517,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                 <div style={{ display: 'flex', borderBottom: '1px solid #333', padding: '0 1rem', background: '#0a0a0a' }}>
                     <button 
                         onClick={() => setActiveTab('local')}
+                        title="Manage local RAG documents"
                         style={{ 
                             padding: '0.75rem 1rem', 
                             background: 'none', 
@@ -477,6 +534,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                     </button>
                     <button 
                         onClick={() => setActiveTab('library')}
+                        title="Manage saved LorePacks"
                         style={{ 
                             padding: '0.75rem 1rem', 
                             background: 'none', 
@@ -493,6 +551,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                     </button>
                     <button 
                         onClick={() => setActiveTab('cloud')}
+                        title="Manage Google Cloud files"
                         style={{ 
                             padding: '0.75rem 1rem', 
                             background: 'none', 
@@ -521,7 +580,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                     <>
                         <div className="flex-col">
                             <span className="section-header-title" style={{color: '#4ade80'}}>INGEST ({currentAgentId})</span>
-                            <label className="btn-file-input">
+                            <label className="btn-file-input" title="Upload text or code files for RAG">
                             <input 
                                 type="file" 
                                 accept=".txt,.md,.json" 
@@ -563,7 +622,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                                     onChange={e => setPackName(e.target.value)}
                                     style={{ fontSize: '0.8rem' }}
                                 />
-                                <button onClick={handleSaveToLibrary} className="btn btn-secondary" style={{ color: '#facc15', borderColor: '#facc15' }}>SAVE TO LIB</button>
+                                <button onClick={handleSaveToLibrary} className="btn btn-secondary" style={{ color: '#facc15', borderColor: '#facc15' }} title="Bundle current active memory into a reusable LorePack">SAVE TO LIB</button>
                             </div>
                         </div>
 
@@ -580,11 +639,11 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                                         EXPORT LP
                                     </button>
                                     
-                                    <label className="btn btn-accent" style={{ fontSize: '0.65rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                                    <label className="btn btn-accent" style={{ fontSize: '0.65rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }} title="Load a JSON LorePack into Active Memory">
                                         IMPORT LP
                                         <input type="file" accept=".json" onChange={handleSelectLorePack} ref={importInputRef} className="hidden" />
                                     </label>
-                                    <button onClick={handlePurgeAll} className="btn btn-danger" style={{ fontSize: '0.65rem' }}>PURGE ALL</button>
+                                    <button onClick={handlePurgeAll} className="btn btn-danger" style={{ fontSize: '0.65rem' }} title="Delete ALL knowledge for this agent">PURGE ALL</button>
                                 </div>
                             </div>
                             <input type="text" placeholder="Filter documents..." value={filterQuery} onChange={(e) => setFilterQuery(e.target.value)} className="form-input" />
@@ -600,7 +659,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                                                     {doc.numMarkId && <span style={{ fontSize: '0.6rem', color: '#a78bfa' }}>{doc.numMarkId}</span>}
                                                 </div>
                                             </div>
-                                            <button onClick={() => handleDelete(doc.id)} style={{ background: 'none', border: 'none', color: '#666', marginLeft: '0.5rem', cursor: 'pointer', fontSize: '1.2rem' }}>×</button>
+                                            <button onClick={() => handleDelete(doc.id)} style={{ background: 'none', border: 'none', color: '#666', marginLeft: '0.5rem', cursor: 'pointer', fontSize: '1.2rem' }} title="Delete Document">×</button>
                                         </div>
                                         <p style={{ color: '#888', fontSize: '0.7rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginTop: '0.25rem', paddingLeft: 'calc(20px + 0.75rem)' }}>{doc.content}</p>
                                     </div>
@@ -609,9 +668,9 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                             
                             {totalPages > 1 && (
                                 <div style={{ display: 'flex', justifyContent: 'center', gap: '0.5rem', marginTop: '0.5rem' }}>
-                                    <button onClick={() => setCurrentPage(p => Math.max(1, p-1))} className="btn btn-secondary" disabled={currentPage === 1}>&lt;</button>
+                                    <button onClick={() => setCurrentPage(p => Math.max(1, p-1))} className="btn btn-secondary" disabled={currentPage === 1} title="Previous Page">&lt;</button>
                                     <span style={{ fontSize: '0.75rem', alignSelf: 'center', color: '#666' }}>PAGE {currentPage} / {totalPages}</span>
-                                    <button onClick={() => setCurrentPage(p => Math.min(totalPages, p+1))} className="btn btn-secondary" disabled={currentPage === totalPages}>&gt;</button>
+                                    <button onClick={() => setCurrentPage(p => Math.min(totalPages, p+1))} className="btn btn-secondary" disabled={currentPage === totalPages} title="Next Page">&gt;</button>
                                 </div>
                             )}
                         </div>
@@ -623,7 +682,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                         <span className="section-header-title" style={{color: '#facc15'}}>LORE LIBRARY ({savedPacks.length})</span>
                         <div className="section-panel" style={{ padding: '1rem', marginBottom: '1rem' }}>
                             <p style={{ fontSize: '0.75rem', color: '#ccc' }}>
-                                LorePacks are frozen snapshots of knowledge. Load them to restore memory state.
+                                LorePacks are frozen snapshots. Mounting a pack will <strong>REPLACE</strong> the current Active Memory for this agent.
                             </p>
                         </div>
 
@@ -637,11 +696,17 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                                             <div style={{ fontWeight: 'bold', color: '#facc15' }}>{pack.header.name || pack.header.handle}</div>
                                             <div style={{ fontSize: '0.65rem', color: '#666' }}>{new Date(pack.header.timestamp).toLocaleString()} • {pack.sacred_archive.length} Docs</div>
                                         </div>
-                                        <button onClick={() => handleDeletePack(pack.id)} style={{ color: '#f87171', background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem' }}>×</button>
+                                        <button onClick={() => handleDeletePack(pack.id)} style={{ color: '#f87171', background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem' }} title="Delete LorePack">×</button>
                                     </div>
                                     <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
-                                        <button onClick={() => handleLoadFromLibrary(pack, 'append')} className="btn btn-secondary btn-xs" style={{ flex: 1 }}>APPEND</button>
-                                        <button onClick={() => handleLoadFromLibrary(pack, 'replace')} className="btn btn-secondary btn-xs" style={{ flex: 1, borderColor: '#facc15', color: '#facc15' }}>REPLACE ALL</button>
+                                        <button 
+                                            onClick={() => handleMountPack(pack)} 
+                                            className="btn btn-secondary btn-xs" 
+                                            style={{ flex: 1, borderColor: '#facc15', color: '#facc15', fontWeight: 'bold' }} 
+                                            title="Unmount current memory and load this pack"
+                                        >
+                                            MOUNT CARTRIDGE
+                                        </button>
                                     </div>
                                 </div>
                             ))
@@ -653,7 +718,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                     <>
                         <div className="flex-col">
                             <span className="section-header-title" style={{ color: '#a78bfa' }}>UPLOAD TO GOOGLE CLOUD</span>
-                            <label className="btn-file-input purple" style={{ borderColor: '#a78bfa', color: '#a78bfa', background: 'rgba(167, 139, 250, 0.05)' }}>
+                            <label className="btn-file-input purple" style={{ borderColor: '#a78bfa', color: '#a78bfa', background: 'rgba(167, 139, 250, 0.05)' }} title="Upload large files to Google Cloud">
                                 <input 
                                     type="file" 
                                     onChange={handleCloudUpload} 
@@ -674,7 +739,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                         <div className="flex-col">
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                 <span className="section-header-title">CLOUD FILES ({cloudFiles.length})</span>
-                                <button onClick={fetchCloudFiles} className="btn btn-secondary" style={{ fontSize: '0.65rem', padding: '0 0.5rem' }}>REFRESH</button>
+                                <button onClick={fetchCloudFiles} className="btn btn-secondary" style={{ fontSize: '0.65rem', padding: '0 0.5rem' }} title="Refresh File List">REFRESH</button>
                             </div>
                             
                             {cloudFiles.length === 0 ? (

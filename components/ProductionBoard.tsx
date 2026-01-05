@@ -90,8 +90,8 @@ export const ProductionBoard: React.FC<ProductionBoardProps> = ({ isOpen, onClos
 
                             {block.status === ApprovalStatus.DRAFT && (
                                 <div style={{ display: 'flex', gap: '0.25rem', marginTop: '0.5rem' }}>
-                                    <button onClick={() => handleApprove(block.id)} className="btn btn-xs btn-cyan" style={{ flex: 1 }}>APPROVE</button>
-                                    <button onClick={() => handleReject(block.id)} className="btn btn-xs btn-danger" style={{ flex: 1 }}>REJECT</button>
+                                    <button onClick={() => handleApprove(block.id)} className="btn btn-xs btn-cyan" style={{ flex: 1 }} title="Lock this block as Canon">APPROVE</button>
+                                    <button onClick={() => handleReject(block.id)} className="btn btn-xs btn-danger" style={{ flex: 1 }} title="Reject this draft">REJECT</button>
                                 </div>
                             )}
                             
@@ -110,9 +110,7 @@ export const ProductionBoard: React.FC<ProductionBoardProps> = ({ isOpen, onClos
     if (!isOpen) {
         return (
             <button 
-                onClick={onClose} // Re-using onClose prop to mean 'Toggle Open' in the parent context if needed, but App.tsx handles the actual button. 
-                // Wait, App.tsx renders the button in the header. This component is the Modal itself.
-                // The parent (App.tsx) renders the trigger button.
+                onClick={onClose} 
                 className="hidden"
             />
         );
@@ -126,8 +124,8 @@ export const ProductionBoard: React.FC<ProductionBoardProps> = ({ isOpen, onClos
                         <span className="modal-section-title" style={{ color: '#facc15' }}>PRODUCTION BOARD (ANIMAGENTS)</span>
                     </div>
                     <div className="flex-group">
-                        <button onClick={refresh} className="btn btn-secondary btn-xs">REFRESH</button>
-                        <button onClick={onClose} className="close-btn">
+                        <button onClick={refresh} className="btn btn-secondary btn-xs" title="Reload Canon Blocks">REFRESH</button>
+                        <button onClick={onClose} className="close-btn" title="Close Board">
                             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                         </button>
                     </div>

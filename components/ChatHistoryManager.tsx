@@ -238,7 +238,7 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
           <div className="flex-group">
              <span className="modal-section-title">SESSION HISTORY</span>
           </div>
-          <button onClick={onClose} className="close-btn">
+          <button onClick={onClose} className="close-btn" title="Close">
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         </div>
@@ -259,6 +259,7 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
                   className="btn btn-danger" 
                   style={{flex: 1}}
                   disabled={currentLogs.length === 0}
+                  title="Clear current active conversation"
                 >
                   CLEAR CHAT
                 </button>
@@ -278,6 +279,7 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
                   className="btn btn-primary"
                   style={{ padding: '0 1.5rem'}}
                   disabled={currentLogs.length === 0 || !sessionName.trim()}
+                  title="Save current session to history"
                 >
                   SAVE
                 </button>

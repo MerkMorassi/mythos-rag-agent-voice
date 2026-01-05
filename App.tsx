@@ -86,11 +86,16 @@ const App: React.FC = () => {
   // Inputs
   const paperclipInputRef = useRef<HTMLInputElement>(null);
   const mediaFileInputRef = useRef<HTMLInputElement>(null);
+  const mainInputRef = useRef<HTMLInputElement>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
 
   // Story Audio State
   const [storyAudioUrl, setStoryAudioUrl] = useState<string | null>(null);
   const [interruptSignal, setInterruptSignal] = useState(false);
+
+  // Helper to determine if video interface should be shown
+  const isVideoActive = isCameraOn || (videoSource === 'media' && !!streamFileUrl);
+  const showVideoInterface = layoutMode === 'VIDEO' || (layoutMode === 'HYBRID' && isVideoActive);
 
   // --- PREPARE LIVE CONFIG ---
   const currentAgent = AGENTS.find(a => a.id === currentAgentId);
@@ -100,20 +105,23 @@ const App: React.FC = () => {
   else if (modelMode === 'EXT') modeInstruction = "\n\n[MODE: TOOLING]\nACTIVATE 'Router' PROTOCOL.";
   else if (modelMode === 'IMG') modeInstruction = "\n\n[MODE: VISUAL]\nACTIVATE 'Image Generation' PROTOCOL.";
 
-  const LIVE_MEMORY_INSTRUCTION = `
-[SYSTEM CAPABILITY: MYTHOS KNOWLEDGE GRAPH]
-You are grounded in a persistent memory system (IndexedDB/Vector Store).
-You have access to the 'retrieve_knowledge' tool. Use it for queries about past events, lore, or uploaded files.
+  const CAPABILITY_INSTRUCTION = `
+[SYSTEM CAPABILITIES]
+1. VISION: You have a live video feed (Webcam or Movie File). You can see what the user shows you. Always analyze the visual context.
+2. IMAGE/VIDEO GENERATION: You can generate visual media. 
+   - If asked for an image/photo, use 'routeRequest' with target='FLUX_IMAGE'.
+   - If asked for a video/movie clip, use 'routeRequest' with target='VIDEO_GENERATION'.
+3. MEMORY: You are grounded in a persistent memory system.
 `;
 
-  const systemInstruction = `${generalInstructions}\n\n${agentInstructions || currentAgent?.system_instruction}${modeInstruction}\n${LIVE_MEMORY_INSTRUCTION}`;
+  const systemInstruction = `${generalInstructions}\n\n${agentInstructions || currentAgent?.system_instruction}${modeInstruction}\n${CAPABILITY_INSTRUCTION}`;
 
   // --- TOOL DEFINITIONS ---
   const retrievalTool: Tool = {
       functionDeclarations: [
           {
               name: "retrieve_knowledge",
-              description: "Access the MythOS Knowledge Graph. Use whenever asked about past events, lore, or documents.",
+              description: "Access the MythOS Knowledge Graph. Use whenever asked about past events, lore, or uploaded files.",
               parameters: {
                   type: Type.OBJECT,
                   properties: { query: { type: Type.STRING, description: "The search query." } },
@@ -157,12 +165,16 @@ You have access to the 'retrieve_knowledge' tool. Use it for queries about past 
       functionDeclarations: [
           {
               name: "routeRequest",
-              description: "Route a request to external models.",
+              description: "Generate images, videos, or route complex requests to external models.",
               parameters: {
                   type: Type.OBJECT,
                   properties: {
-                      target: { type: Type.STRING, enum: ["FLUX_IMAGE", "DOLPHIN_LLM", "CHATTERBOX_TTS", "EXTERNAL_LLM"] },
-                      prompt: { type: Type.STRING }
+                      target: { 
+                          type: Type.STRING, 
+                          enum: ["FLUX_IMAGE", "VIDEO_GENERATION", "DOLPHIN_LLM", "CHATTERBOX_TTS", "EXTERNAL_LLM"], 
+                          description: "Use FLUX_IMAGE for pictures. Use VIDEO_GENERATION for video clips." 
+                      },
+                      prompt: { type: Type.STRING, description: "The visual prompt or request text." }
                   },
                   required: ["target", "prompt"]
               }
@@ -192,6 +204,28 @@ You have access to the 'retrieve_knowledge' tool. Use it for queries about past 
                       if (routerRes.type === 'audio' && routerRes.data) {
                           setStoryAudioUrl(routerRes.data);
                           responses.push({ id: fc.id, name: fc.name, response: { result: "Audio generated and playing." } });
+                      } else if (routerRes.type === 'image' && routerRes.data) {
+                          // Inject image into logs
+                          setLogs(prev => [...prev, { 
+                              id: crypto.randomUUID(), 
+                              type: 'model', 
+                              text: `[GENERATED IMAGE] ${args.prompt}`, 
+                              timestamp: Date.now(),
+                              attachment: routerRes.data?.split(',')[1], 
+                              attachmentType: 'image'
+                          }]);
+                          responses.push({ id: fc.id, name: fc.name, response: { result: "Image generated successfully and displayed." } });
+                      } else if (routerRes.type === 'video' && routerRes.data) {
+                          // Inject video into logs
+                          setLogs(prev => [...prev, { 
+                              id: crypto.randomUUID(), 
+                              type: 'model', 
+                              text: `[GENERATED VIDEO] ${args.prompt}`, 
+                              timestamp: Date.now(),
+                              attachment: routerRes.data?.split(',')[1], 
+                              attachmentType: 'video'
+                          }]);
+                          responses.push({ id: fc.id, name: fc.name, response: { result: "Video generated successfully and displayed." } });
                       } else {
                           responses.push({ id: fc.id, name: fc.name, response: { result: routerRes.data } });
                       }
@@ -301,35 +335,59 @@ You have access to the 'retrieve_knowledge' tool. Use it for queries about past 
       }
   }, [connectionState, analyser, isMicOn]);
 
+  // Auto-focus Input Listener: Ensures text-only users can type immediately upon connection
+  useEffect(() => {
+      if (connectionState === ConnectionState.CONNECTED) {
+          mainInputRef.current?.focus();
+      }
+  }, [connectionState]);
+
   useEffect(() => { loadAgentConfig(currentAgentId); }, [currentAgentId]);
   useEffect(() => { logEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [logs, layoutMode]);
 
-  // STREAMING LOOP (VISION)
+  // STREAMING LOOP (VISION) - OPTIMIZED FOR ROBUSTNESS
   useEffect(() => {
+      // Clean up previous interval immediately
+      if (frameIntervalRef.current) {
+          clearInterval(frameIntervalRef.current);
+          frameIntervalRef.current = null;
+      }
+
       if (isCameraOn && connectionState === ConnectionState.CONNECTED && canvasRef.current) {
           const canvas = canvasRef.current;
           const ctx = canvas.getContext('2d');
           
-          if (frameIntervalRef.current) clearInterval(frameIntervalRef.current);
-
           frameIntervalRef.current = window.setInterval(() => {
-              // Determine source
-              const source = videoSource === 'camera' ? videoRef.current : mediaVideoRef.current;
+              // Priority Source Check
+              let source: CanvasImageSource | null = null;
               
-              if (ctx && source && source.readyState >= source.HAVE_CURRENT_DATA) {
-                  // For media file, check if paused to save tokens? Or allow analyzing paused frames.
-                  // Allow analysis of paused frames for discussion.
+              if (videoSource === 'media' && mediaVideoRef.current) {
+                  source = mediaVideoRef.current;
+              } else if (videoSource === 'camera' && videoRef.current) {
+                  source = videoRef.current;
+              }
+
+              if (ctx && source) {
+                  // For HTMLVideoElement, check readiness
+                  if (source instanceof HTMLVideoElement) {
+                      if (source.readyState < 2) return; // Not enough data
+                  }
                   
-                  canvas.width = source.videoWidth || 640;
-                  canvas.height = source.videoHeight || 480;
+                  // Downscale for performance if needed
+                  canvas.width = 640; 
+                  canvas.height = 360; 
+                  
                   ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
-                  const base64 = canvas.toDataURL('image/jpeg', 0.5).split(',')[1];
+                  const base64 = canvas.toDataURL('image/jpeg', 0.6).split(',')[1];
+                  
+                  // Send to model
                   sendRealtimeInput({ media: { mimeType: 'image/jpeg', data: base64 } });
               }
-          }, 1000); 
+          }, 1000); // 1 FPS
       }
+      
       return () => { if (frameIntervalRef.current) clearInterval(frameIntervalRef.current); };
-  }, [isCameraOn, connectionState, sendRealtimeInput, videoSource]);
+  }, [isCameraOn, connectionState, sendRealtimeInput, videoSource, streamFileUrl]); 
 
   const loadAgentConfig = async (id: string) => {
       const cfg = await getAgentConfig(id);
@@ -357,12 +415,25 @@ You have access to the 'retrieve_knowledge' tool. Use it for queries about past 
       setAccessLevel(newAccessLevel || '400');
   };
 
+  const handleStartSession = () => {
+      if (!apiKey) {
+          alert("API Key is missing. Please add your Google Gemini API Key in the Settings menu.");
+          setActiveSidePanel('SETTINGS');
+          return;
+      }
+      connect();
+  };
+
   const toggleCamera = async () => {
       if (isCameraOn && videoSource === 'camera') {
           setIsCameraOn(false);
           if (videoRef.current?.srcObject) (videoRef.current.srcObject as MediaStream).getTracks().forEach(t => t.stop());
       } else {
           setVideoSource('camera');
+          // Switch to HYBRID if in CHAT, otherwise VIDEO (Screening Room)
+          if (layoutMode === 'CHAT') setLayoutMode('HYBRID');
+          else if (layoutMode !== 'HYBRID') setLayoutMode('VIDEO'); 
+          
           try {
               const stream = await navigator.mediaDevices.getUserMedia({ video: true });
               if (videoRef.current) videoRef.current.srcObject = stream;
@@ -377,8 +448,11 @@ You have access to the 'retrieve_knowledge' tool. Use it for queries about past 
           const url = URL.createObjectURL(file);
           setStreamFileUrl(url);
           setVideoSource('media');
-          setLayoutMode('VIDEO'); // Auto-switch to Screening Room
-          setIsCameraOn(true); // Auto-enable vision
+          // Switch to HYBRID if in CHAT, otherwise VIDEO
+          if (layoutMode === 'CHAT') setLayoutMode('HYBRID');
+          else if (layoutMode !== 'HYBRID') setLayoutMode('VIDEO');
+          
+          setIsCameraOn(true); // Treat media stream as "camera on" for logic
           // Auto-play the media video ref when it loads
           setTimeout(() => mediaVideoRef.current?.play(), 500);
       }
@@ -453,14 +527,14 @@ You have access to the 'retrieve_knowledge' tool. Use it for queries about past 
             <span className="logo-text">MYTHOS</span>
             <span className="divider">|</span>
             {currentView === 'ORCHESTRATOR' ? (
-                <select value={currentAgentId} onChange={(e) => handleAgentChange(e.target.value)} className="agent-selector">
+                <select value={currentAgentId} onChange={(e) => handleAgentChange(e.target.value)} className="agent-selector" title="Select Active Agent Persona">
                     {AGENTS.map(agent => <option key={agent.id} value={agent.id}>{agent.handle.toUpperCase()}</option>)}
                 </select>
             ) : ( <span className="status-indicator" style={{ color: '#38bdf8', borderColor: '#38bdf8' }}>COMMS HUB</span> )}
         </div>
         <div className="flex-group">
             <div className={`status-indicator ${connectionState.toLowerCase()}`}>{connectionState}</div>
-            <button onClick={() => setIsHolodeckOpen(prev => !prev)} className={`btn btn-secondary btn-icon ${isHolodeckOpen ? 'active' : ''}`} title="Toggle Holodeck" style={isHolodeckOpen ? {borderColor: '#38bdf8', color: '#38bdf8'} : {}}>
+            <button onClick={() => setIsHolodeckOpen(prev => !prev)} className={`btn btn-secondary btn-icon ${isHolodeckOpen ? 'active' : ''}`} title="Toggle Holodeck (Shared Visual Canvas)" style={isHolodeckOpen ? {borderColor: '#38bdf8', color: '#38bdf8'} : {}}>
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><line x1="9" y1="21" x2="9" y2="9"></line></svg>
             </button>
             {renderTriggerBtn('VOICE', <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>, "Voice Commands")}
@@ -498,7 +572,7 @@ You have access to the 'retrieve_knowledge' tool. Use it for queries about past 
                     <div style={visualizerStyle}>
                         <div className="panel-overlay top-left">
                             <span className="overlay-label">
-                                VISUALIZER // {selectedVoice.toUpperCase()} // {isThinking ? 'THINKING...' : (isCameraOn ? (videoSource === 'media' ? 'MEDIA STREAM' : 'LIVE CAM') : 'OFFLINE')}
+                                VISUALIZER // {selectedVoice.toUpperCase()} // {isThinking ? 'THINKING...' : (isVideoActive ? (videoSource === 'media' ? 'MEDIA STREAM' : 'LIVE CAM') : 'OFFLINE')}
                             </span>
                         </div>
                         
@@ -510,9 +584,27 @@ You have access to the 'retrieve_knowledge' tool. Use it for queries about past 
 
                         <canvas ref={canvasRef} className="hidden" />
                         
-                        {layoutMode === 'VIDEO' ? (
+                        {showVideoInterface ? (
                             <div className="screening-room">
-                                {streamFileUrl ? (
+                                {videoSource === 'camera' && isCameraOn ? (
+                                    <>
+                                        <video 
+                                            ref={videoRef} 
+                                            autoPlay 
+                                            playsInline 
+                                            muted 
+                                            style={{ width: '100%', height: '100%', objectFit: 'cover' }} 
+                                        />
+                                        <div className="screening-overlay">
+                                            {logs.slice(-3).map(log => (
+                                                <div key={log.id} className={`screening-log ${log.type}`}>
+                                                    <span style={{fontWeight:'bold', marginRight:'0.5rem'}}>{log.type.toUpperCase()}:</span>
+                                                    {log.text}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </>
+                                ) : streamFileUrl ? (
                                     <>
                                         <video 
                                             ref={mediaVideoRef} 
@@ -532,7 +624,7 @@ You have access to the 'retrieve_knowledge' tool. Use it for queries about past 
                                         </div>
                                     </>
                                 ) : (
-                                    <div className="screening-placeholder" onClick={() => mediaFileInputRef.current?.click()}>
+                                    <div className="screening-placeholder" onClick={() => mediaFileInputRef.current?.click()} title="Click to Select Movie File">
                                         <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#333" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" style={{marginBottom: '1rem'}}>
                                             <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect>
                                             <line x1="7" y1="2" x2="7" y2="22"></line>
@@ -552,8 +644,8 @@ You have access to the 'retrieve_knowledge' tool. Use it for queries about past 
                             <Visualizer analyser={analyser} isActive={connectionState === ConnectionState.CONNECTED} />
                         )}
 
-                        {/* WEBCAM PREVIEW - Hidden in VIDEO Mode to focus on movie */}
-                        <div style={{ position: 'absolute', bottom: '10px', right: '10px', width: '160px', height: '120px', background: '#000', border: '1px solid #4ade80', display: (isCameraOn && videoSource === 'camera' && layoutMode !== 'VIDEO') ? 'block' : 'none', zIndex: 30, boxShadow: '0 0 10px rgba(0,0,0,0.5)' }}>
+                        {/* WEBCAM PREVIEW - HIDDEN IF MAIN INTERFACE SHOWS VIDEO */}
+                        <div style={{ position: 'absolute', bottom: '10px', right: '10px', width: '160px', height: '120px', background: '#000', border: '1px solid #4ade80', display: (isCameraOn && videoSource === 'camera' && !showVideoInterface) ? 'block' : 'none', zIndex: 30, boxShadow: '0 0 10px rgba(0,0,0,0.5)' }}>
                             <video ref={videoRef} autoPlay playsInline muted style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                         </div>
                     </div>
@@ -569,7 +661,9 @@ You have access to the 'retrieve_knowledge' tool. Use it for queries about past 
                                     </div>
                                     {log.attachment && (
                                         <div style={{ margin: '0.5rem 0', borderRadius: '4px', overflow: 'hidden', border: '1px solid #333', maxWidth: '300px' }}>
-                                            {log.attachmentType === 'image' ? <img src={`data:image/jpeg;base64,${log.attachment}`} style={{ width: '100%', display: 'block' }} /> : <div style={{ padding: '1rem', fontSize: '0.8rem', background: '#111', color: '#eee' }}>File Attached</div>}
+                                            {log.attachmentType === 'image' ? <img src={`data:image/jpeg;base64,${log.attachment}`} style={{ width: '100%', display: 'block' }} /> : 
+                                             log.attachmentType === 'video' ? <video controls src={`data:video/mp4;base64,${log.attachment}`} style={{ width: '100%', display: 'block' }} /> :
+                                             <div style={{ padding: '1rem', fontSize: '0.8rem', background: '#111', color: '#eee' }}>File Attached</div>}
                                         </div>
                                     )}
                                     <span className="log-text">{log.text}</span>
@@ -590,15 +684,15 @@ You have access to the 'retrieve_knowledge' tool. Use it for queries about past 
           <div className="tray-controls">
               <div className="flex-group">
                   {/* MIC */}
-                  <button onClick={() => setIsMicOn(!isMicOn)} className={`btn btn-icon ${isMicOn ? 'active-green' : 'btn-danger'}`} title="Mic Toggle">
+                  <button onClick={() => setIsMicOn(!isMicOn)} className={`btn btn-icon ${isMicOn ? 'active-green' : 'btn-danger'}`} title={isMicOn ? "Mute Microphone" : "Unmute Microphone"}>
                       {isMicOn ? <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg> : <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="1" y1="1" x2="23" y2="23"></line><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"></path><path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>}
                   </button>
                   {/* CAMERA */}
-                  <button onClick={toggleCamera} className={`btn btn-icon ${isCameraOn && videoSource === 'camera' ? 'active-green' : ''}`} title="Webcam Toggle">
+                  <button onClick={toggleCamera} className={`btn btn-icon ${isCameraOn && videoSource === 'camera' ? 'active-green' : ''}`} title="Toggle Webcam Feed">
                       <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
                   </button>
                   {/* MOVIE CAMERA (MEDIA STREAM) */}
-                  <button onClick={() => mediaFileInputRef.current?.click()} className={`btn btn-icon ${isCameraOn && videoSource === 'media' ? 'active-green' : ''}`} title="Stream Movie File">
+                  <button onClick={() => mediaFileInputRef.current?.click()} className={`btn btn-icon ${isCameraOn && videoSource === 'media' ? 'active-green' : ''}`} title="Stream Video File to Agent">
                       <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect><line x1="7" y1="2" x2="7" y2="22"></line><line x1="17" y1="2" x2="17" y2="22"></line><line x1="2" y1="12" x2="22" y2="12"></line><line x1="2" y1="7" x2="7" y2="7"></line><line x1="2" y1="17" x2="7" y2="17"></line><line x1="17" y1="17" x2="22" y2="17"></line><line x1="17" y1="7" x2="22" y2="7"></line></svg>
                   </button>
                   {/* Hidden Input for Movie Camera */}
@@ -606,29 +700,38 @@ You have access to the 'retrieve_knowledge' tool. Use it for queries about past 
               </div>
               
               <div className="flex-group">
-                  <button onClick={() => setCurrentView('COUNCIL')} className="btn btn-xs">COUNCIL</button>
-                  <button onClick={() => setIsTerminalOpen(!isTerminalOpen)} className="btn btn-xs">TERM (~)</button>
+                  <button onClick={() => setCurrentView('COUNCIL')} className="btn btn-xs" title="Open Multi-Agent Council Interface">COUNCIL</button>
+                  <button onClick={() => setIsTerminalOpen(!isTerminalOpen)} className="btn btn-xs" title="Open Terminal / Shell">TERM (~)</button>
               </div>
 
               <div className="mode-selector">
-                  {['STD', 'DEEP', 'IMG', 'EXT'].map(m => ( <button key={m} onClick={() => setModelMode(m as ModelMode)} className={modelMode === m ? `active ${m.toLowerCase()}` : ''}>{m}</button> ))}
+                  {['STD', 'DEEP', 'IMG', 'EXT'].map(m => ( 
+                      <button 
+                          key={m} 
+                          onClick={() => setModelMode(m as ModelMode)} 
+                          className={modelMode === m ? `active ${m.toLowerCase()}` : ''}
+                          title={m === 'STD' ? 'Standard Mode (Gemini 2.5)' : m === 'DEEP' ? 'Deep Reasoning Mode (Gemini 3 Pro)' : m === 'IMG' ? 'Image Generation Mode' : 'External Tools Mode'}
+                      >
+                          {m}
+                      </button> 
+                  ))}
               </div>
 
               <div className="flex-group">
-                  <button onClick={() => setLayoutMode('VIDEO')} className={`btn btn-xs ${layoutMode === 'VIDEO' ? 'active' : ''}`}>VIDEO</button>
-                  <button onClick={() => setLayoutMode('VOICE')} className={`btn btn-xs ${layoutMode === 'VOICE' ? 'active' : ''}`}>VOICE</button>
-                  <button onClick={() => setLayoutMode('HYBRID')} className={`btn btn-xs ${layoutMode === 'HYBRID' ? 'active' : ''}`}>HYBRID</button>
-                  <button onClick={() => setLayoutMode('CHAT')} className={`btn btn-xs ${layoutMode === 'CHAT' ? 'active' : ''}`}>CHAT</button>
+                  <button onClick={() => setLayoutMode('VIDEO')} className={`btn btn-xs ${layoutMode === 'VIDEO' ? 'active' : ''}`} title="Full Screen Video Layout">VIDEO</button>
+                  <button onClick={() => setLayoutMode('VOICE')} className={`btn btn-xs ${layoutMode === 'VOICE' ? 'active' : ''}`} title="Voice Visualization Layout">VOICE</button>
+                  <button onClick={() => setLayoutMode('HYBRID')} className={`btn btn-xs ${layoutMode === 'HYBRID' ? 'active' : ''}`} title="Split View (Visual + Chat)">HYBRID</button>
+                  <button onClick={() => setLayoutMode('CHAT')} className={`btn btn-xs ${layoutMode === 'CHAT' ? 'active' : ''}`} title="Chat Only Layout">CHAT</button>
               </div>
           </div>
           <div className="input-bar">
               <input type="file" ref={paperclipInputRef} className="hidden" onChange={handlePaperclipUpload} />
-              <button onClick={handlePaperclipClick} className="btn btn-icon btn-lg" style={{ marginRight: '0.5rem' }}>
+              <button onClick={handlePaperclipClick} className="btn btn-icon btn-lg" style={{ marginRight: '0.5rem' }} title="Attach File">
                   <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>
               </button>
-              <input type="text" className="main-input" placeholder="Type message..." value={inputText} onChange={(e) => setInputText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendText()} />
-              {connectionState === ConnectionState.CONNECTED ? <button onClick={disconnect} className="btn btn-danger btn-lg">STOP</button> : <button onClick={connect} className="btn btn-primary btn-lg" disabled={connectionState === ConnectionState.CONNECTING}>{connectionState === ConnectionState.CONNECTING ? '...' : 'START'}</button>}
-              <button onClick={handleSendText} className="btn btn-secondary btn-lg">SEND</button>
+              <input ref={mainInputRef} type="text" className="main-input" placeholder="Type message..." value={inputText} onChange={(e) => setInputText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendText()} />
+              {connectionState === ConnectionState.CONNECTED ? <button onClick={disconnect} className="btn btn-danger btn-lg" title="Disconnect Session">STOP</button> : <button onClick={handleStartSession} className="btn btn-primary btn-lg" disabled={connectionState === ConnectionState.CONNECTING} title="Connect Live Session">{connectionState === ConnectionState.CONNECTING ? '...' : 'START'}</button>}
+              <button onClick={handleSendText} className="btn btn-secondary btn-lg" title="Send Message">SEND</button>
           </div>
       </footer>
 
