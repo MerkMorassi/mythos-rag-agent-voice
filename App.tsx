@@ -467,28 +467,72 @@ const App: React.FC = () => {
       const files = e.target.files;
       if (!files || files.length === 0) return;
       const file = files[0];
+      
+      // Determine Type
+      let type: MediaAsset['type'] = 'text'; 
+      if (file.type.startsWith('image/')) type = 'image';
+      else if (file.type.startsWith('video/')) type = 'video';
+      else if (file.type.startsWith('audio/')) type = 'audio';
+      else if (file.type.includes('pdf')) type = 'pdf';
+
       const reader = new FileReader();
+      
       reader.onload = async (evt) => {
           const res = evt.target?.result as string;
           let data = res;
-          let type: MediaAsset['type'] = 'text'; 
-          if (file.type.startsWith('image/')) type = 'image';
-          else if (file.type.includes('pdf')) type = 'pdf';
           
-          if ((type === 'image' || type === 'pdf') && res.includes('base64,')) data = res.split(',')[1];
+          // Clean Base64 for media types
+          if ((type !== 'text') && res.includes('base64,')) {
+              data = res.split(',')[1];
+          }
 
-          const asset: MediaAsset = { id: NumMarkX_GenerateID('UP'), type, data, prompt: file.name, agentId: 'USER', timestamp: Date.now(), tags: ['CHAT_UPLOAD'] };
+          const idPrefix = type === 'image' ? 'IMG' : (type === 'video' ? 'VID' : (type === 'audio' ? 'AUD' : (type === 'pdf' ? 'PDF' : 'DOC')));
+          const asset: MediaAsset = { 
+              id: NumMarkX_GenerateID(idPrefix), 
+              type, 
+              data, 
+              prompt: file.name, 
+              agentId: 'USER', 
+              timestamp: Date.now(), 
+              tags: ['CHAT_UPLOAD'] 
+          };
+          
           await saveMediaAsset(asset);
-          setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'user', text: `[Attached ${type.toUpperCase()}: ${file.name}]`, timestamp: Date.now(), attachment: data, attachmentType: type }]);
 
-          if (type === 'image') sendRealtimeInput({ media: { mimeType: file.type, data } });
-          else if (type === 'text') {
-              const content = await file.text();
-              IngestionService.ingestText(content, file.name, currentAgentId, apiKey);
-              sendText(`[USER UPLOADED FILE: ${file.name}]\n${content.substring(0, 5000)}...`);
+          // Build log message based on type
+          let logText = `[Attached ${type.toUpperCase()}: ${file.name}]`;
+          if (type === 'video' || type === 'audio') {
+              logText += `\n(Saved to Media Gallery)`;
+          }
+
+          setLogs(prev => [...prev, { 
+              id: crypto.randomUUID(), 
+              type: 'user', 
+              text: logText,
+              timestamp: Date.now(), 
+              attachment: data, 
+              attachmentType: type 
+          }]);
+
+          // Live Session Interactions
+          if (type === 'image') {
+              // Send Image to Live Session
+              sendRealtimeInput({ media: { mimeType: file.type, data } });
+          } else if (type === 'text') {
+              // Ingest Text
+              // 'data' here is the full text content because we use readAsText for text types
+              IngestionService.ingestText(data, file.name, currentAgentId, apiKey);
+              sendText(`[USER UPLOADED FILE: ${file.name}]\n${data.substring(0, 5000)}...`);
+          } else if (type === 'video' || type === 'audio') {
+              // For large media, we notify the model via text that it exists, rather than streaming the bytes
+              // sending the bytes via sendRealtimeInput for a large video might kill the connection.
+              sendText(`[System Notification] User uploaded a ${type} file: "${file.name}". It is stored in the Media Library.`);
           }
       };
-      if (file.type.startsWith('image/') || file.type.includes('pdf')) reader.readAsDataURL(file); else reader.readAsText(file);
+
+      if (type === 'text') reader.readAsText(file);
+      else reader.readAsDataURL(file);
+      
       if(paperclipInputRef.current) paperclipInputRef.current.value = '';
   };
 
@@ -717,8 +761,8 @@ const App: React.FC = () => {
               </div>
           </div>
           <div className="input-bar">
-              <input type="file" ref={paperclipInputRef} className="hidden" onChange={handlePaperclipUpload} />
-              <button onClick={handlePaperclipClick} className="btn btn-icon btn-lg" style={{ marginRight: '0.5rem' }} title="Attach File">
+              <input type="file" accept="image/*,video/*,audio/*,.pdf,.txt,.md,.json,.js,.ts,.tsx" ref={paperclipInputRef} className="hidden" onChange={handlePaperclipUpload} />
+              <button onClick={handlePaperclipClick} className="btn btn-icon btn-lg" style={{ marginRight: '0.5rem' }} title="Insert files (text, images, audio, video) into your prompt">
                   <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>
               </button>
               <input ref={mainInputRef} type="text" className="main-input" placeholder="Type message..." value={inputText} onChange={(e) => setInputText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendText()} />
