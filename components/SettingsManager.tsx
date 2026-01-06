@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ModelConfig, DEFAULT_MODEL_CONFIG } from '../types';
-import { getSavedPromptsByAgentId, SavedPrompt, deleteSavedPrompt, getAgentConfig } from '../services/db';
+import { getSavedPromptsByAgentId, SavedPrompt, deleteSavedPrompt, getAgentConfig, getAllLlmLogs } from '../services/db';
 import { AccessControl } from '../services/accessControl';
 import { ChatterboxService } from '../services/chatterbox';
+import { LLMUsageLogger } from '../services/llmUsageLogger';
 
 // PREBUILT VOICES LIST
 const PREBUILT_VOICES = ["Puck", "Kore", "Fenrir", "Zephyr", "Aoede", "Callirrhoe", "Leda"];
@@ -68,6 +69,9 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
   const [voiceSpeed, setVoiceSpeed] = useState<number>(1.0);
   const [voicePitch, setVoicePitch] = useState<number>(0); // Semitones
   const [isCloning, setIsCloning] = useState(false);
+
+  // Usage Stats
+  const [totalCost, setTotalCost] = useState(0);
   
   const voiceInputRef = useRef<HTMLInputElement>(null);
   const audioPreviewRef = useRef<HTMLAudioElement>(null);
@@ -83,6 +87,9 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
               loadPrompts();
               loadAgentVoiceSettings();
           }
+          const logger = new LLMUsageLogger();
+          logger.getTotalCost().then(setTotalCost);
+          
           setLocalAccessLevel(agentAccessLevel || '400');
           setGeminiKey(localStorage.getItem('gemini_api_key') || '');
           setHfToken(localStorage.getItem('hf_token') || '');
@@ -171,6 +178,24 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
       setLocalAccessLevel(val);
       if (onDirty) onDirty();
   };
+  
+  const handleExportLogs = async () => {
+    const logs = await getAllLlmLogs();
+    if (logs.length === 0) {
+        alert("No usage logs to export.");
+        return;
+    }
+    const jsonlContent = logs.map(log => JSON.stringify(log)).join('\n');
+    const blob = new Blob([jsonlContent], { type: 'application/jsonl' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'llm-usage.jsonl';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -226,6 +251,18 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
           </div>
           
           <form onSubmit={handleSave} className="flex-col" style={{gap: '2rem'}}>
+            
+            {/* USAGE ANALYTICS */}
+            <div className="flex-col">
+              <span className="section-header-title" style={{color: '#4ade80'}}>USAGE ANALYTICS</span>
+              <div className="section-panel" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderColor: '#4ade80' }}>
+                <div>
+                  <div style={{ fontSize: '0.7rem', color: '#888' }}>EST. TOTAL COST (USD)</div>
+                  <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#4ade80' }}>${totalCost.toFixed(5)}</div>
+                </div>
+                <button type="button" onClick={handleExportLogs} className="btn btn-secondary" title="Download all usage logs as a .jsonl file for analysis.">EXPORT LOGS</button>
+              </div>
+            </div>
             
             {/* PERMISSION CHMOD EDITOR */}
             <div className="flex-col">
