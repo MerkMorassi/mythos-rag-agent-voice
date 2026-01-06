@@ -13,6 +13,7 @@ import { AccessControl } from "./accessControl";
 import { GeminiProvider } from "./llmProviders/geminiProvider";
 import { DolphinProvider } from "./llmProviders/dolphinProvider";
 import { ILLMProvider } from "./llmProviders/ILLMProvider";
+import { LLMUsageLogger } from "./llmUsageLogger";
 
 
 export interface AgentResponse {
@@ -333,6 +334,7 @@ export const MultiAgentService = {
             return { agentId: agent.id, text: "[SYSTEM ERROR: Gemini API Key Missing.]", error: "API Key Missing" };
         }
         const geminiProvider = new GeminiProvider(geminiApiKey);
+        const logger = new LLMUsageLogger();
 
         const dolphinUrl = localStorage.getItem('dolphin_url');
         const hfToken = localStorage.getItem('hf_token') || process.env.HF_TOKEN;
@@ -388,20 +390,44 @@ export const MultiAgentService = {
         // --- MODEL EXECUTION FLOW ---
         let finalResultText: string | null = "[Execution Failed]";
         let finalCost = 0;
+        let wasFallback = false;
 
         try {
             // 1. Attempt with Primary Provider (Gemini)
-            let primaryResponse = await geminiProvider.generateResponse(requestContents, { tools: agentTools, modelConfig: agentConfig.modelConfig });
+            const primaryResponse = await geminiProvider.generateResponse(requestContents, { tools: agentTools, modelConfig: agentConfig.modelConfig });
             finalCost += primaryResponse.usage.estimatedCostUsd;
+            
+            logger.log({
+                timestamp: primaryResponse.usage.timestamp.toISOString(),
+                provider: geminiProvider.name,
+                model: geminiProvider.name,
+                prompt: userMessage.substring(0, 200), // Truncate long prompts
+                inputTokens: primaryResponse.usage.inputTokens,
+                outputTokens: primaryResponse.usage.outputTokens,
+                costUsd: primaryResponse.usage.estimatedCostUsd,
+                wasFallback: false
+            });
 
             if (onLogCost) onLogCost(`[USAGE] ${geminiProvider.name}: ${primaryResponse.usage.inputTokens} IN, ${primaryResponse.usage.outputTokens} OUT. Cost: $${primaryResponse.usage.estimatedCostUsd.toFixed(6)}`);
 
             // 2. Handle Safety Refusal Fallback
             if (primaryResponse.isSafetyRefusal && dolphinProvider) {
+                wasFallback = true;
                 if (onLogCost) onLogCost(`[ROUTER] Gemini Refusal (SAFETY). Routing to ${dolphinProvider.name}.`);
                 const fallbackResponse = await dolphinProvider.generateResponse(requestContents, { modelConfig: agentConfig.modelConfig });
                 finalResultText = fallbackResponse.content;
-                // No cost for Dolphin, but log usage
+                
+                logger.log({
+                    timestamp: fallbackResponse.usage.timestamp.toISOString(),
+                    provider: dolphinProvider.name,
+                    model: dolphinProvider.name,
+                    prompt: userMessage.substring(0, 200),
+                    inputTokens: fallbackResponse.usage.inputTokens,
+                    outputTokens: fallbackResponse.usage.outputTokens,
+                    costUsd: fallbackResponse.usage.estimatedCostUsd,
+                    wasFallback: true
+                });
+
                 if (onLogCost) onLogCost(`[USAGE] ${dolphinProvider.name}: ${fallbackResponse.usage.inputTokens} IN, ${fallbackResponse.usage.outputTokens} OUT.`);
             } 
             // 3. Handle Tool Calls if Gemini succeeded
@@ -417,10 +443,32 @@ export const MultiAgentService = {
         } catch (error: any) {
             // 5. Handle Thrown Errors (including safety blocks)
              if ((error.message?.toLowerCase().includes("safety") || error.message?.toLowerCase().includes("blocked")) && dolphinProvider) {
+                wasFallback = true;
+                logger.log({
+                    timestamp: new Date().toISOString(),
+                    provider: geminiProvider.name,
+                    model: geminiProvider.name,
+                    prompt: userMessage.substring(0, 200),
+                    inputTokens: 0, outputTokens: 0, costUsd: 0,
+                    wasFallback: false,
+                });
+
                 if (onLogCost) onLogCost(`[ROUTER] Gemini Refusal (Error: ${error.message}). Routing to ${dolphinProvider.name}.`);
                 try {
                     const fallbackResponse = await dolphinProvider.generateResponse(requestContents, { modelConfig: agentConfig.modelConfig });
                     finalResultText = fallbackResponse.content;
+
+                    logger.log({
+                        timestamp: fallbackResponse.usage.timestamp.toISOString(),
+                        provider: dolphinProvider.name,
+                        model: dolphinProvider.name,
+                        prompt: userMessage.substring(0, 200),
+                        inputTokens: fallbackResponse.usage.inputTokens,
+                        outputTokens: fallbackResponse.usage.outputTokens,
+                        costUsd: fallbackResponse.usage.estimatedCostUsd,
+                        wasFallback: true
+                    });
+
                     if (onLogCost) onLogCost(`[USAGE] ${dolphinProvider.name}: ${fallbackResponse.usage.inputTokens} IN, ${fallbackResponse.usage.outputTokens} OUT.`);
                 } catch(e: any) {
                     return { agentId: agent.id, text: `[SYSTEM] Fallback routing also failed: ${e.message}`, error: e.message, cost: finalCost };

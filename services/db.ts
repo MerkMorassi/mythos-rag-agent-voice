@@ -1,4 +1,3 @@
-
 import { 
     KnowledgeDoc, 
     GraphNode, 
@@ -12,6 +11,7 @@ import {
     WorkingMemory,
     DEFAULT_MODEL_CONFIG 
 } from '../types';
+import { UsageLogEntry } from './llmUsageLogger';
 
 export interface SavedPrompt {
     id: string;
@@ -21,7 +21,7 @@ export interface SavedPrompt {
 }
 
 const DB_NAME = 'MythOS_DB';
-const DB_VERSION = 5;
+const DB_VERSION = 6; // Incremented version for new store
 
 // Stores
 export const DOC_STORE = 'documents';
@@ -36,6 +36,7 @@ export const LORE_PACK_STORE = 'lore_packs';
 export const PROMPT_STORE = 'saved_prompts';
 export const CANON_STORE = 'canon_blocks';
 export const HOLODECK_STORE = 'holodeck';
+export const LLM_USAGE_LOG_STORE = 'llm_usage_logs'; // New Store
 
 let dbInstance: IDBDatabase | null = null;
 
@@ -91,9 +92,9 @@ export const initDB = (): Promise<IDBDatabase> => {
         request.onupgradeneeded = (event) => {
             const db = (event.target as IDBOpenDBRequest).result;
             
-            const createStore = (name: string, keyPath: string = 'id', indices: string[] = []) => {
+            const createStore = (name: string, keyPath: string | { autoIncrement: boolean } = 'id', indices: string[] = []) => {
                 if (!db.objectStoreNames.contains(name)) {
-                    const store = db.createObjectStore(name, { keyPath });
+                    const store = db.createObjectStore(name, typeof keyPath === 'string' ? { keyPath } : keyPath);
                     indices.forEach(idx => store.createIndex(idx, idx, { unique: false }));
                 }
             };
@@ -110,6 +111,9 @@ export const initDB = (): Promise<IDBDatabase> => {
             createStore(PROMPT_STORE, 'id', ['agentId']);
             createStore(CANON_STORE, 'id');
             createStore(HOLODECK_STORE, 'id');
+            
+            // Create new store for LLM logs
+            createStore(LLM_USAGE_LOG_STORE, { autoIncrement: true });
         };
     });
 };
@@ -454,6 +458,10 @@ export const getCanvas = async (): Promise<WorkingMemory> => {
 };
 
 export const updateCanvas = (canvas: WorkingMemory) => putItem(HOLODECK_STORE, canvas);
+
+// --- LLM USAGE LOGS ---
+export const addLlmLog = (log: UsageLogEntry) => putItem(LLM_USAGE_LOG_STORE, log);
+export const getAllLlmLogs = () => getAll<UsageLogEntry>(LLM_USAGE_LOG_STORE);
 
 // --- SQL MOCK ---
 
