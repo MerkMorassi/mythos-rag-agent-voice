@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { GoogleGenAI, Tool, Type } from "@google/genai";
 import { AGENTS } from './agents';
@@ -8,7 +7,8 @@ import {
   DEFAULT_MODEL_CONFIG, 
   ModelConfig,
   MediaAsset,
-  SomaActionType
+  SomaActionType,
+  Agent
 } from './types';
 import Visualizer from './components/Visualizer';
 import ChatHistoryManager from './components/ChatHistoryManager';
@@ -22,6 +22,7 @@ import { Terminal } from './components/Terminal';
 import { MediaGallery } from './components/MediaGallery';
 import { MediaPlayer } from './components/MediaPlayer'; 
 import { Holodeck } from './components/Holodeck';
+import { ToolManager } from './components/ToolManager';
 import {
   saveActiveChat,
   getAgentConfig,
@@ -142,190 +143,47 @@ const App: React.FC = () => {
   const systemInstruction = `${generalInstructions}\n\n${agentInstructions || currentAgent?.system_instruction}${modeInstruction}\n${CAPABILITY_INSTRUCTION}`;
 
   // --- TOOL DEFINITIONS ---
-  const retrievalTool: Tool = {
-      functionDeclarations: [
-          {
-              name: "retrieve_knowledge",
-              description: "Access the MythOS Knowledge Graph. Use whenever asked about past events, lore, or uploaded files.",
-              parameters: {
-                  type: Type.OBJECT,
-                  properties: { query: { type: Type.STRING, description: "The search query." } },
-                  required: ["query"]
-              }
-          }
-      ]
+  const retrievalTool: Tool = { functionDeclarations: [ { name: "retrieve_knowledge", description: "Access the MythOS Knowledge Graph. Use whenever asked about past events, lore, or uploaded files.", parameters: { type: Type.OBJECT, properties: { query: { type: Type.STRING, description: "The search query." } }, required: ["query"] } } ] };
+  const mediaGalleryTool: Tool = { functionDeclarations: [ { name: "search_media_gallery", description: "Search for existing files in the Media Gallery (Images, Videos, Documents).", parameters: { type: Type.OBJECT, properties: { query: { type: Type.STRING, description: "Keywords to search for (filename, description, tags)." } }, required: ["query"] } }, { name: "show_media_asset", description: "Display a specific media asset from the Gallery to the user.", parameters: { type: Type.OBJECT, properties: { assetId: { type: Type.STRING, description: "The ID of the asset to display (obtained from search)." } }, required: ["assetId"] } } ] };
+  const googleMapsTool: Tool = { functionDeclarations: [ { name: "maps_search_places", description: "Search for places using Google Maps.", parameters: { type: Type.OBJECT, properties: { query: { type: Type.STRING, description: "Search term" }, radius: { type: Type.NUMBER, description: "Radius in meters" } }, required: ["query"] } }, { name: "maps_distancematrix", description: "Calculate travel distance/time.", parameters: { type: Type.OBJECT, properties: { origin: { type: Type.STRING }, destination: { type: Type.STRING }, mode: { type: Type.STRING } }, required: ["origin", "destination"] } } ] };
+  const routeRequestTool: Tool = { functionDeclarations: [ { name: "routeRequest", description: "Generate images, videos, or route complex requests to external models.", parameters: { type: Type.OBJECT, properties: { target: { type: Type.STRING, enum: ["FLUX_IMAGE", "VIDEO_GENERATION", "DOLPHIN_LLM", "CHATTERBOX_TTS", "EXTERNAL_LLM"], description: "Use FLUX_IMAGE for pictures. Use VIDEO_GENERATION for video clips." }, prompt: { type: Type.STRING, description: "The visual prompt or request text." } }, required: ["target", "prompt"] } } ] };
+  const holodeckTools: Tool = { functionDeclarations: [ readCanvasTool, updateCanvasTool ] };
+  const pythonTool: Tool = { functionDeclarations: [ { name: "execute_python", description: "Execute Python code in a sandboxed environment. Use for calculations, data analysis, or logic.", parameters: { type: Type.OBJECT, properties: { code: { type: Type.STRING, description: "The Python code to execute." } }, required: ["code"] } } ] };
+  const filesystemTool: Tool = { functionDeclarations: [ { name: "read_file", description: "Read contents of a file from the host filesystem.", parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING } }, required: ["path"] } }, { name: "list_directory", description: "List files and directories at a path.", parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING } }, required: ["path"] } }, { name: "write_file", description: "Write content to a file.", parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING }, content: { type: Type.STRING } }, required: ["path", "content"] } }, { name: "get_file_info", description: "Get metadata for a file.", parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING } }, required: ["path"] } }, { name: "search_files", description: "Recursively search for files.", parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING }, pattern: { type: Type.STRING } }, required: ["path", "pattern"] } } ] };
+
+  const allTools: Record<string, Tool> = {
+    retrieval: retrievalTool,
+    mediaGallery: mediaGalleryTool,
+    googleMaps: googleMapsTool,
+    routeRequest: routeRequestTool,
+    holodeck: holodeckTools,
+    python: pythonTool,
+    filesystem: filesystemTool
   };
 
-  const mediaGalleryTool: Tool = {
-      functionDeclarations: [
-          {
-              name: "search_media_gallery",
-              description: "Search for existing files in the Media Gallery (Images, Videos, Documents).",
-              parameters: {
-                  type: Type.OBJECT,
-                  properties: {
-                      query: { type: Type.STRING, description: "Keywords to search for (filename, description, tags)." }
-                  },
-                  required: ["query"]
-              }
-          },
-          {
-              name: "show_media_asset",
-              description: "Display a specific media asset from the Gallery to the user.",
-              parameters: {
-                  type: Type.OBJECT,
-                  properties: {
-                      assetId: { type: Type.STRING, description: "The ID of the asset to display (obtained from search)." }
-                  },
-                  required: ["assetId"]
-              }
-          }
-      ]
-  };
+  const [enabledToolIds, setEnabledToolIds] = useState<string[]>([
+    'retrieval', 'mediaGallery', 'googleMaps', 'routeRequest', 'holodeck'
+  ]);
 
-  const googleMapsTool: Tool = {
-      functionDeclarations: [
-          {
-              name: "maps_search_places",
-              description: "Search for places using Google Maps.",
-              parameters: {
-                  type: Type.OBJECT,
-                  properties: { 
-                      query: { type: Type.STRING, description: "Search term" },
-                      radius: { type: Type.NUMBER, description: "Radius in meters" }
-                  },
-                  required: ["query"]
-              }
-          },
-          {
-              name: "maps_distancematrix",
-              description: "Calculate travel distance/time.",
-              parameters: {
-                  type: Type.OBJECT,
-                  properties: { 
-                      origin: { type: Type.STRING },
-                      destination: { type: Type.STRING },
-                      mode: { type: Type.STRING }
-                  },
-                  required: ["origin", "destination"]
-              }
-          }
-      ]
-  };
+  const getPermittedTools = (): Tool[] => {
+      const permitted: Tool[] = [];
+      const canExecute = currentAgent ? AccessControl.canPerform(accessLevel, SomaActionType.EXEC_CODE) : false;
 
-  const routeRequestTool: Tool = {
-      functionDeclarations: [
-          {
-              name: "routeRequest",
-              description: "Generate images, videos, or route complex requests to external models.",
-              parameters: {
-                  type: Type.OBJECT,
-                  properties: {
-                      target: { 
-                          type: Type.STRING, 
-                          enum: ["FLUX_IMAGE", "VIDEO_GENERATION", "DOLPHIN_LLM", "CHATTERBOX_TTS", "EXTERNAL_LLM"], 
-                          description: "Use FLUX_IMAGE for pictures. Use VIDEO_GENERATION for video clips." 
-                      },
-                      prompt: { type: Type.STRING, description: "The visual prompt or request text." }
-                  },
-                  required: ["target", "prompt"]
-              }
-          }
-      ]
-  };
-  
-  // FIX: `readCanvasTool` and `updateCanvasTool` are `FunctionDeclaration` objects, not `Tool` objects.
-  // They should be directly included in the `functionDeclarations` array.
-  const holodeckTools: Tool = {
-      functionDeclarations: [
-          readCanvasTool,
-          updateCanvasTool
-      ]
-  };
+      for (const toolId of enabledToolIds) {
+          const tool = allTools[toolId as keyof typeof allTools];
+          if (!tool) continue;
 
-  const pythonTool: Tool = {
-      functionDeclarations: [
-          {
-              name: "execute_python",
-              description: "Execute Python code in a sandboxed environment. Use for calculations, data analysis, or logic.",
-              parameters: {
-                  type: Type.OBJECT,
-                  properties: {
-                      code: { type: Type.STRING, description: "The Python code to execute." }
-                  },
-                  required: ["code"]
+          if (toolId === 'python' || toolId === 'filesystem') {
+              if (canExecute) {
+                  permitted.push(tool);
               }
+          } else {
+              permitted.push(tool);
           }
-      ]
-  };
-
-  const filesystemTool: Tool = {
-      functionDeclarations: [
-          {
-              name: "read_file",
-              description: "Read contents of a file from the host filesystem.",
-              parameters: {
-                  type: Type.OBJECT,
-                  properties: { path: { type: Type.STRING } },
-                  required: ["path"]
-              }
-          },
-          {
-              name: "list_directory",
-              description: "List files and directories at a path.",
-              parameters: {
-                  type: Type.OBJECT,
-                  properties: { path: { type: Type.STRING } },
-                  required: ["path"]
-              }
-          },
-          {
-              name: "write_file",
-              description: "Write content to a file.",
-              parameters: {
-                  type: Type.OBJECT,
-                  properties: { 
-                      path: { type: Type.STRING },
-                      content: { type: Type.STRING }
-                  },
-                  required: ["path", "content"]
-              }
-          },
-          {
-              name: "get_file_info",
-              description: "Get metadata for a file.",
-              parameters: {
-                  type: Type.OBJECT,
-                  properties: { path: { type: Type.STRING } },
-                  required: ["path"]
-              }
-          },
-          {
-              name: "search_files",
-              description: "Recursively search for files.",
-              parameters: {
-                  type: Type.OBJECT,
-                  properties: { 
-                      path: { type: Type.STRING },
-                      pattern: { type: Type.STRING }
-                  },
-                  required: ["path", "pattern"]
-              }
-          }
-      ]
-  };
-
-  // Determine Active Tools based on Permissions
-  const activeTools = [retrievalTool, googleMapsTool, routeRequestTool, holodeckTools, mediaGalleryTool];
-  const canExecute = currentAgent ? AccessControl.canPerform(accessLevel, SomaActionType.EXEC_CODE) : false;
-  const hasExecPerm = currentAgent?.permissions?.includes('EXECUTE_CODE') || canExecute;
-  
-  if (hasExecPerm) {
-      activeTools.push(pythonTool);
-      if (filesystemTool.functionDeclarations) {
-          activeTools.push({ functionDeclarations: filesystemTool.functionDeclarations });
       }
-  }
+      return permitted;
+  };
+
 
   // --- TOOL HANDLER ---
   const handleToolCall = async (toolCall: any): Promise<any[]> => {
@@ -486,7 +344,7 @@ const App: React.FC = () => {
       modelName: 'gemini-2.5-flash-native-audio-preview-12-2025',
       systemInstruction,
       voiceName: selectedVoice,
-      tools: activeTools,
+      tools: getPermittedTools(),
       onLog: (log) => {
           setLogs(prev => {
               if (log.isStreaming) {
@@ -902,6 +760,7 @@ const App: React.FC = () => {
             <button onClick={() => setIsHolodeckOpen(prev => !prev)} className={`btn btn-secondary btn-icon ${isHolodeckOpen ? 'active' : ''}`} title="Toggle Holodeck (Shared Visual Canvas)" style={isHolodeckOpen ? {borderColor: '#38bdf8', color: '#38bdf8'} : {}}>
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><line x1="9" y1="21" x2="9" y2="9"></line></svg>
             </button>
+            {renderTriggerBtn('TOOLS', <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg>, "Tool Manager")}
             {renderTriggerBtn('VOICE', <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>, "Voice Commands")}
             {renderTriggerBtn('FOCUS', <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>, "Room Focus")}
             {renderTriggerBtn('MEDIA', <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect><line x1="7" y1="2" x2="7" y2="22"></line><line x1="17" y1="2" x2="17" y2="22"></line><line x1="2" y1="12" x2="22" y2="12"></line><line x1="2" y1="7" x2="7" y2="7"></line><line x1="2" y1="17" x2="7" y2="17"></line><line x1="17" y1="17" x2="22" y2="17"></line><line x1="17" y1="7" x2="22" y2="7"></line></svg>, "Media Gallery")}
@@ -915,6 +774,7 @@ const App: React.FC = () => {
       {/* MAIN VIEWPORT */}
       <main className="main-viewport">
         {/* SIDE PANELS */}
+        {activeSidePanel === 'TOOLS' && <ToolManager isOpen={true} onClose={()=>setActiveSidePanel(null)} allTools={allTools} enabledToolIds={enabledToolIds} setEnabledToolIds={setEnabledToolIds} currentAgent={currentAgent} currentAccessLevel={accessLevel} />}
         {activeSidePanel === 'VOICE' && <VoiceCommandList isOpen={true} onOpen={()=>{}} onClose={()=>setActiveSidePanel(null)} />}
         {activeSidePanel === 'FOCUS' && <RoomFocusConfig isOpen={true} onOpen={()=>{}} onClose={()=>setActiveSidePanel(null)} />}
         {activeSidePanel === 'MEDIA' && <MediaGallery isOpen={true} onOpen={()=>{}} onClose={()=>setActiveSidePanel(null)} currentAgentId={currentAgentId} />}
