@@ -68,6 +68,7 @@ const App: React.FC = () => {
   const [voicePitch, setVoicePitch] = useState(0);
   const [accessLevel, setAccessLevel] = useState(AGENTS[0].accessLevel);
   const [modelMode, setModelMode] = useState<ModelMode>('STD');
+  const [hasGreeted, setHasGreeted] = useState(false);
 
   // Layout & View Modes
   const [layoutMode, setLayoutMode] = useState<'VOICE' | 'CHAT' | 'HYBRID' | 'VIDEO'>('VOICE');
@@ -210,7 +211,13 @@ const App: React.FC = () => {
                               attachment: routerRes.data?.split(',')[1], 
                               attachmentType: 'image'
                           }]);
-                          // Important: Tell the model it was displayed
+                          const agentName = AGENTS.find(a => a.id === currentAgentId)?.handle || 'AGENT';
+                          setLogs(prev => [...prev, {
+                              id: crypto.randomUUID(),
+                              type: 'system',
+                              text: `[ARCHIVAX LOG] Agent ${agentName} sent the user an image for prompt: "${args.prompt}".`,
+                              timestamp: Date.now()
+                          }]);
                           responses.push({ id: fc.id, name: fc.name, response: { result: "Image generated successfully and displayed to user." } });
                       } else if (routerRes.type === 'video' && routerRes.data) {
                           // Inject video into logs
@@ -221,6 +228,13 @@ const App: React.FC = () => {
                               timestamp: Date.now(),
                               attachment: routerRes.data?.split(',')[1], 
                               attachmentType: 'video'
+                          }]);
+                          const agentName = AGENTS.find(a => a.id === currentAgentId)?.handle || 'AGENT';
+                          setLogs(prev => [...prev, {
+                              id: crypto.randomUUID(),
+                              type: 'system',
+                              text: `[ARCHIVAX LOG] Agent ${agentName} sent the user a video for prompt: "${args.prompt}".`,
+                              timestamp: Date.now()
                           }]);
                           responses.push({ id: fc.id, name: fc.name, response: { result: "Video generated successfully and displayed to user." } });
                       } else {
@@ -390,6 +404,16 @@ const App: React.FC = () => {
       }
   }, [connectionState, analyser, isMicOn]);
 
+  // Agent Greeting
+  useEffect(() => {
+    if (connectionState === ConnectionState.CONNECTED && !hasGreeted) {
+        sendText("[SYSTEM: The session has started. Greet the user and ask how you can help.]");
+        setHasGreeted(true);
+    } else if (connectionState === ConnectionState.DISCONNECTED) {
+        setHasGreeted(false);
+    }
+  }, [connectionState, hasGreeted, sendText]);
+
   // Auto-focus Input Listener
   useEffect(() => {
       if (connectionState === ConnectionState.CONNECTED) {
@@ -486,6 +510,8 @@ const App: React.FC = () => {
           setActiveSidePanel('SETTINGS');
           return;
       }
+      setLayoutMode('CHAT');
+      setHasGreeted(false);
       connect();
   };
 
@@ -693,6 +719,13 @@ const App: React.FC = () => {
               timestamp: Date.now(), 
               attachment: data, 
               attachmentType: type 
+          }]);
+          
+          setLogs(prev => [...prev, {
+              id: crypto.randomUUID(),
+              type: 'system',
+              text: `[ARCHIVAX LOG] User sent a ${type} file: "${file.name}".`,
+              timestamp: Date.now()
           }]);
 
           // Live Session Interactions
