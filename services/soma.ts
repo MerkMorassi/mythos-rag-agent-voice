@@ -135,38 +135,4 @@ export class SomaKernel {
         if (active.length === 0) return AGENTS.slice(0, 3);
         return active;
     }
-
-    /**
-     * Resolves which agents should respond to a user message (Routing Logic).
-     */
-    public resolveRouting(userMessage: string, availableAgents: Agent[]): Agent[] {
-        const mentions = this.parseMentions(userMessage, availableAgents);
-        
-        // 1. Direct Mention Priority
-        if (mentions.length > 0) {
-            return mentions;
-        }
-
-        // Filter agents capable of ROUTE_EXTERNAL if the prompt asks for images?
-        if (userMessage.toLowerCase().includes('image') || userMessage.toLowerCase().includes('visual')) {
-            return availableAgents.filter(a => {
-                const node = this.nodes.get(a.id);
-                return node && (AccessControl.canPerform(node.accessLevel, SomaActionType.ROUTE_REQUEST) || (node.permissions?.includes('ROUTE_EXTERNAL')));
-            });
-        }
-
-        return availableAgents; 
-    }
-
-    private parseMentions(text: string, agents: Agent[]): Agent[] {
-        const mentioned: Agent[] = [];
-        const lower = text.toLowerCase();
-        
-        agents.forEach(a => {
-            if (lower.includes(`@${a.handle.toLowerCase()}`) || lower.includes(`${a.handle.toLowerCase()}:`)) {
-                mentioned.push(a);
-            }
-        });
-        return mentioned;
-    }
 }

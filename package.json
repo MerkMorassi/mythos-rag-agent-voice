@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "start": "vite --port 7860 --host 0.0.0.0",
+    "start": "vite --host",
     "cleanup": "node scripts/cleanup.js"
   },
   "dependencies": {

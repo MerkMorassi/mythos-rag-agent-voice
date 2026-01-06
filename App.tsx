@@ -234,11 +234,13 @@ const App: React.FC = () => {
       ]
   };
   
+  // FIX: `readCanvasTool` and `updateCanvasTool` are `FunctionDeclaration` objects, not `Tool` objects.
+  // They should be directly included in the `functionDeclarations` array.
   const holodeckTools: Tool = {
       functionDeclarations: [
-          readCanvasTool.functionDeclarations ? readCanvasTool.functionDeclarations[0] : readCanvasTool,
-          updateCanvasTool.functionDeclarations ? updateCanvasTool.functionDeclarations[0] : updateCanvasTool
-      ].filter(Boolean) as any
+          readCanvasTool,
+          updateCanvasTool
+      ]
   };
 
   const pythonTool: Tool = {

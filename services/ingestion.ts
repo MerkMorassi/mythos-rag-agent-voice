@@ -115,66 +115,6 @@ export class IngestionService {
         return processed;
     }
 
-    static async parseLorePack(input: string | Blob, defaultAgentId: string = 'UNKNOWN'): Promise<IngestionResult> {
-        try {
-            let fileBlob: Blob;
-            if (typeof input === 'string') {
-                if (!input || input.trim().length === 0) throw new Error("Input is empty");
-                fileBlob = new Blob([input], { type: 'application/json' });
-            } else {
-                fileBlob = input;
-            }
-
-            const docs: KnowledgeDoc[] = [];
-            let header: LorePackHeader = NumMarkX_GenerateHeader(defaultAgentId, defaultAgentId, "Imported Pack");
-            let count = 0;
-
-            for await (const obj of IngestionService.streamLorePack(fileBlob)) {
-                if (obj.schema === 'MYTHOS.LOREPACK.v1' || (obj.agentId && obj.handle)) {
-                    header = {
-                         schema: 'MYTHOS.LOREPACK.v1',
-                         id: obj.id || crypto.randomUUID(),
-                         agentId: obj.agentId || defaultAgentId,
-                         handle: obj.handle || obj.agentId || defaultAgentId,
-                         version: obj.version || 1,
-                         timestamp: obj.timestamp || Date.now(),
-                         description: obj.description,
-                         name: obj.name
-                    };
-                } else {
-                    // Check if obj is array (handle bulk array structure)
-                    if (Array.isArray(obj)) {
-                        obj.forEach(sub => docs.push(IngestionService.normalizeNode(sub, header.agentId, count++)));
-                    } else if (obj) {
-                        docs.push(IngestionService.normalizeNode(obj, header.agentId, count++));
-                    }
-                }
-            }
-
-            return {
-                success: true,
-                header,
-                docs,
-                stats: {
-                    total: docs.length,
-                    withVectors: docs.filter(d => d.embedding).length,
-                    avgSize: docs.length > 0 ? Math.round(docs.reduce((acc, c) => acc + c.content.length, 0) / docs.length) : 0,
-                    existingSigils: docs.filter(d => d.numMarkId).length
-                }
-            };
-
-        } catch (e: any) {
-            console.error("[Forge] Ingestion Failed:", e);
-            return {
-                success: false,
-                header: NumMarkX_GenerateHeader('ERROR', 'ERROR'),
-                docs: [],
-                error: e.message,
-                stats: { total: 0, withVectors: 0, avgSize: 0, existingSigils: 0 }
-            };
-        }
-    }
-
     static async ingestText(text: string, filename: string, agentId: string, apiKey: string, onProgress?: (processed: number, total: number) => void): Promise<number> {
         // Yield to let UI render initial "Processing" state
         await new Promise(r => setTimeout(r, 10));
@@ -415,56 +355,85 @@ export class IngestionService {
         return new Blob(parts, { type: 'application/json' });
     }
 
-    // --- REPLACED CHUNKER WITH ROBUST LEGACY ALGORITHM ---
-    // Breaks scripts into semantic blocks with robust loop safety.
+    // --- RECURSIVE CHUNK TEXT ---
+    // Hierarchical chunking: Headers > Paragraphs > Sentences > Words
     static chunkText(text: string, chunkSize: number = 1000, overlap: number = 200): string[] {
-        const chunks: string[] = [];
-        let start = 0;
+        // 1. Recursive splitting logic
+        const recursiveSplit = (str: string, separators: string[]): string[] => {
+            const finalChunks: string[] = [];
+            const separator = separators[0];
+            const remainingSeparators = separators.slice(1);
+            
+            // Base Case: If chunk is small enough, return it
+            if (str.length <= chunkSize) return [str];
+            
+            // Fallback: If no separators left, hard split
+            if (separators.length === 0) {
+                for (let i = 0; i < str.length; i += chunkSize - overlap) {
+                    finalChunks.push(str.slice(i, i + chunkSize));
+                }
+                return finalChunks;
+            }
+
+            // Split by current separator
+            // Use regex to lookahead for headers (keep headers attached)
+            let parts: string[] = [];
+            if (separator.includes('#')) {
+                // Split before the header
+                // Note: JS split consumes separator unless captured. 
+                // We use positive lookahead regex to match position before header
+                const regex = new RegExp(`(?=${separator})`); 
+                parts = str.split(regex);
+            } else {
+                // For paragraphs/newlines, we consume the separator but might want to re-inject it for readability
+                // Here we just split
+                parts = str.split(separator);
+            }
+
+            let currentChunk = '';
+            
+            for (const part of parts) {
+                if (!part.trim()) continue;
+                
+                // Determine joiner based on separator type
+                const joiner = separator.includes('#') ? '' : (separator.includes('\n') ? '\n\n' : ' ');
+
+                if (part.length > chunkSize) {
+                    // Part is too big, flush current buffer first
+                    if (currentChunk) {
+                        finalChunks.push(currentChunk.trim());
+                        currentChunk = '';
+                    }
+                    // Recurse on the big part
+                    const subChunks = recursiveSplit(part, remainingSeparators);
+                    finalChunks.push(...subChunks);
+                } else {
+                    // Accumulate
+                    const nextPotential = currentChunk ? (currentChunk + joiner + part) : part;
+                    
+                    if (nextPotential.length > chunkSize) {
+                        finalChunks.push(currentChunk.trim());
+                        
+                        // Overlap Logic: Take tail of previous chunk to start new one
+                        const overlapTxt = currentChunk.slice(-overlap);
+                        currentChunk = overlapTxt + joiner + part;
+                    } else {
+                        currentChunk = nextPotential;
+                    }
+                }
+            }
+            if (currentChunk.trim()) finalChunks.push(currentChunk.trim());
+            
+            return finalChunks;
+        };
+
+        // 2. Define delimiters in order of semantic importance
+        // Headers -> Double Newline (Para) -> Single Newline -> Sentence -> Space
+        const delimiters = ['\n# ', '\n## ', '\n### ', '\n\n', '\n', '. ', ' '];
         
-        // Normalize line endings
+        // Normalize line endings before processing
         const cleanText = text.replace(/\r\n/g, '\n');
-
-        // Safety check for empty files
-        if (!cleanText || cleanText.length === 0) return [];
-
-        while (start < cleanText.length) {
-            const end = Math.min(start + chunkSize, cleanText.length);
-            let chunk = cleanText.slice(start, end);
-            
-            // Smart Break: Try to break at a double newline (Scene break)
-            // rather than mid-sentence.
-            const lastSceneBreak = chunk.lastIndexOf('\n\n');
-            let actualEnd = end;
-
-            // Only snap back if the break isn't too far back (loss of progress)
-            if (lastSceneBreak > chunkSize * 0.5) {
-                 actualEnd = start + lastSceneBreak + 2; 
-                 chunk = cleanText.slice(start, actualEnd);
-            }
-
-            const trimmed = chunk.trim();
-            if (trimmed.length > 0) {
-                chunks.push(trimmed);
-            }
-            
-            // CRITICAL FIX: Loop Progression
-            // If we reached the end of the text, break immediately.
-            if (actualEnd >= cleanText.length) break;
-
-            // Calculate the next step
-            // We normally step forward by length minus overlap.
-            let step = chunk.length - overlap;
-
-            // GUARD RAIL: If the chunk is smaller than the overlap (e.g. short scene),
-            // step would be negative/zero, causing an infinite loop.
-            // We force a minimum step of 1 to ensure forward momentum.
-            if (step < 1) {
-                step = 1; 
-            }
-
-            start += step; 
-        }
         
-        return chunks;
+        return recursiveSplit(cleanText, delimiters);
     }
 }

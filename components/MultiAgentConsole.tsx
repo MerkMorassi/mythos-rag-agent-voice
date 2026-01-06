@@ -14,6 +14,7 @@ import {
 } from '../services/db';
 import { RoomFocusService } from '../services/roomFocus';
 import { IngestionService } from '../services/ingestion';
+import { ProductionBoard } from './ProductionBoard';
 
 interface MultiAgentConsoleProps {
     onExit: () => void;
@@ -42,8 +43,10 @@ export const MultiAgentConsole: React.FC<MultiAgentConsoleProps> = ({ onExit }) 
     const [attachment, setAttachment] = useState<AgentAttachment | null>(null);
     const [attachmentPreview, setAttachmentPreview] = useState<string | null>(null);
     
-    // Modal State for Missing Lore
+    // Modal State
     const [missingLoreModal, setMissingLoreModal] = useState<{ isOpen: boolean, missingIds: string[] }>({ isOpen: false, missingIds: [] });
+    const [showProductionBoard, setShowProductionBoard] = useState(false);
+    
     // Tracks which agent we are currently uploading for
     const [uploadTargetId, setUploadTargetId] = useState<string | null>(null);
 
@@ -535,6 +538,8 @@ ${focus.rules.map(r => "- " + r).join('\n')}
 
     return (
         <div className="council-layout">
+            <ProductionBoard isOpen={showProductionBoard} onClose={() => setShowProductionBoard(false)} />
+
             {/* MISSING LORE MODAL */}
             {missingLoreModal.isOpen && (
                 <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.8)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -638,6 +643,7 @@ ${focus.rules.map(r => "- " + r).join('\n')}
                         </span>
                     </div>
                     <div className="flex-group">
+                        <button onClick={() => setShowProductionBoard(prev => !prev)} className={`btn btn-xs ${showProductionBoard ? 'active-green' : 'btn-secondary'}`} title="Open Production Kanban">PIPELINE</button>
                         <button onClick={handleClearHistory} className="btn btn-danger btn-xs" title="Clear visual transcript (Does not wipe memory)">CLEAR TRANSCRIPT</button>
                         <button onClick={onExit} className="btn btn-secondary btn-xs" style={{ borderColor: '#facc15', color: '#facc15' }} title="Return to Main View">EXIT TO UPLINK</button>
                     </div>

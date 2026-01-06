@@ -287,11 +287,12 @@ export const ExternalRouter = {
 
     async saveGeneratedImage(urlOrBase64: string, prompt: string, agent: { id: string, handle: string }) {
         try {
-            let finalData = urlOrBase64;
+            let finalData: string = urlOrBase64;
             if (urlOrBase64.startsWith('http')) {
                 const imgRes = await fetch(urlOrBase64);
                 const blob = await imgRes.blob();
-                finalData = await new Promise((resolve) => {
+                // FIX: Add generic type to Promise to ensure `finalData` is a string.
+                finalData = await new Promise<string>((resolve) => {
                     const reader = new FileReader();
                     reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
                     reader.readAsDataURL(blob);

@@ -1,20 +1,37 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
 
-# Run and deploy your AI Studio app
+# MythOS COMMS - Local Setup
 
-This contains everything you need to run your app locally.
+This is a Vite-based React application for real-time voice conversations with Gemini, grounded in a local knowledge base.
 
-View your app in AI Studio: https://ai.studio/apps/drive/10QPZoYFdcUNoPLTGsmqisuqxSI2NbqrO
+## Prerequisites
 
-## Run Locally
+- **Node.js and npm:** You must have Node.js (which includes npm) installed on your machine.
 
-**Prerequisites:**  Node.js
+## 1. Setup
 
+First, open your terminal in the project's root directory and install the necessary dependencies by running:
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+```bash
+npm install
+```
+
+## 2. Environment Configuration
+
+Next, create a file named `.env` in the root of the project. This file will hold your secret API keys. Add your Google Gemini API key to it like this:
+
+```
+# .env file
+API_KEY="AIza..."
+```
+
+*The application is pre-configured to read this `API_KEY` variable automatically.*
+
+## 3. Running the Application
+
+To start the local development server on **port 4000**, run the following command in your terminal:
+
+```bash
+npm start
+```
+
+This command executes the `start` script defined in `package.json`, which launches the Vite server. Your default web browser should open automatically to `http://localhost:4000`.
