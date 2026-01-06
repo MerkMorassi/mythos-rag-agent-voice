@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { ModelConfig, DEFAULT_MODEL_CONFIG } from '../types';
 import { getSavedPromptsByAgentId, SavedPrompt, deleteSavedPrompt, getAgentConfig } from '../services/db';
@@ -76,8 +75,7 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
   // API Credentials State
   const [geminiKey, setGeminiKey] = useState('');
   const [hfToken, setHfToken] = useState('');
-  const [openlKey, setOpenlKey] = useState('');
-  const [veniceKey, setVeniceKey] = useState('');
+  const [dolphinUrl, setDolphinUrl] = useState('');
 
   useEffect(() => {
       if (isOpen) {
@@ -88,8 +86,7 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
           setLocalAccessLevel(agentAccessLevel || '400');
           setGeminiKey(localStorage.getItem('gemini_api_key') || '');
           setHfToken(localStorage.getItem('hf_token') || '');
-          setOpenlKey(localStorage.getItem('openl_api_key') || '');
-          setVeniceKey(localStorage.getItem('venice_api_key') || '');
+          setDolphinUrl(localStorage.getItem('dolphin_url') || '');
       }
   }, [isOpen, agentId, agentAccessLevel]);
 
@@ -185,11 +182,8 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
         if (hfToken) localStorage.setItem('hf_token', hfToken);
         else localStorage.removeItem('hf_token');
 
-        if (openlKey) localStorage.setItem('openl_api_key', openlKey);
-        else localStorage.removeItem('openl_api_key');
-
-        if (veniceKey) localStorage.setItem('venice_api_key', veniceKey);
-        else localStorage.removeItem('venice_api_key');
+        if (dolphinUrl) localStorage.setItem('dolphin_url', dolphinUrl);
+        else localStorage.removeItem('dolphin_url');
 
         await onSave(voiceBase64, localAccessLevel, voiceSpeed, voicePitch);
         setSaveSuccess(true);
@@ -272,12 +266,12 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
                         />
                     </div>
                     <div>
-                        <label className="form-label">VENICE AI API KEY (Uncensored / NSFW)</label>
+                        <label className="form-label">DOLPHIN / HF SPACE URL (Fallback LLM)</label>
                         <input 
-                            type="password"
-                            value={veniceKey}
-                            onChange={(e) => setVeniceKey(e.target.value)}
-                            placeholder="Key..."
+                            type="text"
+                            value={dolphinUrl}
+                            onChange={(e) => setDolphinUrl(e.target.value)}
+                            placeholder="https://...hf.space/v1"
                             className="form-input"
                             style={{ fontFamily: 'monospace' }}
                         />
@@ -289,17 +283,6 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
                             value={hfToken}
                             onChange={(e) => setHfToken(e.target.value)}
                             placeholder="hf_..."
-                            className="form-input"
-                            style={{ fontFamily: 'monospace' }}
-                        />
-                    </div>
-                    <div>
-                        <label className="form-label">OPENL.IO API KEY (Translate - Optional)</label>
-                        <input 
-                            type="password"
-                            value={openlKey}
-                            onChange={(e) => setOpenlKey(e.target.value)}
-                            placeholder="Key..."
                             className="form-input"
                             style={{ fontFamily: 'monospace' }}
                         />

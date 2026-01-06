@@ -1,4 +1,3 @@
-
 import { KnowledgeDoc, LorePack, LorePackHeader, GraphNode, GraphEdge } from '../types';
 import { NumMarkX_GenerateHeader, NumMarkX_GenerateID, NumMarkX_GenerateSigil } from '../patterns/NumMarkX';
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
@@ -344,15 +343,37 @@ export class IngestionService {
         };
     }
 
+    /**
+     * AIR-TIGHT EXPORT (UNIFIED CODEX SCHEMA)
+     * Uses JSON.stringify for structural integrity.
+     * Aligns schema with Standalone App (Flat Root).
+     */
     static exportLorePack(header: LorePackHeader, docs: KnowledgeDoc[]): Blob {
-        const parts: BlobPart[] = [];
-        parts.push(`{\n  "header": ${JSON.stringify(header, null, 2)},\n  "sacred_archive": [`);
-        for (let i = 0; i < docs.length; i++) {
-            const docStr = JSON.stringify(docs[i]); 
-            parts.push(i === 0 ? "\n    " + docStr : ",\n    " + docStr);
-        }
-        parts.push("\n  ]\n}");
-        return new Blob(parts, { type: 'application/json' });
+        const cleanId = header.agentId.replace(/^agent-/i, '').toUpperCase();
+
+        const pack = {
+            schema: "MYTHOS.LOREPACK.v1",
+            agentId: cleanId,
+            handle: header.handle,
+            version: header.version || 1,
+            timestamp: new Date().toISOString(),
+            description: header.description || "Exported via MythOS Forge",
+            count: docs.length,
+            sacred_archive: docs
+        };
+
+        return new Blob([JSON.stringify(pack, null, 2)], { type: 'application/json' });
+    }
+    
+    /**
+     * CANONICAL FILENAME GENERATOR
+     * Enforces the "MYTHOS.LORE.[SOVEREIGN].LOREPACK.[DATE]" standard.
+     * Strips "agent-" prefixes and uppercases the ID.
+     */
+    static buildCanonicalFilename(agentId: string): string {
+        const cleanId = agentId.replace(/^agent-/i, '').toUpperCase();
+        const date = new Date().toISOString().slice(0, 10);
+        return `MYTHOS.LORE.${cleanId}.LOREPACK.${date}.json`;
     }
 
     // --- RECURSIVE CHUNK TEXT ---
@@ -437,18 +458,3 @@ export class IngestionService {
         return recursiveSplit(cleanText, delimiters);
     }
 }
-
-/**
- * Standardizes the LorePack filename to match the Standalone App.
- * Converts 'agent-barbelo' -> 'MYTHOS.LORE.BARBELO.LOREPACK.YYYY-MM-DD.json'
- */
-export const buildCanonicalFilename = (rawId: string): string => {
-    // 1. Strip the "agent-" prefix if it exists and Uppercase
-    const cleanId = rawId.replace(/^agent-/i, '').toUpperCase();
-    
-    // 2. Get the date string (YYYY-MM-DD)
-    const date = new Date().toISOString().slice(0, 10);
-    
-    // 3. Construct the Sovereign Name
-    return `MYTHOS.LORE.${cleanId}.LOREPACK.${date}.json`;
-};

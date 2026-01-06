@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { MultiAgentMessage, LogMessage, KnowledgeDoc, ChatSession } from '../types';
 import { MultiAgentService, AgentAttachment } from '../services/multiAgent';
@@ -505,6 +504,8 @@ ${focus.rules.map(r => "- " + r).join('\n')}
                 currentRoster,
                 currentAttachment,
                 0, // Initial Depth
+                // Cost logging callback
+                (log) => addMessage('SYSTEM', 'USAGE', log, 'system'),
                 // VISUAL CALLBACK FOR DELEGATION
                 (delegatedTarget) => {
                     updateMessage(msgId, `[SYNAPSE ACTIVE] Consulting ${delegatedTarget}...`);

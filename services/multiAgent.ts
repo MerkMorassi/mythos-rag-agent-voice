@@ -1,5 +1,4 @@
-
-import { GoogleGenAI, FunctionDeclaration, Type, Tool } from "@google/genai";
+import { GoogleGenAI, FunctionDeclaration, Type, Tool, FinishReason, Content } from "@google/genai";
 import { Agent, MultiAgentMessage, SomaActionType } from "../types";
 import { searchDocuments, getAgentConfig, getGraphContext, getCanvas, updateCanvas } from "./db";
 import { RetrievalGate } from "./retrievalGate";
@@ -10,15 +9,18 @@ import { PythonSandbox } from "./pythonSandbox";
 import { uploadCloudFile, waitForFileActive } from "./googleFiles";
 import { saveMediaAsset } from "./db";
 import { NumMarkX_GenerateID } from "../patterns/NumMarkX";
+import { AccessControl } from "./accessControl";
+import { GeminiProvider } from "./llmProviders/geminiProvider";
+import { DolphinProvider } from "./llmProviders/dolphinProvider";
+import { ILLMProvider } from "./llmProviders/ILLMProvider";
 
-// Standard model for text chat - Upgraded to Pro for best reasoning
-const CHAT_MODEL = "gemini-3-pro-preview"; 
 
 export interface AgentResponse {
     agentId: string;
     text: string;
     error?: string;
     audioUrl?: string; 
+    cost?: number; // Add cost to the response
 }
 
 export interface AgentAttachment {
@@ -314,49 +316,125 @@ export const MultiAgentService = {
         activeRoster: Agent[],
         attachment?: AgentAttachment | null,
         depth: number = 0, // RECURSION GUARD
+        onLogCost?: (log: string) => void,
         onDelegate?: (targetId: string) => void // VISUAL CALLBACK
     ): Promise<AgentResponse> {
         
         const kernel = SomaKernel.getInstance();
-        
-        // 0. HEARTBEAT & SYNC
         await kernel.heartbeat(agent.id);
 
-        // RECURSION GUARD
         if (depth > 3) {
             return { agentId: agent.id, text: "[SYSTEM ERROR: Collaboration Depth Exceeded. Aborting chain.]" };
         }
+        
+        // --- PROVIDER & KEY SETUP ---
+        const geminiApiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY;
+        if (!geminiApiKey) {
+            return { agentId: agent.id, text: "[SYSTEM ERROR: Gemini API Key Missing.]", error: "API Key Missing" };
+        }
+        const geminiProvider = new GeminiProvider(geminiApiKey);
 
-        // 1. SAFETY & ROUTING PRE-CHECK (NSFW GUARD)
-        if (attachment && attachment.name && (
-            attachment.name.toLowerCase().includes('nsfw') || 
-            attachment.name.toLowerCase().includes('restricted') ||
-            attachment.name.toLowerCase().includes('uncensored')
-        )) {
-            // Permission Check: Does agent have ROUTE_EXTERNAL permission?
-            if (!kernel.authorize(agent.id, SomaActionType.ROUTE_REQUEST)) {
-                return { agentId: agent.id, text: `[ACCESS DENIED] My security protocols (SOMA Level ${agent.accessLevel}) prevent me from handling restricted content.` };
+        const dolphinUrl = localStorage.getItem('dolphin_url');
+        const hfToken = localStorage.getItem('hf_token') || process.env.HF_TOKEN;
+        let dolphinProvider: DolphinProvider | null = null;
+        if(dolphinUrl && hfToken) {
+            dolphinProvider = new DolphinProvider(dolphinUrl, hfToken);
+        }
+
+        // --- RAG & CONTEXT PREPARATION ---
+        const gate = RetrievalGate.evaluate(userMessage, agent.id);
+        let ragContext = "";
+        if (gate.shouldRetrieve) {
+            try {
+                const embedAi = new GoogleGenAI({ apiKey: geminiApiKey });
+                const embedRes = await embedAi.models.embedContent({ model: 'text-embedding-004', contents: [{ parts: [{ text: userMessage }] }] });
+                const vec = embedRes.embeddings?.[0]?.values;
+                ragContext = gate.strategy.startsWith('GRAPH') 
+                    ? await getGraphContext(userMessage, vec, agent.id)
+                    : "### CONTEXT ###\n" + (await searchDocuments(userMessage, vec, agent.id)).map(d => `- ${d.content.substring(0, 500)}...`).join('\n') + "\n### END CONTEXT ###";
+            } catch (e) { console.warn("[RAG] Retrieval failed", e); }
+        }
+
+        const agentConfig = await getAgentConfig(agent.id);
+        const finalInstruction = `${globalInstructions}\n\n${agentConfig.systemInstruction || agent.system_instruction}\n\n${ragContext}\n\n${roomFocusContext}`;
+        
+        const historyForModel = history.filter(m => m.msgType === 'utterance').map(m => ({
+            role: m.senderId === 'USER' ? 'user' : 'model',
+            parts: [{ text: m.senderId === 'USER' ? m.text : `[${m.senderName}]: ${m.text}` }]
+        }));
+
+        const requestContents: Content[] = [
+            ...historyForModel.slice(-10),
+            { role: 'user', parts: [{ text: userMessage }] }
+        ];
+
+        if (attachment) {
+            const userTurn = requestContents[requestContents.length - 1];
+            if (attachment.type === 'image' || attachment.type === 'video') {
+                userTurn.parts.unshift({ inlineData: { mimeType: attachment.mimeType, data: attachment.content } });
+            } else if (attachment.type === 'text') {
+                userTurn.parts.push({ text: `\n\n[ATTACHED FILE: ${attachment.name}]\n${attachment.content.substring(0, 5000)}` });
+            }
+        }
+        
+        // --- TOOL PREPARATION ---
+        const agentTools: Tool[] = [];
+        const agentPerms = AccessControl.resolve(agent.accessLevel);
+        if (agentPerms.includes('EXECUTE_CODE')) agentTools.push({ functionDeclarations: [pythonTool] });
+        if (agentPerms.includes('ROUTE_EXTERNAL') || agentPerms.includes('GENERATE_MEDIA')) agentTools.push({ functionDeclarations: [routeRequestTool] });
+        if (agentPerms.includes('COLLABORATE') || agentPerms.includes('BROADCAST_COUNCIL')) agentTools.push({ functionDeclarations: [consultAgentTool, readCanvasTool, updateCanvasTool] });
+        if (agentPerms.includes('WRITE_CANON')) agentTools.push({ functionDeclarations: [greenlightTool] });
+        
+        // --- MODEL EXECUTION FLOW ---
+        let finalResultText: string | null = "[Execution Failed]";
+        let finalCost = 0;
+
+        try {
+            // 1. Attempt with Primary Provider (Gemini)
+            let primaryResponse = await geminiProvider.generateResponse(requestContents, { tools: agentTools, modelConfig: agentConfig.modelConfig });
+            finalCost += primaryResponse.usage.estimatedCostUsd;
+
+            if (onLogCost) onLogCost(`[USAGE] ${geminiProvider.name}: ${primaryResponse.usage.inputTokens} IN, ${primaryResponse.usage.outputTokens} OUT. Cost: $${primaryResponse.usage.estimatedCostUsd.toFixed(6)}`);
+
+            // 2. Handle Safety Refusal Fallback
+            if (primaryResponse.isSafetyRefusal && dolphinProvider) {
+                if (onLogCost) onLogCost(`[ROUTER] Gemini Refusal (SAFETY). Routing to ${dolphinProvider.name}.`);
+                const fallbackResponse = await dolphinProvider.generateResponse(requestContents, { modelConfig: agentConfig.modelConfig });
+                finalResultText = fallbackResponse.content;
+                // No cost for Dolphin, but log usage
+                if (onLogCost) onLogCost(`[USAGE] ${dolphinProvider.name}: ${fallbackResponse.usage.inputTokens} IN, ${fallbackResponse.usage.outputTokens} OUT.`);
+            } 
+            // 3. Handle Tool Calls if Gemini succeeded
+            else if (primaryResponse.functionCalls) {
+                // TODO: Implement tool call handling logic here
+                finalResultText = "[Tool Call Detected, but not yet implemented in this refactor.]";
+            } 
+            // 4. Handle regular text response
+            else {
+                finalResultText = primaryResponse.content;
             }
 
-            console.warn(`[SAFETY] Attachment '${attachment.name}' flagged. Routing to External Cluster.`);
-            
-            const safetyPrompt = `[SYSTEM: The user attached a file named '${attachment.name}' flagged as NSFW/Restricted. It has been withheld from the primary model. The user's text prompt is: "${userMessage}". Please respond to the user's text prompt within your persona (${agent.handle}: ${agent.title}), acknowledging you cannot see the image but proceeding with the conversation.]`;
-            
-            try {
-                const routerRes = await ExternalRouter.route(
-                    'DOLPHIN_LLM', 
-                    safetyPrompt, 
-                    { id: agent.id, handle: agent.handle }
-                );
-
-                if (routerRes.success) {
-                    return {
-                        agentId: agent.id,
-                        text: routerRes.data || "[External Model Returned Empty Response]"
-                    };
-                } else {
-                    return {
-                        agentId: agent.id,
-                        text: `[SYSTEM] Safety routing failed: ${routerRes.error}`
-                    };
+        } catch (error: any) {
+            // 5. Handle Thrown Errors (including safety blocks)
+             if ((error.message?.toLowerCase().includes("safety") || error.message?.toLowerCase().includes("blocked")) && dolphinProvider) {
+                if (onLogCost) onLogCost(`[ROUTER] Gemini Refusal (Error: ${error.message}). Routing to ${dolphinProvider.name}.`);
+                try {
+                    const fallbackResponse = await dolphinProvider.generateResponse(requestContents, { modelConfig: agentConfig.modelConfig });
+                    finalResultText = fallbackResponse.content;
+                    if (onLogCost) onLogCost(`[USAGE] ${dolphinProvider.name}: ${fallbackResponse.usage.inputTokens} IN, ${fallbackResponse.usage.outputTokens} OUT.`);
+                } catch(e: any) {
+                    return { agentId: agent.id, text: `[SYSTEM] Fallback routing also failed: ${e.message}`, error: e.message, cost: finalCost };
                 }
+            } else {
+                console.error(`[SOMA] Agent ${agent.handle} failed query:`, error);
+                return { agentId: agent.id, text: `[SYSTEM ERROR: Query failed - ${error.message}]`, error: error.message, cost: finalCost };
+            }
+        }
+        
+        return {
+            agentId: agent.id,
+            text: finalResultText || "[No Response Text]",
+            cost: finalCost
+        };
+    }
+};
