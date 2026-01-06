@@ -1,4 +1,3 @@
-
 import { saveMediaAsset, getAgentConfig } from "./db";
 import { MediaAsset } from "../types";
 import { NumMarkX_GenerateID } from "../patterns/NumMarkX";
@@ -143,7 +142,8 @@ export const ExternalRouter = {
             }
 
             if (operation.error) {
-                throw new Error(operation.error.message);
+                // FIX: The type of operation.error.message can be uncertain. Cast to string for safety.
+                throw new Error(String((operation.error as any).message));
             }
 
             const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri;

@@ -1,9 +1,8 @@
-
 import React, { useState, useEffect } from 'react';
 import { GoogleGenAI } from '@google/genai';
 import { LogMessage, ChatSession, KnowledgeDoc } from '../types';
 import { saveChatSession, getAllChatSessions, deleteChatSession, addDocument } from '../services/db';
-import { IngestionService } from '../services/ingestion';
+import { IngestionService, buildCanonicalFilename } from '../services/ingestion';
 import { NumMarkX_GenerateHeader, NumMarkX_GenerateID, NumMarkX_GenerateSigil } from '../patterns/NumMarkX';
 
 interface ChatHistoryManagerProps {
@@ -133,7 +132,7 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = `MythOS_LorePack_${session.title.replace(/[^a-z0-9]/gi, '_')}.json`;
+      link.download = buildCanonicalFilename(currentAgentId);
       link.click();
       
       // CRITICAL FIX: Delay revocation for large files

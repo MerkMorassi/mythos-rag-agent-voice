@@ -437,3 +437,18 @@ export class IngestionService {
         return recursiveSplit(cleanText, delimiters);
     }
 }
+
+/**
+ * Standardizes the LorePack filename to match the Standalone App.
+ * Converts 'agent-barbelo' -> 'MYTHOS.LORE.BARBELO.LOREPACK.YYYY-MM-DD.json'
+ */
+export const buildCanonicalFilename = (rawId: string): string => {
+    // 1. Strip the "agent-" prefix if it exists and Uppercase
+    const cleanId = rawId.replace(/^agent-/i, '').toUpperCase();
+    
+    // 2. Get the date string (YYYY-MM-DD)
+    const date = new Date().toISOString().slice(0, 10);
+    
+    // 3. Construct the Sovereign Name
+    return `MYTHOS.LORE.${cleanId}.LOREPACK.${date}.json`;
+};

@@ -1,4 +1,3 @@
-
 # MythOS COMMS - Local Setup
 
 This is a Vite-based React application for real-time voice conversations with Gemini, grounded in a local knowledge base.
