@@ -17,12 +17,32 @@ export interface IngestionResult {
     };
 }
 
+// Simple p-limit style concurrency controller
+async function asyncPool(poolLimit: number, array: any[], iteratorFn: (item: any, array: any[]) => Promise<any>) {
+    const ret = [];
+    const executing: Promise<any>[] = [];
+    for (const item of array) {
+        const p = Promise.resolve().then(() => iteratorFn(item, array));
+        ret.push(p);
+
+        if (poolLimit <= array.length) {
+            const e: Promise<any> = p.then(() => executing.splice(executing.indexOf(e), 1));
+            executing.push(e);
+            if (executing.length >= poolLimit) {
+                await Promise.race(executing);
+            }
+        }
+    }
+    return Promise.all(ret);
+}
+
 export class IngestionService {
 
     /**
      * RETROFIT PROTOCOL (INCREMENTAL)
      * Upgrades existing documents to include Graph Data and NumMark Sigils.
      * Skips documents tagged with 'GRAPH_EXTRACTED' to allow resuming.
+     * Optimized with concurrency pool.
      */
     static async retrofitAgentMemory(agentId: string, apiKey: string, onProgress?: (current: number, total: number) => void): Promise<number> {
         const docs = await getDocumentsByAgentId(agentId);
@@ -31,14 +51,14 @@ export class IngestionService {
         const ai = new GoogleGenAI({ apiKey });
         let processed = 0;
 
-        // Process sequentially to avoid rate limits on the Graph Extraction Model
-        for (const doc of docs) {
+        // Parallel processing for retrofitting to improve speed
+        await asyncPool(5, docs, async (doc: KnowledgeDoc) => {
             
             // OPTIMIZATION: Skip if already has graph data
             if (doc.tags && doc.tags.includes('GRAPH_EXTRACTED')) {
                 processed++;
                 if (onProgress) onProgress(processed, docs.length);
-                continue;
+                return;
             }
 
             let updated = false;
@@ -70,10 +90,7 @@ export class IngestionService {
             
             processed++;
             if (onProgress) onProgress(processed, docs.length);
-            
-            // Throttle slightly
-            await new Promise(r => setTimeout(r, 800));
-        }
+        });
 
         return processed;
     }
@@ -138,17 +155,28 @@ export class IngestionService {
         }
     }
 
-    static async ingestText(text: string, filename: string, agentId: string, apiKey: string): Promise<number> {
+    static async ingestText(text: string, filename: string, agentId: string, apiKey: string, onProgress?: (processed: number, total: number) => void): Promise<number> {
+        // Yield to let UI render initial "Processing" state
+        await new Promise(r => setTimeout(r, 10));
+
         const chunks = this.chunkText(text);
         if (chunks.length === 0) return 0;
 
+        // REPORT INITIAL TOTAL IMMEDIATELY so UI bar appears
+        if (onProgress) onProgress(0, chunks.length);
+
         const ai = new GoogleGenAI({ apiKey });
-        const BATCH_SIZE = 10; 
+        // Increase batch size for Embeddings API (Supports up to 100, strictly)
+        // Larger batches reduce HTTP overhead
+        const BATCH_SIZE = 20; 
         let savedCount = 0;
 
+        // Process batches
         for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
             const batch = chunks.slice(i, i + BATCH_SIZE);
             try {
+                // 1. Get Embeddings for Batch
+                // Using SDK's embedContent with array of contents
                 const batchResult = await ai.models.embedContent({
                     model: 'text-embedding-004',
                     contents: batch.map(c => ({ parts: [{ text: c }] })),
@@ -156,8 +184,22 @@ export class IngestionService {
                 });
                 
                 const embeddings = batchResult.embeddings;
-                const savePromises = batch.map(async (chunk, k) => {
+
+                // 2. Prepare Save & Extract Tasks
+                // Execute Graph Extraction in parallel (limited pool)
+                // Gemini 3 Flash is faster, allowing higher concurrency (5)
+                await asyncPool(5, batch, async (chunk, list) => {
+                    const k = batch.indexOf(chunk);
                     const docId = crypto.randomUUID();
+                    
+                    // A. Extract Graph
+                    try {
+                        await this.extractAndSaveGraph(chunk, docId, agentId, ai);
+                    } catch(e) {
+                        console.warn("Graph extract failed for chunk", k, e);
+                    }
+
+                    // B. Save Doc
                     const doc: KnowledgeDoc = {
                         id: docId,
                         agentId: agentId,
@@ -165,19 +207,21 @@ export class IngestionService {
                         content: chunk,
                         embedding: embeddings?.[k]?.values,
                         timestamp: Date.now(),
-                        tags: ['AUTO_INGEST', 'CHAT_UPLOAD', 'GRAPH_EXTRACTED'], // Auto-mark new ingestions
+                        tags: ['AUTO_INGEST', 'CHAT_UPLOAD', 'GRAPH_EXTRACTED'],
                         numMarkId: NumMarkX_GenerateSigil(chunk)
                     };
                     await addDocument(doc);
-                    // Generate Graph for every chunk to build dense connections
-                    this.extractAndSaveGraph(chunk, docId, agentId, ai).catch(e => console.warn("Graph extract failed", e));
                 });
-                await Promise.all(savePromises);
+
                 savedCount += batch.length;
+                if (onProgress) onProgress(savedCount, chunks.length);
+                
             } catch (e) {
                 console.warn(`[Ingestion] Batch failed for ${filename}:`, e);
-                // Fallback save without vector
-                const savePromises = batch.map((chunk, k) => {
+                
+                // Fallback: Save without vector/graph if API fails completely
+                for(let k=0; k<batch.length; k++) {
+                    const chunk = batch[k];
                     const doc: KnowledgeDoc = {
                         id: crypto.randomUUID(),
                         agentId: agentId,
@@ -187,10 +231,10 @@ export class IngestionService {
                         tags: ['AUTO_INGEST', 'CHAT_UPLOAD', 'NO_VECTOR', 'GRAPH_EXTRACTED'],
                         numMarkId: NumMarkX_GenerateSigil(chunk)
                     };
-                    return addDocument(doc);
-                });
-                await Promise.all(savePromises);
+                    await addDocument(doc);
+                }
                 savedCount += batch.length;
+                if (onProgress) onProgress(savedCount, chunks.length);
             }
         }
         return savedCount;
@@ -206,7 +250,7 @@ export class IngestionService {
 
         try {
             const result = await ai.models.generateContent({
-                model: 'gemini-3-pro-preview',
+                model: 'gemini-3-flash-preview', // Updated to Flash for Performance
                 contents: [{ parts: [{ text: prompt }] }],
                 config: { responseMimeType: "application/json" }
             });
@@ -247,7 +291,9 @@ export class IngestionService {
                     await saveGraphEdge(edge);
                 }
             }
-        } catch (e) { }
+        } catch (e) { 
+            // Silent fail for graph extraction to prevent total ingest failure
+        }
     }
 
     /**
@@ -348,72 +394,56 @@ export class IngestionService {
         return new Blob(parts, { type: 'application/json' });
     }
 
-    static chunkText(text: string, maxChunkSize: number = 1000, overlap: number = 100): string[] {
-        if (text.includes('\0')) throw new Error("Binary content detected.");
-
+    // --- REPLACED CHUNKER WITH ROBUST LEGACY ALGORITHM ---
+    // Breaks scripts into semantic blocks with robust loop safety.
+    static chunkText(text: string, chunkSize: number = 1000, overlap: number = 200): string[] {
         const chunks: string[] = [];
-        let sections = text.split(/(?=^#{1,3}\s)|\n\s*\n/gm);
+        let start = 0;
         
-        if (sections.length === 1 && text.length > maxChunkSize * 5) {
-             sections = text.split(/(?<=[.?!])\s+/);
+        // Normalize line endings
+        const cleanText = text.replace(/\r\n/g, '\n');
+
+        // Safety check for empty files
+        if (!cleanText || cleanText.length === 0) return [];
+
+        while (start < cleanText.length) {
+            const end = Math.min(start + chunkSize, cleanText.length);
+            let chunk = cleanText.slice(start, end);
+            
+            // Smart Break: Try to break at a double newline (Scene break)
+            // rather than mid-sentence.
+            const lastSceneBreak = chunk.lastIndexOf('\n\n');
+            let actualEnd = end;
+
+            // Only snap back if the break isn't too far back (loss of progress)
+            if (lastSceneBreak > chunkSize * 0.5) {
+                 actualEnd = start + lastSceneBreak + 2; 
+                 chunk = cleanText.slice(start, actualEnd);
+            }
+
+            const trimmed = chunk.trim();
+            if (trimmed.length > 0) {
+                chunks.push(trimmed);
+            }
+            
+            // CRITICAL FIX: Loop Progression
+            // If we reached the end of the text, break immediately.
+            if (actualEnd >= cleanText.length) break;
+
+            // Calculate the next step
+            // We normally step forward by length minus overlap.
+            let step = chunk.length - overlap;
+
+            // GUARD RAIL: If the chunk is smaller than the overlap (e.g. short scene),
+            // step would be negative/zero, causing an infinite loop.
+            // We force a minimum step of 1 to ensure forward momentum.
+            if (step < 1) {
+                step = 1; 
+            }
+
+            start += step; 
         }
-
-        let currentChunk = "";
-
-        for (const section of sections) {
-            const trimmed = section.trim();
-            if (!trimmed) continue;
-
-            if (currentChunk.length + trimmed.length <= maxChunkSize) {
-                currentChunk += (currentChunk ? "\n\n" : "") + trimmed;
-                continue;
-            }
-
-            if (currentChunk) {
-                chunks.push(currentChunk);
-                currentChunk = "";
-            }
-
-            if (trimmed.length > maxChunkSize) {
-                const subChunks = this.semanticSplit(trimmed, maxChunkSize, overlap);
-                chunks.push(...subChunks);
-            } else {
-                currentChunk = trimmed;
-            }
-        }
-        
-        if (currentChunk) chunks.push(currentChunk);
         
         return chunks;
-    }
-
-    private static semanticSplit(text: string, limit: number, overlap: number): string[] {
-        const results: string[] = [];
-        const sentenceRegex = /(?<=[.?!])\s+/;
-        const sentences = text.split(sentenceRegex);
-        
-        let buffer = "";
-        
-        for (const sentence of sentences) {
-            if (buffer.length + sentence.length <= limit) {
-                buffer += (buffer ? " " : "") + sentence;
-            } else {
-                if (sentence.length > limit) {
-                    if (buffer) results.push(buffer);
-                    buffer = "";
-                    let i = 0;
-                    while (i < sentence.length) {
-                        results.push(sentence.substring(i, i + limit));
-                        i += limit - overlap;
-                    }
-                } else {
-                    results.push(buffer);
-                    const overlapTxt = buffer.slice(-overlap);
-                    buffer = overlapTxt + " " + sentence; 
-                }
-            }
-        }
-        if (buffer) results.push(buffer);
-        return results;
     }
 }

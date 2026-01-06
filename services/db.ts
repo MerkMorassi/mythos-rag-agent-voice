@@ -1,608 +1,395 @@
 
-import { KnowledgeDoc, ChatSession, LogMessage, AgentConfig, ModelConfig, DEFAULT_MODEL_CONFIG, LorePack, MediaAsset, CanonBlock, GraphNode, GraphEdge, WorkingMemory } from '../types';
-
-const DB_NAME = 'gemini_rag_db';
-const STORE_NAME = 'documents';
-const VECTOR_STORE_NAME = 'doc_vectors'; // NEW: Lightweight store for embeddings
-const CHAT_STORE_NAME = 'chat_sessions';
-const ACTIVE_CHAT_STORE_NAME = 'active_chats'; 
-const CONFIG_STORE_NAME = 'config';
-const PROMPT_STORE_NAME = 'saved_prompts';
-const LORE_PACK_STORE = 'lore_packs';
-const MEDIA_STORE = 'media_assets';
-const CANON_STORE = 'production_blocks'; 
-const GRAPH_NODE_STORE = 'graph_nodes';
-const GRAPH_EDGE_STORE = 'graph_edges';
-const COMMUNITY_STORE = 'community_summaries';
-const WORKING_MEMORY_STORE = 'working_memory'; // HOLODECK
-
-const DB_VERSION = 13; // Bumped for working_memory
-
-// --- TYPES ---
-interface DocVector {
-    id: string;
-    agentId: string;
-    embedding: number[];
-}
+import { 
+    KnowledgeDoc, 
+    GraphNode, 
+    GraphEdge, 
+    ChatSession, 
+    LogMessage, 
+    AgentConfig, 
+    MediaAsset, 
+    LorePack, 
+    CanonBlock,
+    WorkingMemory,
+    DEFAULT_MODEL_CONFIG 
+} from '../types';
 
 export interface SavedPrompt {
     id: string;
     agentId: string;
     name: string;
     content: string;
-    timestamp: number;
 }
 
-// --- DB INIT ---
+const DB_NAME = 'MythOS_DB';
+const DB_VERSION = 5;
+
+// Stores
+export const DOC_STORE = 'documents';
+export const GRAPH_NODE_STORE = 'graph_nodes';
+export const GRAPH_EDGE_STORE = 'graph_edges';
+export const CHAT_SESSION_STORE = 'chat_sessions';
+export const ACTIVE_CHAT_STORE = 'active_chats';
+export const AGENT_CONFIG_STORE = 'agent_configs';
+export const SETTINGS_STORE = 'settings';
+export const MEDIA_STORE = 'media_assets';
+export const LORE_PACK_STORE = 'lore_packs';
+export const PROMPT_STORE = 'saved_prompts';
+export const CANON_STORE = 'canon_blocks';
+export const HOLODECK_STORE = 'holodeck';
+
+let dbInstance: IDBDatabase | null = null;
+
 export const initDB = (): Promise<IDBDatabase> => {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    if (dbInstance) return Promise.resolve(dbInstance);
 
-    request.onerror = (event) => {
-      console.error("IndexedDB error:", event);
-      reject("Error opening database");
-    };
-
-    request.onupgradeneeded = (event) => {
-      const db = (event.target as IDBOpenDBRequest).result;
-      const tx = (event.target as IDBOpenDBRequest).transaction;
-      
-      // 1. Documents Store
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        const store = db.createObjectStore(STORE_NAME, { keyPath: 'id' });
-        store.createIndex('title', 'title', { unique: false });
-        store.createIndex('agentId', 'agentId', { unique: false });
-        store.createIndex('numMarkId', 'numMarkId', { unique: false });
-      } else {
-        const store = tx!.objectStore(STORE_NAME);
-        if (!store.indexNames.contains('agentId')) store.createIndex('agentId', 'agentId', { unique: false });
-        if (!store.indexNames.contains('numMarkId')) store.createIndex('numMarkId', 'numMarkId', { unique: false });
-      }
-
-      // 2. Vector Store (Optimization)
-      if (!db.objectStoreNames.contains(VECTOR_STORE_NAME)) {
-          const vStore = db.createObjectStore(VECTOR_STORE_NAME, { keyPath: 'id' });
-          vStore.createIndex('agentId', 'agentId', { unique: false });
-      }
-
-      // 3. Standard Stores
-      if (!db.objectStoreNames.contains(CHAT_STORE_NAME)) {
-        const chatStore = db.createObjectStore(CHAT_STORE_NAME, { keyPath: 'id' });
-        chatStore.createIndex('timestamp', 'timestamp', { unique: false });
-      }
-      if (!db.objectStoreNames.contains(ACTIVE_CHAT_STORE_NAME)) db.createObjectStore(ACTIVE_CHAT_STORE_NAME, { keyPath: 'agentId' });
-      if (!db.objectStoreNames.contains(CONFIG_STORE_NAME)) db.createObjectStore(CONFIG_STORE_NAME, { keyPath: 'id' });
-      if (!db.objectStoreNames.contains(PROMPT_STORE_NAME)) {
-        const promptStore = db.createObjectStore(PROMPT_STORE_NAME, { keyPath: 'id' });
-        promptStore.createIndex('agentId', 'agentId', { unique: false });
-      }
-      if (!db.objectStoreNames.contains(LORE_PACK_STORE)) {
-          const lpStore = db.createObjectStore(LORE_PACK_STORE, { keyPath: 'id' });
-          lpStore.createIndex('agentId', 'header.agentId', { unique: false });
-      }
-      if (!db.objectStoreNames.contains(MEDIA_STORE)) {
-          const mStore = db.createObjectStore(MEDIA_STORE, { keyPath: 'id' });
-          mStore.createIndex('agentId', 'agentId', { unique: false });
-          mStore.createIndex('timestamp', 'timestamp', { unique: false });
-      }
-      if (!db.objectStoreNames.contains(CANON_STORE)) {
-          const cStore = db.createObjectStore(CANON_STORE, { keyPath: 'id' });
-          cStore.createIndex('stage', 'stage', { unique: false });
-          cStore.createIndex('status', 'status', { unique: false });
-      }
-
-      // 4. GRAPH STORES
-      if (!db.objectStoreNames.contains(GRAPH_NODE_STORE)) {
-          const nodeStore = db.createObjectStore(GRAPH_NODE_STORE, { keyPath: 'id' });
-          nodeStore.createIndex('agentId', 'agentId', { unique: false });
-      }
-      if (!db.objectStoreNames.contains(GRAPH_EDGE_STORE)) {
-          const edgeStore = db.createObjectStore(GRAPH_EDGE_STORE, { keyPath: 'id' });
-          edgeStore.createIndex('source', 'source', { unique: false });
-          edgeStore.createIndex('target', 'target', { unique: false });
-          edgeStore.createIndex('agentId', 'agentId', { unique: false });
-      }
-      if (!db.objectStoreNames.contains(COMMUNITY_STORE)) {
-          const commStore = db.createObjectStore(COMMUNITY_STORE, { keyPath: 'id' });
-          commStore.createIndex('agentId', 'agentId', { unique: false });
-      }
-
-      // 5. HOLODECK STORE
-      if (!db.objectStoreNames.contains(WORKING_MEMORY_STORE)) {
-          db.createObjectStore(WORKING_MEMORY_STORE, { keyPath: 'id' });
-      }
-    };
-
-    request.onsuccess = (event) => {
-      resolve((event.target as IDBOpenDBRequest).result);
-    };
-  });
-};
-
-// --- HOLODECK OPERATIONS ---
-export const getCanvas = async (id: string = 'HOLODECK_MAIN'): Promise<WorkingMemory> => {
-    const db = await initDB();
-    return new Promise((resolve) => {
-        const tx = db.transaction([WORKING_MEMORY_STORE], 'readonly');
-        const req = tx.objectStore(WORKING_MEMORY_STORE).get(id);
-        req.onsuccess = (e: any) => {
-            const res = e.target.result;
-            resolve(res || { id, title: "New Project", sections: [], lastModified: Date.now() });
-        };
-    });
-};
-
-export const updateCanvas = async (memory: WorkingMemory): Promise<void> => {
-    const db = await initDB();
-    const tx = db.transaction([WORKING_MEMORY_STORE], 'readwrite');
-    tx.objectStore(WORKING_MEMORY_STORE).put(memory);
-    return new Promise((resolve) => { tx.oncomplete = () => resolve(); });
-};
-
-// --- MIGRATION UTILITY ---
-export const ensureVectorIndex = async (): Promise<string> => {
-    const db = await initDB();
-    
-    // Check if vectors exist
-    const count = await new Promise<number>((resolve) => {
-        const tx = db.transaction([VECTOR_STORE_NAME], 'readonly');
-        const req = tx.objectStore(VECTOR_STORE_NAME).count();
-        req.onsuccess = () => resolve(req.result);
-    });
-
-    if (count > 0) return "Index OK";
-
-    // If empty, backfill from Documents
     return new Promise((resolve, reject) => {
-        const tx = db.transaction([STORE_NAME, VECTOR_STORE_NAME], 'readwrite');
-        const docStore = tx.objectStore(STORE_NAME);
-        const vecStore = tx.objectStore(VECTOR_STORE_NAME);
-        let processed = 0;
+        const request = indexedDB.open(DB_NAME, DB_VERSION);
 
-        const cursorReq = docStore.openCursor();
-        cursorReq.onsuccess = (e) => {
-            const cursor = (e.target as IDBRequest).result as IDBCursorWithValue;
-            if (cursor) {
-                const doc = cursor.value as KnowledgeDoc;
-                if (doc.embedding && doc.embedding.length > 0) {
-                    vecStore.put({
-                        id: doc.id,
-                        agentId: doc.agentId || 'UNKNOWN',
-                        embedding: doc.embedding
-                    });
-                    processed++;
-                }
-                cursor.continue();
-            } else {
-                resolve(`Migrated ${processed} vectors to optimized index.`);
-            }
+        request.onerror = (event) => {
+            console.error("IndexedDB error:", event);
+            reject("Database error");
         };
-        cursorReq.onerror = () => reject("Migration failed");
-    });
-};
 
-// --- CORE OPERATIONS ---
-
-export const addDocument = async (doc: KnowledgeDoc): Promise<void> => {
-  const db = await initDB();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction([STORE_NAME, VECTOR_STORE_NAME], 'readwrite');
-    
-    const docStore = transaction.objectStore(STORE_NAME);
-    if (!doc.permissions) doc.permissions = '644';
-    docStore.put(doc);
-
-    // Write to Vector Store
-    if (doc.embedding) {
-        const vecStore = transaction.objectStore(VECTOR_STORE_NAME);
-        vecStore.put({
-            id: doc.id,
-            agentId: doc.agentId || 'UNKNOWN',
-            embedding: doc.embedding
-        });
-    }
-
-    transaction.oncomplete = () => resolve();
-    transaction.onerror = () => reject(transaction.error);
-  });
-};
-
-export const deleteDocument = async (id: string): Promise<void> => {
-  const db = await initDB();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction([STORE_NAME, VECTOR_STORE_NAME], 'readwrite');
-    transaction.objectStore(STORE_NAME).delete(id);
-    transaction.objectStore(VECTOR_STORE_NAME).delete(id);
-    transaction.oncomplete = () => resolve();
-    transaction.onerror = () => reject(transaction.error);
-  });
-};
-
-export const bulkAddDocuments = async (docs: KnowledgeDoc[]): Promise<void> => {
-  const db = await initDB();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction([STORE_NAME, VECTOR_STORE_NAME], 'readwrite');
-    const docStore = transaction.objectStore(STORE_NAME);
-    const vecStore = transaction.objectStore(VECTOR_STORE_NAME);
-
-    docs.forEach(doc => { 
-        if(!doc.permissions) doc.permissions = '644';
-        docStore.put(doc); 
-        if (doc.embedding) {
-            vecStore.put({
-                id: doc.id,
-                agentId: doc.agentId || 'UNKNOWN',
-                embedding: doc.embedding
-            });
-        }
-    });
-    
-    transaction.oncomplete = () => resolve();
-    transaction.onerror = () => reject(transaction.error);
-  });
-};
-
-export const deleteDocumentsByAgentId = async (agentId: string): Promise<void> => {
-  const db = await initDB();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction([STORE_NAME, VECTOR_STORE_NAME], 'readwrite');
-    const docStore = transaction.objectStore(STORE_NAME);
-    const vecStore = transaction.objectStore(VECTOR_STORE_NAME);
-
-    // Delete from Docs
-    const docIndex = docStore.index('agentId');
-    docIndex.getAllKeys(agentId).onsuccess = (e) => {
-        const keys = (e.target as IDBRequest).result;
-        keys.forEach((k: any) => docStore.delete(k));
-    };
-
-    // Delete from Vectors
-    const vecIndex = vecStore.index('agentId');
-    vecIndex.getAllKeys(agentId).onsuccess = (e) => {
-        const keys = (e.target as IDBRequest).result;
-        keys.forEach((k: any) => vecStore.delete(k));
-    };
-
-    transaction.oncomplete = () => resolve();
-    transaction.onerror = () => reject(transaction.error);
-  });
-};
-
-// --- OPTIMIZED SEARCH ---
-
-function cosineSimilarity(vecA: number[], vecB: number[]): number {
-  let dotProduct = 0;
-  let normA = 0;
-  let normB = 0;
-  for (let i = 0; i < vecA.length; i++) {
-    dotProduct += vecA[i] * vecB[i];
-    normA += vecA[i] * vecA[i];
-    normB += vecB[i] * vecB[i];
-  }
-  if (normA === 0 || normB === 0) return 0;
-  return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
-}
-
-export const searchDocuments = async (query: string, queryEmbedding?: number[], agentId?: string): Promise<KnowledgeDoc[]> => {
-    if (!queryEmbedding) {
-        // Fallback to keyword search if no embedding (slower full scan)
-        const allDocs = agentId ? await getDocumentsByAgentId(agentId) : await getAllDocuments();
-        const lowerQuery = query.toLowerCase();
-        return allDocs.filter(d => d.content.toLowerCase().includes(lowerQuery) || d.title.toLowerCase().includes(lowerQuery)).slice(0, 5);
-    }
-
-    const db = await initDB();
-    
-    // 1. Scan Vector Store (Memory Efficient)
-    // We only load {id, embedding} tuples, not full content.
-    const scoredIds = await new Promise<{id: string, score: number}[]>((resolve) => {
-        const tx = db.transaction([VECTOR_STORE_NAME], 'readonly');
-        const store = tx.objectStore(VECTOR_STORE_NAME);
-        const request = agentId ? store.index('agentId').openCursor(IDBKeyRange.only(agentId)) : store.openCursor();
-        
-        const results: {id: string, score: number}[] = [];
-
-        request.onsuccess = (e) => {
-            const cursor = (e.target as IDBRequest).result as IDBCursorWithValue;
-            if (cursor) {
-                const vecDoc = cursor.value as DocVector;
-                const score = cosineSimilarity(queryEmbedding, vecDoc.embedding);
-                if (score > 0.15) {
-                    results.push({ id: vecDoc.id, score });
-                }
-                cursor.continue();
-            } else {
-                resolve(results);
-            }
+        request.onsuccess = (event) => {
+            dbInstance = (event.target as IDBOpenDBRequest).result;
+            resolve(dbInstance);
         };
-    });
 
-    // 2. Sort and slice IDs
-    scoredIds.sort((a, b) => b.score - a.score);
-    const topIds = scoredIds.slice(0, 8).map(r => r.id);
-
-    if (topIds.length === 0) return [];
-
-    // 3. Fetch Full Content for Top K
-    const docs = await new Promise<KnowledgeDoc[]>((resolve) => {
-        const tx = db.transaction([STORE_NAME], 'readonly');
-        const store = tx.objectStore(STORE_NAME);
-        const finalDocs: KnowledgeDoc[] = [];
-        let fetched = 0;
-
-        topIds.forEach(id => {
-            store.get(id).onsuccess = (e) => {
-                const doc = (e.target as IDBRequest).result;
-                if (doc) finalDocs.push(doc);
-                fetched++;
-                if (fetched === topIds.length) resolve(finalDocs);
+        request.onupgradeneeded = (event) => {
+            const db = (event.target as IDBOpenDBRequest).result;
+            
+            const createStore = (name: string, keyPath: string = 'id', indices: string[] = []) => {
+                if (!db.objectStoreNames.contains(name)) {
+                    const store = db.createObjectStore(name, { keyPath });
+                    indices.forEach(idx => store.createIndex(idx, idx, { unique: false }));
+                }
             };
-        });
-    });
 
-    return docs;
+            createStore(DOC_STORE, 'id', ['agentId']);
+            createStore(GRAPH_NODE_STORE, 'id', ['agentId']);
+            createStore(GRAPH_EDGE_STORE, 'id', ['source', 'target']);
+            createStore(CHAT_SESSION_STORE, 'id');
+            createStore(ACTIVE_CHAT_STORE, 'id');
+            createStore(AGENT_CONFIG_STORE, 'agentId');
+            createStore(SETTINGS_STORE, 'id');
+            createStore(MEDIA_STORE, 'id', ['agentId']);
+            createStore(LORE_PACK_STORE, 'id'); 
+            createStore(PROMPT_STORE, 'id', ['agentId']);
+            createStore(CANON_STORE, 'id');
+            createStore(HOLODECK_STORE, 'id');
+        };
+    });
 };
 
-// --- GRAPH OPS (Unchanged but ensuring exports) ---
-export const saveGraphNode = async (node: GraphNode): Promise<void> => {
+// --- HELPER GENERIC FUNCTIONS ---
+const getAll = async <T>(storeName: string): Promise<T[]> => {
+    const db = await initDB();
+    return new Promise((resolve) => {
+        const tx = db.transaction([storeName], 'readonly');
+        const req = tx.objectStore(storeName).getAll();
+        req.onsuccess = () => resolve(req.result as T[]);
+        req.onerror = () => resolve([]);
+    });
+};
+
+const getByIndex = async <T>(storeName: string, indexName: string, value: string): Promise<T[]> => {
+    const db = await initDB();
+    return new Promise((resolve) => {
+        const tx = db.transaction([storeName], 'readonly');
+        const idx = tx.objectStore(storeName).index(indexName);
+        const req = idx.getAll(value);
+        req.onsuccess = () => resolve(req.result as T[]);
+        req.onerror = () => resolve([]);
+    });
+};
+
+const putItem = async <T>(storeName: string, item: T): Promise<void> => {
     const db = await initDB();
     return new Promise((resolve, reject) => {
-        const tx = db.transaction([GRAPH_NODE_STORE], 'readwrite');
-        tx.objectStore(GRAPH_NODE_STORE).put(node).onsuccess = () => resolve();
+        const tx = db.transaction([storeName], 'readwrite');
+        const req = tx.objectStore(storeName).put(item);
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(req.error);
+    });
+};
+
+const deleteItem = async (storeName: string, id: string): Promise<void> => {
+    const db = await initDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction([storeName], 'readwrite');
+        const req = tx.objectStore(storeName).delete(id);
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(req.error);
+    });
+};
+
+// --- DOCUMENTS (KNOWLEDGE BASE) ---
+
+export const addDocument = (doc: KnowledgeDoc) => putItem(DOC_STORE, doc);
+export const deleteDocument = (id: string) => deleteItem(DOC_STORE, id);
+export const getDocumentsByAgentId = (agentId: string) => getByIndex<KnowledgeDoc>(DOC_STORE, 'agentId', agentId);
+export const getAllDocuments = () => getAll<KnowledgeDoc>(DOC_STORE);
+
+export const bulkAddDocuments = async (docs: KnowledgeDoc[]) => {
+    const db = await initDB();
+    return new Promise<void>((resolve, reject) => {
+        const tx = db.transaction([DOC_STORE], 'readwrite');
+        const store = tx.objectStore(DOC_STORE);
+        docs.forEach(doc => store.put(doc));
+        tx.oncomplete = () => resolve();
         tx.onerror = () => reject(tx.error);
     });
 };
 
-export const saveGraphEdge = async (edge: GraphEdge): Promise<void> => {
+export const deleteDocumentsByAgentId = async (agentId: string) => {
+    const docs = await getDocumentsByAgentId(agentId);
     const db = await initDB();
-    return new Promise((resolve, reject) => {
-        const tx = db.transaction([GRAPH_EDGE_STORE], 'readwrite');
-        tx.objectStore(GRAPH_EDGE_STORE).put(edge).onsuccess = () => resolve();
-        tx.onerror = () => reject(tx.error);
+    const tx = db.transaction([DOC_STORE], 'readwrite');
+    const store = tx.objectStore(DOC_STORE);
+    docs.forEach(d => store.delete(d.id));
+    return new Promise<void>((resolve) => {
+        tx.oncomplete = () => resolve();
     });
 };
 
-export const getGraphNodesByAgent = async (agentId: string): Promise<GraphNode[]> => {
-    const db = await initDB();
-    return new Promise((resolve) => {
-        const tx = db.transaction([GRAPH_NODE_STORE], 'readonly');
-        tx.objectStore(GRAPH_NODE_STORE).index('agentId').getAll(agentId).onsuccess = (e) => resolve((e.target as IDBRequest).result);
-    });
+export const getDocumentCountByAgentId = async (agentId: string): Promise<number> => {
+    const docs = await getDocumentsByAgentId(agentId);
+    return docs.length;
 };
 
-export const getGraphEdges = async (): Promise<GraphEdge[]> => {
+export const updateDocumentPermissions = async (id: string, permissions: string) => {
     const db = await initDB();
-    return new Promise((resolve) => {
-        const tx = db.transaction([GRAPH_EDGE_STORE], 'readonly');
-        tx.objectStore(GRAPH_EDGE_STORE).getAll().onsuccess = (e) => resolve((e.target as IDBRequest).result);
-    });
-};
-
-export const searchGraphNodes = async (queryEmbedding: number[], agentId?: string): Promise<GraphNode[]> => {
-    const db = await initDB();
-    return new Promise((resolve) => {
-        const tx = db.transaction([GRAPH_NODE_STORE], 'readonly');
-        const store = tx.objectStore(GRAPH_NODE_STORE);
-        const req = agentId ? store.index('agentId').getAll(agentId) : store.getAll();
-        
+    return new Promise<void>((resolve, reject) => {
+        const tx = db.transaction([DOC_STORE], 'readwrite');
+        const store = tx.objectStore(DOC_STORE);
+        const req = store.get(id);
         req.onsuccess = () => {
-            const nodes = req.result as GraphNode[];
-            const scored = nodes
-                .map(n => ({
-                    node: n,
-                    score: n.embedding ? cosineSimilarity(queryEmbedding, n.embedding) : 0
-                }))
-                .filter(n => n.score > 0.65)
-                .sort((a,b) => b.score - a.score)
-                .slice(0, 5);
-            resolve(scored.map(s => s.node));
-        };
-    });
-};
-
-export const getGraphContext = async (query: string, queryEmbedding?: number[], agentId?: string): Promise<string> => {
-    if (!queryEmbedding) return "";
-    const anchors = await searchGraphNodes(queryEmbedding, agentId);
-    if (anchors.length === 0) return "";
-
-    const anchorIds = new Set(anchors.map(n => n.id));
-    const allEdges = await getGraphEdges();
-    const relevantEdges = allEdges.filter(e => anchorIds.has(e.source) || anchorIds.has(e.target));
-    
-    let context = "### GRAPH KNOWLEDGE ###\n";
-    for (const node of anchors) {
-        context += `ENTITY: ${node.name} (${node.label})\nDESC: ${node.description}\n`;
-        const nodeEdges = relevantEdges.filter(e => e.source === node.id || e.target === node.id);
-        if (nodeEdges.length > 0) {
-            context += "RELATIONSHIPS:\n";
-            for (const e of nodeEdges) {
-                const isOutbound = e.source === node.id;
-                const otherId = isOutbound ? e.target : e.source;
-                context += `  - [${e.relation}] ${isOutbound ? '->' : '<-'} ${otherId} ${e.description ? `(${e.description})` : ''}\n`;
-            }
-        }
-        context += "\n";
-    }
-    return context;
-};
-
-// --- PASSTHROUGH METHODS (Standard CRUD) ---
-export const updateDocumentContent = async (id: string, newContent: string): Promise<void> => {
-    const db = await initDB();
-    return new Promise((resolve) => {
-        const tx = db.transaction([STORE_NAME], 'readwrite');
-        const store = tx.objectStore(STORE_NAME);
-        store.get(id).onsuccess = (e) => {
-            const doc = (e.target as IDBRequest).result;
-            if (doc) {
-                doc.content = newContent;
-                doc.timestamp = Date.now();
-                store.put(doc);
-                resolve();
-            }
-        };
-    });
-};
-
-export const updateDocumentPermissions = async (id: string, permissions: string): Promise<void> => {
-    const db = await initDB();
-    return new Promise((resolve) => {
-        const tx = db.transaction([STORE_NAME], 'readwrite');
-        const store = tx.objectStore(STORE_NAME);
-        store.get(id).onsuccess = (e) => {
-            const doc = (e.target as IDBRequest).result;
+            const doc = req.result as KnowledgeDoc;
             if (doc) {
                 doc.permissions = permissions;
                 store.put(doc);
                 resolve();
+            } else {
+                reject("Document not found");
             }
         };
+        req.onerror = () => reject(req.error);
     });
 };
 
-export const getAllDocuments = async (): Promise<KnowledgeDoc[]> => {
-  const db = await initDB();
-  return new Promise((resolve) => {
-    db.transaction([STORE_NAME], 'readonly').objectStore(STORE_NAME).getAll().onsuccess = (e) => {
-      resolve(((e.target as IDBRequest).result as KnowledgeDoc[]).sort((a,b) => b.timestamp - a.timestamp));
-    };
-  });
+
+// --- VECTOR SEARCH ---
+
+function cosineSimilarity(vecA: number[], vecB: number[]): number {
+    let dot = 0;
+    let normA = 0;
+    let normB = 0;
+    for (let i = 0; i < vecA.length; i++) {
+        dot += vecA[i] * vecB[i];
+        normA += vecA[i] * vecA[i];
+        normB += vecB[i] * vecB[i];
+    }
+    return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+export const ensureVectorIndex = async () => { /* No-op for IndexedDB */ };
+
+export const searchDocuments = async (query: string, embedding?: number[], agentId?: string): Promise<KnowledgeDoc[]> => {
+    const allDocs = agentId ? await getDocumentsByAgentId(agentId) : await getAll<KnowledgeDoc>(DOC_STORE);
+    
+    // Exact text match (fallback or boost)
+    const exactMatches = allDocs.filter(d => d.content.toLowerCase().includes(query.toLowerCase()));
+    
+    // Vector Search
+    if (embedding) {
+        const scored = allDocs
+            .filter(d => d.embedding)
+            .map(d => ({ doc: d, score: cosineSimilarity(embedding, d.embedding!) }))
+            .sort((a, b) => b.score - a.score)
+            .slice(0, 5)
+            .map(item => item.doc);
+            
+        // Combine results
+        const combined = [...new Set([...scored, ...exactMatches])];
+        return combined.slice(0, 8);
+    }
+    
+    return exactMatches.slice(0, 10);
 };
 
-export const getDocumentsByAgentId = async (agentId: string): Promise<KnowledgeDoc[]> => {
-  const db = await initDB();
-  return new Promise((resolve) => {
-    db.transaction([STORE_NAME], 'readonly').objectStore(STORE_NAME).index('agentId').getAll(agentId).onsuccess = (e) => {
-      resolve(((e.target as IDBRequest).result as KnowledgeDoc[]).sort((a,b) => b.timestamp - a.timestamp));
-    };
-  });
+// --- GRAPH DB ---
+
+export const saveGraphNode = (node: GraphNode) => putItem(GRAPH_NODE_STORE, node);
+export const getAllGraphNodes = () => getAll<GraphNode>(GRAPH_NODE_STORE);
+export const getGraphNodesByAgent = (agentId: string) => getByIndex<GraphNode>(GRAPH_NODE_STORE, 'agentId', agentId);
+
+export const saveGraphEdge = (edge: GraphEdge) => putItem(GRAPH_EDGE_STORE, edge);
+export const getGraphEdges = () => getAll<GraphEdge>(GRAPH_EDGE_STORE);
+
+export const getGraphContext = async (query: string, embedding?: number[], agentId?: string): Promise<string> => {
+    // 1. Find nodes that match the query
+    const nodes = await getAllGraphNodes();
+    const relevantNodes = nodes.filter(n => 
+        (agentId ? n.agentId === agentId : true) && 
+        (n.name.toLowerCase().includes(query.toLowerCase()) || n.label.toLowerCase().includes(query.toLowerCase()))
+    );
+    
+    if (relevantNodes.length === 0) return "";
+    
+    // 2. Find connected edges
+    const edges = await getGraphEdges();
+    const nodeIds = new Set(relevantNodes.map(n => n.id));
+    
+    const relevantEdges = edges.filter(e => nodeIds.has(e.source) || nodeIds.has(e.target));
+    
+    // 3. Format context
+    let context = "ENTITIES:\n";
+    relevantNodes.slice(0, 10).forEach(n => context += `- ${n.name} (${n.label}): ${n.description}\n`);
+    context += "\nRELATIONSHIPS:\n";
+    relevantEdges.slice(0, 15).forEach(e => {
+        const s = nodes.find(n => n.id === e.source)?.name || e.source;
+        const t = nodes.find(n => n.id === e.target)?.name || e.target;
+        context += `- ${s} [${e.relation}] ${t}\n`;
+    });
+    
+    return context;
 };
 
-export const getDocumentCountByAgentId = async (agentId: string): Promise<number> => {
-  const db = await initDB();
-  return new Promise((resolve) => {
-    db.transaction([STORE_NAME], 'readonly').objectStore(STORE_NAME).index('agentId').count(agentId).onsuccess = (e) => {
-      resolve((e.target as IDBRequest).result);
-    };
-  });
-};
+// --- CHAT HISTORY ---
 
-// LorePack, Media, Session, Config methods remain same but compacted for brevity
-export const saveLorePack = async (pack: LorePack) => (await initDB()).transaction([LORE_PACK_STORE], 'readwrite').objectStore(LORE_PACK_STORE).put(pack);
-export const getLorePacksByAgentId = async (id: string) => new Promise<LorePack[]>(async r => (await initDB()).transaction([LORE_PACK_STORE]).objectStore(LORE_PACK_STORE).index('agentId').getAll(id).onsuccess = e => r((e.target as IDBRequest).result));
-export const deleteLorePack = async (id: string) => (await initDB()).transaction([LORE_PACK_STORE], 'readwrite').objectStore(LORE_PACK_STORE).delete(id);
+export const saveChatSession = (session: ChatSession) => putItem(CHAT_SESSION_STORE, session);
+export const getAllChatSessions = () => getAll<ChatSession>(CHAT_SESSION_STORE);
+export const deleteChatSession = (id: string) => deleteItem(CHAT_SESSION_STORE, id);
 
-export const saveMediaAsset = async (a: MediaAsset) => (await initDB()).transaction([MEDIA_STORE], 'readwrite').objectStore(MEDIA_STORE).put(a);
-export const updateMediaAsset = async (id: string, u: Partial<MediaAsset>) => {
+export const saveActiveChat = (id: string, logs: LogMessage[]) => putItem(ACTIVE_CHAT_STORE, { id, logs });
+export const loadActiveChat = async (id: string): Promise<LogMessage[]> => {
     const db = await initDB();
-    const store = db.transaction([MEDIA_STORE], 'readwrite').objectStore(MEDIA_STORE);
-    store.get(id).onsuccess = (e) => { const a = (e.target as IDBRequest).result; if(a) store.put({...a, ...u}); };
+    return new Promise((resolve) => {
+        const tx = db.transaction([ACTIVE_CHAT_STORE], 'readonly');
+        const req = tx.objectStore(ACTIVE_CHAT_STORE).get(id);
+        req.onsuccess = () => resolve(req.result?.logs || []);
+        req.onerror = () => resolve([]);
+    });
 };
-export const getAllMediaAssets = async () => new Promise<MediaAsset[]>(async r => (await initDB()).transaction([MEDIA_STORE]).objectStore(MEDIA_STORE).getAll().onsuccess = e => r((e.target as IDBRequest).result.sort((a:any,b:any)=>b.timestamp-a.timestamp)));
-export const deleteMediaAsset = async (id: string) => (await initDB()).transaction([MEDIA_STORE], 'readwrite').objectStore(MEDIA_STORE).delete(id);
 
-export const saveChatSession = async (s: ChatSession) => (await initDB()).transaction([CHAT_STORE_NAME], 'readwrite').objectStore(CHAT_STORE_NAME).put(s);
-export const getAllChatSessions = async () => new Promise<ChatSession[]>(async r => (await initDB()).transaction([CHAT_STORE_NAME]).objectStore(CHAT_STORE_NAME).getAll().onsuccess = e => r((e.target as IDBRequest).result.sort((a:any,b:any)=>b.timestamp-a.timestamp)));
-export const deleteChatSession = async (id: string) => (await initDB()).transaction([CHAT_STORE_NAME], 'readwrite').objectStore(CHAT_STORE_NAME).delete(id);
+// --- AGENT CONFIG ---
 
-export const saveActiveChat = async (id: string, logs: LogMessage[]) => (await initDB()).transaction([ACTIVE_CHAT_STORE_NAME], 'readwrite').objectStore(ACTIVE_CHAT_STORE_NAME).put({agentId: id, logs, timestamp: Date.now()});
-export const loadActiveChat = async (id: string) => new Promise<LogMessage[]>(async r => (await initDB()).transaction([ACTIVE_CHAT_STORE_NAME]).objectStore(ACTIVE_CHAT_STORE_NAME).get(id).onsuccess = e => r((e.target as IDBRequest).result?.logs || []));
+export const saveAgentConfig = (agentId: string, config: Partial<AgentConfig>) => {
+    return putItem(AGENT_CONFIG_STORE, { agentId, ...config });
+};
 
-export const saveGeneralInstructions = async (val: string) => (await initDB()).transaction([CONFIG_STORE_NAME], 'readwrite').objectStore(CONFIG_STORE_NAME).put({id:'general_instructions', value:val});
-export const getGeneralInstructions = async () => new Promise<string>(async r => (await initDB()).transaction([CONFIG_STORE_NAME]).objectStore(CONFIG_STORE_NAME).get('general_instructions').onsuccess = e => r((e.target as IDBRequest).result?.value || ''));
+export const getAgentConfig = async (agentId: string): Promise<Partial<AgentConfig>> => {
+    const db = await initDB();
+    return new Promise((resolve) => {
+        const tx = db.transaction([AGENT_CONFIG_STORE], 'readonly');
+        const req = tx.objectStore(AGENT_CONFIG_STORE).get(agentId);
+        req.onsuccess = () => resolve(req.result || { modelConfig: DEFAULT_MODEL_CONFIG });
+        req.onerror = () => resolve({ modelConfig: DEFAULT_MODEL_CONFIG });
+    });
+};
 
-export const saveAgentConfig = async (id: string, val: any) => (await initDB()).transaction([CONFIG_STORE_NAME], 'readwrite').objectStore(CONFIG_STORE_NAME).put({id: `agent_config_${id}`, value: val});
-export const getAgentConfig = async (id: string) => new Promise<any>(async r => (await initDB()).transaction([CONFIG_STORE_NAME]).objectStore(CONFIG_STORE_NAME).get(`agent_config_${id}`).onsuccess = e => r((e.target as IDBRequest).result?.value || { instruction: '', modelConfig: DEFAULT_MODEL_CONFIG, accessLevel: '' }));
+export const saveGeneralInstructions = (instruction: string) => putItem(SETTINGS_STORE, { id: 'GENERAL_INSTRUCTION', value: instruction });
+export const getGeneralInstructions = async (): Promise<string> => {
+    const db = await initDB();
+    return new Promise((resolve) => {
+        const tx = db.transaction([SETTINGS_STORE], 'readonly');
+        const req = tx.objectStore(SETTINGS_STORE).get('GENERAL_INSTRUCTION');
+        req.onsuccess = () => resolve(req.result?.value || "");
+        req.onerror = () => resolve("");
+    });
+};
 
-export const saveSavedPrompt = async (p: SavedPrompt) => (await initDB()).transaction([PROMPT_STORE_NAME], 'readwrite').objectStore(PROMPT_STORE_NAME).put(p);
-export const getSavedPromptsByAgentId = async (id: string) => new Promise<SavedPrompt[]>(async r => (await initDB()).transaction([PROMPT_STORE_NAME]).objectStore(PROMPT_STORE_NAME).index('agentId').getAll(id).onsuccess = e => r((e.target as IDBRequest).result.sort((a:any,b:any)=>b.timestamp-a.timestamp)));
-export const deleteSavedPrompt = async (id: string) => (await initDB()).transaction([PROMPT_STORE_NAME], 'readwrite').objectStore(PROMPT_STORE_NAME).delete(id);
+// --- MEDIA ASSETS ---
 
-// PRODUCTION BOARD
-export const saveCanonBlock = async (b: CanonBlock) => (await initDB()).transaction([CANON_STORE], 'readwrite').objectStore(CANON_STORE).put(b);
-export const getCanonBlocks = async () => new Promise<CanonBlock[]>(async r => (await initDB()).transaction([CANON_STORE]).objectStore(CANON_STORE).getAll().onsuccess = e => r((e.target as IDBRequest).result.sort((a:any,b:any)=>a.timestamp-b.timestamp)));
-export const deleteCanonBlock = async (id: string) => (await initDB()).transaction([CANON_STORE], 'readwrite').objectStore(CANON_STORE).delete(id);
+export const saveMediaAsset = (asset: MediaAsset) => putItem(MEDIA_STORE, asset);
+export const getAllMediaAssets = () => getAll<MediaAsset>(MEDIA_STORE);
+export const deleteMediaAsset = (id: string) => deleteItem(MEDIA_STORE, id);
+export const updateMediaAsset = async (id: string, updates: Partial<MediaAsset>) => {
+    const db = await initDB();
+    const tx = db.transaction([MEDIA_STORE], 'readwrite');
+    const store = tx.objectStore(MEDIA_STORE);
+    const item = await new Promise<MediaAsset>((res) => {
+        store.get(id).onsuccess = (e: any) => res(e.target.result);
+    });
+    if (item) {
+        store.put({ ...item, ...updates });
+    }
+};
 
-// --- SQL ---
+// --- LORE PACKS ---
+
+export const saveLorePack = (pack: LorePack) => putItem(LORE_PACK_STORE, pack);
+export const getLorePacksByAgentId = async (agentId: string): Promise<LorePack[]> => {
+    const all = await getAll<LorePack>(LORE_PACK_STORE);
+    return all.filter(p => p.header.agentId === agentId);
+};
+export const deleteLorePack = (id: string) => deleteItem(LORE_PACK_STORE, id);
+
+// --- SAVED PROMPTS ---
+
+export const getSavedPromptsByAgentId = (agentId: string) => getByIndex<SavedPrompt>(PROMPT_STORE, 'agentId', agentId);
+export const deleteSavedPrompt = (id: string) => deleteItem(PROMPT_STORE, id);
+
+// --- CANON BLOCKS (PRODUCTION) ---
+export const saveCanonBlock = (block: CanonBlock) => putItem(CANON_STORE, block);
+export const getCanonBlocks = () => getAll<CanonBlock>(CANON_STORE);
+export const deleteCanonBlock = (id: string) => deleteItem(CANON_STORE, id);
+
+// --- HOLODECK (CANVAS) ---
+
+export const getCanvas = async (): Promise<WorkingMemory> => {
+    const db = await initDB();
+    return new Promise((resolve) => {
+        const tx = db.transaction([HOLODECK_STORE], 'readonly');
+        const req = tx.objectStore(HOLODECK_STORE).get('HOLODECK_MAIN');
+        req.onsuccess = () => {
+            if (req.result) resolve(req.result);
+            else {
+                // Return default
+                resolve({
+                    id: 'HOLODECK_MAIN',
+                    title: 'Shared Workspace',
+                    sections: [],
+                    lastModified: Date.now()
+                });
+            }
+        };
+        req.onerror = () => resolve({ id: 'HOLODECK_MAIN', title: 'Error', sections: [], lastModified: Date.now() });
+    });
+};
+
+export const updateCanvas = (canvas: WorkingMemory) => putItem(HOLODECK_STORE, canvas);
+
+// --- SQL MOCK ---
+
 export const executeSql = async (query: string): Promise<string> => {
-    const upperQuery = query.trim().toUpperCase();
+    const q = query.trim().toLowerCase();
     
-    // DELETE
-    if (upperQuery.startsWith('DELETE FROM')) {
-        const tableMatch = upperQuery.match(/DELETE FROM (\w+)/);
-        const table = tableMatch ? tableMatch[1] : '';
-        if (table !== 'LORE') return `Error: Table '${table}' not found. Only 'LORE' supported.`;
-        
-        const whereMatch = query.match(/WHERE\s+(.+)$/i);
-        if (!whereMatch) return "Error: DELETE requires WHERE clause.";
-        
-        const condition = whereMatch[1];
-        const allDocs = await getAllDocuments();
-        let deletedCount = 0;
-        
-        for (const doc of allDocs) {
-            let match = false;
-            if (condition.toUpperCase().includes("ID =")) {
-                const targetId = condition.split('=')[1].trim().replace(/['"]/g, '');
-                if (doc.id === targetId) match = true;
-            } else if (condition.toUpperCase().includes("LIKE")) {
-                const term = condition.split(/LIKE/i)[1].trim().replace(/['"%]/g, '').toLowerCase();
-                if (doc.content.toLowerCase().includes(term) || doc.title.toLowerCase().includes(term)) match = true;
-            }
-            if (match) {
-                await deleteDocument(doc.id);
-                deletedCount++;
-            }
+    try {
+        if (q.startsWith('select')) {
+            const parts = q.split(' ');
+            const fromIndex = parts.indexOf('from');
+            if (fromIndex === -1) return "Error: Invalid syntax";
+            const table = parts[fromIndex + 1];
+            
+            let data: any[] = [];
+            if (table === 'documents') data = await getAllDocuments();
+            else if (table === 'agents') data = await getAll(AGENT_CONFIG_STORE);
+            else if (table === 'lore') data = await getAllDocuments();
+            else return `Error: Table '${table}' not found`;
+            
+            return JSON.stringify(data.slice(0, 50), null, 2); 
+        } 
+        else if (q.startsWith('delete from')) {
+             const parts = q.split(' ');
+             const table = parts[2];
+             if (table === 'documents') {
+                 return "Error: DELETE requires specific implementation safety in shell";
+             }
+             return `Error: Table '${table}' not found or locked`;
         }
-        return `Query executed. ${deletedCount} rows deleted.`;
+        return "Error: Command not supported";
+    } catch(e: any) {
+        return `SQL Error: ${e.message}`;
     }
-    
-    // UPDATE
-    if (upperQuery.startsWith('UPDATE')) {
-        const tableMatch = upperQuery.match(/UPDATE (\w+)/);
-        const table = tableMatch ? tableMatch[1] : '';
-        if (table !== 'LORE') return `Error: Table '${table}' not found.`;
-        
-        const setMatch = query.match(/SET\s+(.+?)\s+WHERE/i);
-        if (!setMatch) return "Error: UPDATE syntax: UPDATE lore SET col=val WHERE ...";
-        const [col, val] = setMatch[1].split('=').map(s => s.trim());
-        const cleanVal = val.replace(/^['"]|['"]$/g, '');
-        
-        const whereMatch = query.match(/WHERE\s+(.+)$/i);
-        if (!whereMatch) return "Error: UPDATE requires WHERE clause.";
-        const condition = whereMatch[1];
-        const allDocs = await getAllDocuments();
-        let updatedCount = 0;
-        
-        for (const doc of allDocs) {
-            let match = false;
-            if (condition.toUpperCase().includes("ID =")) {
-                const targetId = condition.split('=')[1].trim().replace(/['"]/g, '');
-                if (doc.id === targetId) match = true;
-            }
-            if (match) {
-                if (col.toUpperCase() === 'CONTENT') { await updateDocumentContent(doc.id, cleanVal); updatedCount++; }
-                else if (col.toUpperCase() === 'PERMISSIONS') { await updateDocumentPermissions(doc.id, cleanVal); updatedCount++; }
-            }
-        }
-        return `Query executed. ${updatedCount} rows updated.`;
-    }
-
-    // SELECT
-    if (upperQuery.startsWith('SELECT')) {
-        const likeMatch = query.match(/LIKE\s+['"]%?(.*?)%?['"]/i);
-        const term = likeMatch ? likeMatch[1] : '';
-        if (!term && !upperQuery.includes('*')) return "Error: SELECT requires 'WHERE content LIKE' or similar.";
-        
-        let results = await getAllDocuments();
-        if (term) results = await searchDocuments(term);
-        
-        if (results.length === 0) return '0 rows returned.';
-        const rows = results.map(r => `| ${r.id.substring(0,8)}... | ${r.title.padEnd(20).substring(0,20)} | ${(r.permissions || '644').padEnd(5)} | ${(r.agentId || 'ALL').padEnd(10)} |`);
-        const header = `| ID           | TITLE                | PERM  | OWNER      |`;
-        const sep = `+--------------+----------------------+-------+------------+`;
-        return `<pre>${sep}\n${header}\n${sep}\n${rows.join('\n')}\n${sep}\n(${results.length} rows)</pre>`;
-    }
-
-    return "SQL Error: Command not supported. Use SELECT, UPDATE, DELETE.";
 };

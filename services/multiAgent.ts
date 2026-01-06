@@ -1,4 +1,3 @@
-
 import { GoogleGenAI, FunctionDeclaration, Type, Tool } from "@google/genai";
 import { Agent, MultiAgentMessage, SomaActionType } from "../types";
 import { searchDocuments, getAgentConfig, getGraphContext, getCanvas, updateCanvas } from "./db";
@@ -325,7 +324,7 @@ export const MultiAgentService = {
 
             // 3. CONTEXT CONSTRUCTION
             const agentConfig = await getAgentConfig(agent.id);
-            const specificInstruction = agentConfig.instruction || "";
+            const specificInstruction = agentConfig.systemInstruction || "";
 
             const rosterString = activeRoster
                 .map(a => `- ${a.handle.toUpperCase()} (${a.pronouns || 'they/them'}): ${a.title}`)

@@ -226,6 +226,68 @@ html, body {
 .holodeck-panel h1 { font-size: 1.5rem; letter-spacing: 2px; margin-top: 0; }
 .holodeck-panel h2 { font-size: 1.1rem; margin-top: 0; }
 
+/* INGESTION DASHBOARD */
+.stats-dashboard {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+    background: #080808;
+    padding: 0.75rem;
+    border: 1px solid #333;
+}
+
+.stat-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    background: #050505;
+    border: 1px solid #222;
+    padding: 0.5rem;
+}
+
+.stat-label { font-size: 0.6rem; color: #666; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 0.25rem; }
+.stat-value { font-size: 1rem; color: #e0e0e0; font-weight: bold; font-family: var(--font-mono); }
+.stat-value.active { color: #4ade80; text-shadow: 0 0 5px rgba(74, 222, 128, 0.5); }
+
+.queue-panel {
+    background: #080808;
+    border: 1px solid #333;
+    max-height: 200px;
+    overflow-y: auto;
+    margin-bottom: 1rem;
+}
+
+.queue-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.5rem;
+    border-bottom: 1px solid #222;
+    font-size: 0.75rem;
+}
+.queue-item:last-child { border-bottom: none; }
+
+.queue-status { font-weight: bold; font-size: 0.65rem; padding: 2px 4px; border-radius: 2px; }
+.queue-status.PENDING { color: #888; background: #222; }
+.queue-status.PROCESSING { color: #facc15; background: rgba(250, 204, 21, 0.1); }
+.queue-status.DONE { color: #4ade80; background: rgba(74, 222, 128, 0.1); }
+.queue-status.ERROR { 
+    color: #f87171; 
+    background: rgba(248, 113, 113, 0.1); 
+    animation: shake 0.5s cubic-bezier(.36,.07,.19,.97) both;
+}
+
+@keyframes shake {
+  10%, 90% { transform: translate3d(-1px, 0, 0); }
+  20%, 80% { transform: translate3d(2px, 0, 0); }
+  30%, 50%, 70% { transform: translate3d(-4px, 0, 0); }
+  40%, 60% { transform: translate3d(4px, 0, 0); }
+}
+
+.progress-bar-container { width: 100%; height: 4px; background: #222; margin-top: 4px; position: relative; }
+.progress-bar-fill { height: 100%; background: #4ade80; transition: width 0.3s; }
+
 /* Rest of styles remain largely similar */
 
 .logo-text {

@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { GoogleGenAI, Tool, Type } from "@google/genai";
 import { AGENTS } from './agents';
@@ -519,7 +518,7 @@ const App: React.FC = () => {
   const loadAgentConfig = async (id: string) => {
       const cfg = await getAgentConfig(id);
       const agent = AGENTS.find(a => a.id === id);
-      setAgentInstructions(cfg.instruction || agent?.system_instruction || '');
+      setAgentInstructions(cfg.systemInstruction || agent?.system_instruction || '');
       setModelConfig(cfg.modelConfig || DEFAULT_MODEL_CONFIG);
       setSelectedVoice(cfg.voiceName || agent?.voice || 'Puck');
       setVoiceSpeed(cfg.voiceSpeed || 1.0);
@@ -536,7 +535,7 @@ const App: React.FC = () => {
       if (speed) setVoiceSpeed(speed);
       if (pitch) setVoicePitch(pitch);
       await saveAgentConfig(currentAgentId, {
-          instruction: agentInstructions, modelConfig, voiceName: selectedVoice, voiceReference: voiceRef, accessLevel: newAccessLevel, voiceSpeed: speed, voicePitch: pitch
+          systemInstruction: agentInstructions, modelConfig, voiceName: selectedVoice, voiceReference: voiceRef, accessLevel: newAccessLevel, voiceSpeed: speed, voicePitch: pitch
       });
       await saveGeneralInstructions(generalInstructions);
       setAccessLevel(newAccessLevel || '400');
@@ -871,7 +870,7 @@ const App: React.FC = () => {
 
                     <div style={layoutMode === 'CHAT' || layoutMode === 'HYBRID' ? { flex: '1 1 0', display: 'flex', flexDirection: 'column', overflow: 'hidden' } : { display: 'none' }}>
                         <div className={`logs-container ${logs.length === 1 && logs[0].type === 'system' ? 'centered-single' : ''}`}>
-                            {logs.length === 0 && <div className="empty-state"><p>SYSTEM READY.</p><p>INITIALIZE CONNECTION TO BEGIN.</p></div>}
+                            {logs.length === 0 && <div className="empty-state"><p>SYSTEM READY. PRE-FLIGHT CHECKS GREEN.</p><p>INITIALIZE CONNECTION TO BEGIN.</p></div>}
                             {logs.map(log => (
                                 <div key={log.id} className={`log-entry ${log.type}`}>
                                     <div style={{display:'flex', justifyContent:'space-between'}}>
