@@ -1,7 +1,7 @@
 
 import { KnowledgeDoc, LorePack, LorePackHeader, GraphNode, GraphEdge } from '../types';
 import { NumMarkX_GenerateHeader, NumMarkX_GenerateID, NumMarkX_GenerateSigil } from '../patterns/NumMarkX';
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { addDocument, saveGraphNode, saveGraphEdge, getDocumentsByAgentId } from "./db";
 
 export interface IngestionResult {
@@ -34,6 +34,26 @@ async function asyncPool(poolLimit: number, array: any[], iteratorFn: (item: any
         }
     }
     return Promise.all(ret);
+}
+
+// Helper: Retry with Exponential Backoff
+async function retryWithBackoff<T>(operation: () => Promise<T>, retries = 3, baseDelay = 1000): Promise<T> {
+    try {
+        return await operation();
+    } catch (error: any) {
+        if (retries > 0 && (
+            error.message?.includes('unavailable') || 
+            error.message?.includes('503') || 
+            error.message?.includes('429') ||
+            error.status === 503
+        )) {
+            const delay = baseDelay * (Math.random() + 1); // Add jitter
+            console.warn(`[Retry] Operation failed (${error.message}). Retrying in ${Math.round(delay)}ms...`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+            return retryWithBackoff(operation, retries - 1, baseDelay * 2);
+        }
+        throw error;
+    }
 }
 
 export class IngestionService {
@@ -176,14 +196,14 @@ export class IngestionService {
             const batch = chunks.slice(i, i + BATCH_SIZE);
             try {
                 // 1. Get Embeddings for Batch
-                // Using SDK's embedContent with array of contents
-                const batchResult = await ai.models.embedContent({
+                // Wrapped in Retry Logic
+                const batchResult = await retryWithBackoff(() => ai.models.embedContent({
                     model: 'text-embedding-004',
                     contents: batch.map(c => ({ parts: [{ text: c }] })),
                     config: { taskType: 'RETRIEVAL_DOCUMENT', title: filename }
-                });
+                }));
                 
-                const embeddings = batchResult.embeddings;
+                const embeddings = (batchResult as any).embeddings;
 
                 // 2. Prepare Save & Extract Tasks
                 // Execute Graph Extraction in parallel (limited pool)
@@ -249,11 +269,12 @@ export class IngestionService {
         `;
 
         try {
-            const result = await ai.models.generateContent({
-                model: 'gemini-3-flash-preview', // Updated to Flash for Performance
+            // Wrapped in Retry Logic
+            const result = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
+                model: 'gemini-3-flash-preview', 
                 contents: [{ parts: [{ text: prompt }] }],
                 config: { responseMimeType: "application/json" }
-            });
+            }));
 
             const raw = result.text;
             if(!raw) return;

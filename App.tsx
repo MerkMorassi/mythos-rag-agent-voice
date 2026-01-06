@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { GoogleGenAI, Tool, Type } from "@google/genai";
 import { AGENTS } from './agents';
@@ -32,14 +33,16 @@ import {
   searchDocuments,
   ensureVectorIndex,
   getCanvas,
-  updateCanvas
+  updateCanvas,
+  searchMediaAssets,
+  getMediaAsset
 } from './services/db';
 import { IngestionService } from './services/ingestion';
 import { NumMarkX_GenerateID } from './patterns/NumMarkX';
 import { useGeminiLive } from './hooks/useGeminiLive';
 import { McpClient } from './services/mcpClient';
 import { ExternalRouter } from './services/externalRouter';
-import { readCanvasTool, updateCanvasTool } from './services/multiAgent';
+import { readCanvasTool, updateCanvasTool, MultiAgentService } from './services/multiAgent';
 import { PythonSandbox } from './services/pythonSandbox';
 import { AccessControl } from './services/accessControl';
 
@@ -79,10 +82,13 @@ const App: React.FC = () => {
   const [isCameraOn, setIsCameraOn] = useState(false);
   const [videoSource, setVideoSource] = useState<'camera' | 'media'>('camera');
   const [streamFileUrl, setStreamFileUrl] = useState<string | null>(null);
+  const [mediaFile, setMediaFile] = useState<File | null>(null); // Store actual file for analysis
   
   // Video Player Controls
   const [isLooping, setIsLooping] = useState(false);
   const [showCaptions, setShowCaptions] = useState(false);
+  const [captionsTrackUrl, setCaptionsTrackUrl] = useState<string | null>(null);
+  const [isGeneratingCC, setIsGeneratingCC] = useState(false);
   
   const videoRef = useRef<HTMLVideoElement | null>(null); // Webcam
   const mediaVideoRef = useRef<HTMLVideoElement | null>(null); // Movie File
@@ -112,16 +118,25 @@ const App: React.FC = () => {
   else if (modelMode === 'IMG') modeInstruction = "\n\n[MODE: VISUAL]\nACTIVATE 'Image Generation' PROTOCOL.";
 
   const CAPABILITY_INSTRUCTION = `
-[SYSTEM CAPABILITIES]
-1. VISION: You have a live video feed (Webcam or Movie File). You can see what the user shows you. Always analyze the visual context.
-2. IMAGE/VIDEO GENERATION: You can generate visual media. 
-   - If asked for an image/photo, use 'routeRequest' with target='FLUX_IMAGE'.
-   - If asked for a video/movie clip, use 'routeRequest' with target='VIDEO_GENERATION'.
-3. MEMORY: You are grounded in a persistent memory system.
-4. INPUT HANDLING: The user may speak and type simultaneously. 
-   - If you receive a text message or a file upload (image/doc) while the user is speaking, DO NOT ignore it. 
-   - Explicitly ACKNOWLEDGE receipt of any files or text inputs (e.g., "I received your document", "I see the image you sent").
-   - You can read and listen at the same time.
+[SYSTEM CAPABILITIES - MULTI-MODAL & PROACTIVE]
+1. SIMULTANEOUS INPUT HANDLING: 
+   - Users may Speak, Text, and Upload Images AT THE SAME TIME. 
+   - You must be aware of ALL inputs.
+   - If an image appears while you are listening, you MUST acknowledge it (e.g., "I see the photo you just sent...").
+   - Do not ignore text inputs just because you are speaking.
+
+2. PROACTIVE MEDIA GENERATION:
+   - You have permission to generate images (using routeRequest target='FLUX_IMAGE') or videos (target='VIDEO_GENERATION') autonomously.
+   - You do NOT need to ask for permission if you believe the media enhances the conversation.
+   - You may ask "Do you want me to send you an image?" OR you may simply say "I'm sending you a visual of that now..." and call the tool.
+
+3. MEDIA GALLERY ACCESS:
+   - You can search the user's Media Gallery using 'search_media_gallery'.
+   - You can display existing assets using 'show_media_asset'.
+
+4. MEMORY & VISION: 
+   - You are grounded in a persistent memory system.
+   - You have a live video feed (Webcam or Movie File) if active. Always analyze the visual context.
 `;
 
   const systemInstruction = `${generalInstructions}\n\n${agentInstructions || currentAgent?.system_instruction}${modeInstruction}\n${CAPABILITY_INSTRUCTION}`;
@@ -136,6 +151,33 @@ const App: React.FC = () => {
                   type: Type.OBJECT,
                   properties: { query: { type: Type.STRING, description: "The search query." } },
                   required: ["query"]
+              }
+          }
+      ]
+  };
+
+  const mediaGalleryTool: Tool = {
+      functionDeclarations: [
+          {
+              name: "search_media_gallery",
+              description: "Search for existing files in the Media Gallery (Images, Videos, Documents).",
+              parameters: {
+                  type: Type.OBJECT,
+                  properties: {
+                      query: { type: Type.STRING, description: "Keywords to search for (filename, description, tags)." }
+                  },
+                  required: ["query"]
+              }
+          },
+          {
+              name: "show_media_asset",
+              description: "Display a specific media asset from the Gallery to the user.",
+              parameters: {
+                  type: Type.OBJECT,
+                  properties: {
+                      assetId: { type: Type.STRING, description: "The ID of the asset to display (obtained from search)." }
+                  },
+                  required: ["assetId"]
               }
           }
       ]
@@ -272,7 +314,7 @@ const App: React.FC = () => {
   };
 
   // Determine Active Tools based on Permissions
-  const activeTools = [retrievalTool, googleMapsTool, routeRequestTool, holodeckTools];
+  const activeTools = [retrievalTool, googleMapsTool, routeRequestTool, holodeckTools, mediaGalleryTool];
   const canExecute = currentAgent ? AccessControl.canPerform(accessLevel, SomaActionType.EXEC_CODE) : false;
   const hasExecPerm = currentAgent?.permissions?.includes('EXECUTE_CODE') || canExecute;
   
@@ -308,7 +350,8 @@ const App: React.FC = () => {
                               attachment: routerRes.data?.split(',')[1], 
                               attachmentType: 'image'
                           }]);
-                          responses.push({ id: fc.id, name: fc.name, response: { result: "Image generated successfully and displayed." } });
+                          // Important: Tell the model it was displayed
+                          responses.push({ id: fc.id, name: fc.name, response: { result: "Image generated successfully and displayed to user." } });
                       } else if (routerRes.type === 'video' && routerRes.data) {
                           // Inject video into logs
                           setLogs(prev => [...prev, { 
@@ -319,7 +362,7 @@ const App: React.FC = () => {
                               attachment: routerRes.data?.split(',')[1], 
                               attachmentType: 'video'
                           }]);
-                          responses.push({ id: fc.id, name: fc.name, response: { result: "Video generated successfully and displayed." } });
+                          responses.push({ id: fc.id, name: fc.name, response: { result: "Video generated successfully and displayed to user." } });
                       } else {
                           responses.push({ id: fc.id, name: fc.name, response: { result: routerRes.data } });
                       }
@@ -327,6 +370,42 @@ const App: React.FC = () => {
                       responses.push({ id: fc.id, name: fc.name, response: { error: routerRes.error } });
                   }
               } catch (e: any) {
+                  responses.push({ id: fc.id, name: fc.name, response: { error: e.message } });
+              }
+          }
+          else if (fc.name === 'search_media_gallery') {
+              const query = (fc.args as any).query;
+              try {
+                  const assets = await searchMediaAssets(query);
+                  const resultStr = JSON.stringify(assets.map(a => ({
+                      id: a.id,
+                      prompt: a.prompt,
+                      type: a.type,
+                      tags: a.tags
+                  })));
+                  responses.push({ id: fc.id, name: fc.name, response: { result: resultStr } });
+              } catch(e: any) {
+                  responses.push({ id: fc.id, name: fc.name, response: { error: e.message } });
+              }
+          }
+          else if (fc.name === 'show_media_asset') {
+              const assetId = (fc.args as any).assetId;
+              try {
+                  const asset = await getMediaAsset(assetId);
+                  if (asset) {
+                      setLogs(prev => [...prev, { 
+                          id: crypto.randomUUID(), 
+                          type: 'model', 
+                          text: `[DISPLAYING ASSET: ${asset.prompt}]`, 
+                          timestamp: Date.now(),
+                          attachment: asset.data, 
+                          attachmentType: asset.type 
+                      }]);
+                      responses.push({ id: fc.id, name: fc.name, response: { result: "Asset displayed to user." } });
+                  } else {
+                      responses.push({ id: fc.id, name: fc.name, response: { error: "Asset not found" } });
+                  }
+              } catch(e: any) {
                   responses.push({ id: fc.id, name: fc.name, response: { error: e.message } });
               }
           }
@@ -402,7 +481,7 @@ const App: React.FC = () => {
 
   const { connect, disconnect, connectionState, analyser, sendText, sendRealtimeInput, isMicOn, setIsMicOn, isThinking } = useGeminiLive({
       apiKey,
-      modelName: 'gemini-2.5-flash-native-audio-preview-09-2025',
+      modelName: 'gemini-2.5-flash-native-audio-preview-12-2025',
       systemInstruction,
       voiceName: selectedVoice,
       tools: activeTools,
@@ -570,11 +649,19 @@ const App: React.FC = () => {
   const handleMediaFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       if (file) {
+          setMediaFile(file); // Keep file for deep analysis
           const url = URL.createObjectURL(file);
           setStreamFileUrl(url);
           setVideoSource('media');
           if (layoutMode === 'CHAT') setLayoutMode('HYBRID');
           else if (layoutMode !== 'HYBRID') setLayoutMode('VIDEO');
+          
+          // Reset previous captions
+          if (captionsTrackUrl) {
+              URL.revokeObjectURL(captionsTrackUrl);
+              setCaptionsTrackUrl(null);
+          }
+          setShowCaptions(false);
           
           setIsCameraOn(true);
           setTimeout(() => mediaVideoRef.current?.play(), 500);
@@ -587,6 +674,11 @@ const App: React.FC = () => {
           URL.revokeObjectURL(streamFileUrl);
           setStreamFileUrl(null);
       }
+      if (captionsTrackUrl) {
+          URL.revokeObjectURL(captionsTrackUrl);
+          setCaptionsTrackUrl(null);
+      }
+      setMediaFile(null);
       setVideoSource('camera');
       // Reset controls
       setIsLooping(false);
@@ -594,6 +686,89 @@ const App: React.FC = () => {
       // Ensure webcam is active if we were in video mode
       if (isCameraOn) {
           toggleCamera().then(toggleCamera); // Restart cam cycle to ensure clean state
+      }
+  };
+
+  const handleGenerateCC = async () => {
+      if (!mediaFile) return;
+      if (!apiKey) { alert("API Key required for Video Analysis"); return; }
+      
+      setIsGeneratingCC(true);
+      setLogs(prev => [...prev, { 
+          id: crypto.randomUUID(), 
+          type: 'system', 
+          text: `[CAPTIONING] Generating WebVTT subtitles via Gemini 3 Pro...`, 
+          timestamp: Date.now() 
+      }]);
+
+      try {
+          const vttContent = await MultiAgentService.generateVideoCaptions(apiKey, mediaFile);
+          const blob = new Blob([vttContent], { type: 'text/vtt' });
+          const url = URL.createObjectURL(blob);
+          
+          setCaptionsTrackUrl(url);
+          setShowCaptions(true); // Auto-enable on success
+          
+          setLogs(prev => [...prev, { 
+              id: crypto.randomUUID(), 
+              type: 'system', 
+              text: `[CAPTIONING COMPLETE] Subtitles generated and mounted.`, 
+              timestamp: Date.now() 
+          }]);
+
+          // Inject transcript into Live Session so Agent can "Hear"
+          if (connectionState === ConnectionState.CONNECTED) {
+              const cleanTranscript = vttContent.replace(/WEBVTT/g, '').replace(/\d{2}:\d{2}:\d{2}\.\d{3} --> \d{2}:\d{2}:\d{2}\.\d{3}/g, ' ').replace(/\n+/g, ' ').trim();
+              sendText(`[SYSTEM: Video Transcript Loaded. I can now reference specific dialogue from the video.]\nTRANSCRIPT: ${cleanTranscript.substring(0, 5000)}...`);
+          }
+
+      } catch (e: any) {
+          setLogs(prev => [...prev, { 
+              id: crypto.randomUUID(), 
+              type: 'system', 
+              text: `[CAPTIONING ERROR]: ${e.message}`, 
+              timestamp: Date.now() 
+          }]);
+      } finally {
+          setIsGeneratingCC(false);
+      }
+  };
+
+  const handleDeepAnalyze = async () => {
+      if (!mediaFile) return;
+      if (!apiKey) { alert("API Key required for Video Analysis"); return; }
+      
+      // Visual feedback
+      setLogs(prev => [...prev, { 
+          id: crypto.randomUUID(), 
+          type: 'system', 
+          text: `[VIDEO BRIDGE] Uploading "${mediaFile.name}" to Gemini 3 Pro for deep analysis...`, 
+          timestamp: Date.now() 
+      }]);
+
+      try {
+          // Trigger Analysis via MultiAgentService
+          const result = await MultiAgentService.analyzeVideo(apiKey, mediaFile);
+          
+          setLogs(prev => [...prev, { 
+              id: crypto.randomUUID(), 
+              type: 'model', 
+              text: `[VIDEO ANALYSIS]: ${result}`, 
+              timestamp: Date.now() 
+          }]);
+          
+          // Inform Live Agent via Context Injection (text message)
+          if (connectionState === ConnectionState.CONNECTED) {
+              sendText(`[SYSTEM: I have analyzed the video "${mediaFile.name}". Result: ${result}]`);
+          }
+          
+      } catch (e: any) {
+          setLogs(prev => [...prev, { 
+              id: crypto.randomUUID(), 
+              type: 'system', 
+              text: `[ANALYSIS ERROR]: ${e.message}`, 
+              timestamp: Date.now() 
+          }]);
       }
   };
 
@@ -802,34 +977,58 @@ const App: React.FC = () => {
                                             controls 
                                             loop={isLooping}
                                             style={{ width: '100%', height: '100%', objectFit: 'contain' }} 
-                                        />
+                                        >
+                                            {captionsTrackUrl && <track kind="captions" src={captionsTrackUrl} srcLang="en" label="AI Generated" default />}
+                                        </video>
                                         
                                         {/* VIDEO CONTROLS OVERLAY (Loop / CC / Eject) */}
-                                        <div style={{ position: 'absolute', top: '20px', right: '20px', display: 'flex', gap: '0.5rem', zIndex: 25 }}>
-                                             <button 
-                                                onClick={handleUnmountMedia}
-                                                className="btn btn-xs btn-danger"
-                                                style={{ fontWeight: 'bold', minWidth: '3rem' }}
-                                                title="Unmount / Eject Video"
-                                             >
-                                                ⏏ EJECT
-                                             </button>
-                                             <button 
-                                                onClick={() => setIsLooping(!isLooping)}
-                                                className={`btn btn-xs ${isLooping ? 'active-green' : 'btn-secondary'}`}
-                                                style={{ fontWeight: 'bold', minWidth: '3rem' }}
-                                                title="Toggle Video Loop"
-                                             >
-                                                {isLooping ? 'LOOP ON' : 'LOOP'}
-                                             </button>
-                                             <button 
-                                                onClick={() => setShowCaptions(!showCaptions)}
-                                                className={`btn btn-xs ${showCaptions ? 'active-green' : 'btn-secondary'}`}
-                                                style={{ fontWeight: 'bold', minWidth: '3rem' }}
-                                                title="Toggle Native Video Captions (if available)"
-                                             >
-                                                CC
-                                             </button>
+                                        <div style={{ position: 'absolute', top: '20px', right: '20px', display: 'flex', gap: '0.5rem', zIndex: 25, flexDirection: 'column' }}>
+                                             <div style={{display:'flex', gap:'0.5rem', justifyContent: 'flex-end'}}>
+                                                <button 
+                                                    onClick={handleDeepAnalyze}
+                                                    className="btn btn-xs btn-accent"
+                                                    style={{ fontWeight: 'bold', minWidth: '3rem', borderColor: '#a78bfa', color: '#a78bfa' }}
+                                                    title="Deep Analyze with Gemini 3 Pro"
+                                                >
+                                                    👁 ANALYZE
+                                                </button>
+                                                <button 
+                                                    onClick={handleGenerateCC}
+                                                    className={`btn btn-xs ${captionsTrackUrl ? 'active-green' : 'btn-accent'}`}
+                                                    style={{ fontWeight: 'bold', minWidth: '3rem', borderColor: captionsTrackUrl ? '#4ade80' : '#facc15', color: captionsTrackUrl ? '#4ade80' : '#facc15' }}
+                                                    title="Generate AI Closed Captions (WebVTT)"
+                                                    disabled={isGeneratingCC}
+                                                >
+                                                    {isGeneratingCC ? 'GENERATING...' : (captionsTrackUrl ? '✓ CC READY' : '✨ AI CAPTIONS')}
+                                                </button>
+                                             </div>
+                                             
+                                             <div style={{display:'flex', gap:'0.5rem', justifyContent: 'flex-end'}}>
+                                                <button 
+                                                    onClick={handleUnmountMedia}
+                                                    className="btn btn-xs btn-danger"
+                                                    style={{ fontWeight: 'bold', minWidth: '3rem' }}
+                                                    title="Unmount / Eject Video"
+                                                >
+                                                    ⏏ EJECT
+                                                </button>
+                                                <button 
+                                                    onClick={() => setIsLooping(!isLooping)}
+                                                    className={`btn btn-xs ${isLooping ? 'active-green' : 'btn-secondary'}`}
+                                                    style={{ fontWeight: 'bold', minWidth: '3rem' }}
+                                                    title="Toggle Video Loop"
+                                                >
+                                                    {isLooping ? 'LOOP ON' : 'LOOP'}
+                                                </button>
+                                                <button 
+                                                    onClick={() => setShowCaptions(!showCaptions)}
+                                                    className={`btn btn-xs ${showCaptions ? 'active-green' : 'btn-secondary'}`}
+                                                    style={{ fontWeight: 'bold', minWidth: '3rem' }}
+                                                    title="Toggle Native Video Captions (if available)"
+                                                >
+                                                    CC
+                                                </button>
+                                             </div>
                                         </div>
 
                                         <div className="screening-overlay">

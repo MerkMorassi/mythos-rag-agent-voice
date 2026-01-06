@@ -54,6 +54,7 @@ const FileIcon = ({ typeStr }: { typeStr: string }) => {
 
 interface IngestionQueueItem {
     id: string;
+    file?: File;
     name: string;
     status: 'PENDING' | 'PROCESSING' | 'DONE' | 'ERROR';
     progress: number;
@@ -103,6 +104,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
   const [cloudFiles, setCloudFiles] = useState<CloudFile[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [statusMsg, setStatusMsg] = useState<{ text: string, type: 'success' | 'error' | 'info' } | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cloudFileInputRef = useRef<HTMLInputElement>(null);
@@ -227,33 +229,71 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
   const handleMountPack = async (pack: LorePack) => { const count = pack.sacred_archive.length; if (!window.confirm(`MOUNT CARTRIDGE "${pack.header.name}"?\n\nThis will UNMOUNT (delete) current active memory for ${currentAgentId} and load this LorePack (${count} nodes).`)) return; setIsProcessing(true); setStatusMsg({ text: "Unmounting previous memory...", type: 'info' }); try { await deleteDocumentsByAgentId(currentAgentId); setStatusMsg({ text: `Mounting "${pack.header.name}"...`, type: 'info' }); const newDocs = pack.sacred_archive.map(d => ({ ...d, agentId: currentAgentId, timestamp: Date.now() })); const apiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY; const ai = apiKey ? new GoogleGenAI({ apiKey }) : null; const BATCH_SIZE = 50; for (let i = 0; i < newDocs.length; i += BATCH_SIZE) { const batch = newDocs.slice(i, i + BATCH_SIZE); await processBatch(batch, ai); } showStatus(`Successfully Mounted "${pack.header.name}"`, 'success'); setActiveTab('local'); await fetchDocs(); onUpdate(); } catch (e: any) { console.error(e); showStatus(`Mount Failed: ${e.message}`, 'error'); } finally { setIsProcessing(false); } };
   const handleDeletePack = async (id: string) => { if(!window.confirm("Delete this saved LorePack permanently?")) return; try { await deleteLorePack(id); fetchSavedPacks(); showStatus("LorePack deleted.", 'success'); } catch(e: any) { showStatus("Delete failed.", 'error'); } };
   
-  // Updated File Upload Handler with Queue
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-      const files = e.target.files;
-      if (!files || files.length === 0) return;
+  // --- INGESTION QUEUE LOGIC ---
+
+  const addFilesToQueue = (filesList: FileList | null) => {
+      if (!filesList || filesList.length === 0) return;
       
+      const newItems: IngestionQueueItem[] = [];
+      const skipped: string[] = [];
+
+      Array.from(filesList).forEach(file => {
+          // Check for duplicates in current queue
+          if (ingestionQueue.some(item => item.name === file.name)) {
+              skipped.push(file.name);
+              return;
+          }
+          
+          newItems.push({
+              id: crypto.randomUUID(),
+              file: file,
+              name: file.name,
+              status: 'PENDING',
+              progress: 0,
+              total: 0
+          });
+      });
+
+      if (newItems.length > 0) {
+          setIngestionQueue(prev => [...prev, ...newItems]);
+      }
+      
+      if (skipped.length > 0) {
+          showStatus(`Skipped ${skipped.length} duplicates.`, 'info');
+      }
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+      addFilesToQueue(e.target.files);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsDragging(false);
+      addFilesToQueue(e.dataTransfer.files);
+  };
+
+  const removeQueueItem = (id: string) => {
+      setIngestionQueue(prev => prev.filter(item => item.id !== id));
+  };
+
+  const startIngestion = async () => {
       const apiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY;
       if (!apiKey) {
           showStatus("API Key Missing. Configure in Settings.", 'error');
           return;
       }
 
-      // Add to Queue
-      const newItems: IngestionQueueItem[] = Array.from(files).map((f: any) => ({
-          id: crypto.randomUUID(),
-          name: f.name,
-          status: 'PENDING',
-          progress: 0,
-          total: 0
-      }));
-      setIngestionQueue(prev => [...prev, ...newItems]);
-      
-      // Start Processing if not already
-      if (!isQueueProcessing) {
-          processQueue(apiKey, Array.from(files));
+      const pendingItems = ingestionQueue.filter(i => i.status === 'PENDING' && i.file);
+      if (pendingItems.length === 0) {
+          showStatus("No pending files to ingest.", 'info');
+          return;
       }
-      
-      if (fileInputRef.current) fileInputRef.current.value = '';
+
+      const filesToProcess = pendingItems.map(i => i.file!);
+      await processQueue(apiKey, filesToProcess);
   };
 
   const processQueue = async (apiKey: string, files: File[]) => {
@@ -490,7 +530,14 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                     <>
                         <div className="flex-col">
                             <span className="section-header-title" style={{color: '#4ade80'}}>INGEST ({currentAgentId})</span>
-                            <label className="btn-file-input" title="Upload text or code files for RAG">
+                            <label 
+                                className={`btn-file-input ${isDragging ? 'active-green' : ''}`} 
+                                title="Upload text or code files for RAG"
+                                style={{ borderColor: isDragging ? '#4ade80' : '#333' }}
+                                onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                                onDragLeave={(e) => { e.preventDefault(); setIsDragging(false); }}
+                                onDrop={handleDrop}
+                            >
                             <input 
                                 type="file" 
                                 accept=".txt,.md,.json" 
@@ -502,46 +549,71 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                                 multiple
                             />
                             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem' }}>
-                                <span style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#a3a3a3' }}>
-                                {isQueueProcessing ? 'PROCESSING BATCH...' : 'DROP .TXT / .MD / .JSON'}
+                                <span style={{ fontSize: '0.8rem', fontWeight: 'bold', color: isDragging ? '#4ade80' : '#a3a3a3' }}>
+                                {isQueueProcessing ? 'PROCESSING BATCH...' : (isDragging ? 'RELEASE TO QUEUE' : 'DROP FILES TO STAGE')}
                                 </span>
                                 <span style={{ fontSize: '0.7rem', color: '#666' }}>Smart Recursive Chunking & Graph Extraction</span>
                             </div>
                             </label>
                         </div>
 
+                        {/* INGESTION QUEUE PANEL */}
+                        {ingestionQueue.length > 0 && (
+                            <div className="flex-col">
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <span className="section-header-title">INGESTION QUEUE ({ingestionQueue.length})</span>
+                                    {!isQueueProcessing && ingestionQueue.some(i => i.status === 'PENDING') && (
+                                        <button 
+                                            onClick={startIngestion} 
+                                            className="btn btn-xs btn-primary"
+                                            style={{ borderColor: '#4ade80', color: '#4ade80' }}
+                                        >
+                                            START INGESTION ▶
+                                        </button>
+                                    )}
+                                </div>
+                                <div className="queue-panel">
+                                    {ingestionQueue.map(item => (
+                                        <div key={item.id} className="queue-item">
+                                            <div style={{ flex: 1, marginRight: '10px' }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                                    <span style={{color:'#eee'}}>{item.name}</span>
+                                                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                                                        <span className={`queue-status ${item.status}`}>{item.status}</span>
+                                                        {item.status === 'PENDING' && !isQueueProcessing && (
+                                                            <button 
+                                                                onClick={() => removeQueueItem(item.id)}
+                                                                style={{ color: '#f87171', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 'bold' }}
+                                                                title="Remove from queue"
+                                                            >
+                                                                ×
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                                {item.status === 'PROCESSING' && (
+                                                    <div className="progress-bar-container">
+                                                        <div className="progress-bar-fill" style={{ width: `${item.total > 0 ? (item.progress / item.total) * 100 : 0}%` }}></div>
+                                                    </div>
+                                                )}
+                                                {item.status === 'ERROR' && (
+                                                    <div style={{color: '#f87171', fontSize: '0.65rem', marginTop: '2px'}}>{item.errorMsg}</div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
                         {/* STATS DASHBOARD */}
-                        {(isQueueProcessing || ingestionQueue.length > 0) && (
+                        {isQueueProcessing && (
                             <div className="stats-dashboard">
                                 <div className="stat-item"><span className="stat-label">ELAPSED</span><span className="stat-value active">{formatTime(ingestionStats.elapsed)}</span></div>
                                 <div className="stat-item"><span className="stat-label">THREADS</span><span className="stat-value">{ingestionStats.threads}</span></div>
                                 <div className="stat-item"><span className="stat-label">CHUNKS</span><span className="stat-value">{ingestionStats.totalChunks}</span></div>
                                 <div className="stat-item"><span className="stat-label">VECTORS</span><span className="stat-value">{ingestionStats.totalVectors}</span></div>
                                 <div className="stat-item"><span className="stat-label">SPEED</span><span className="stat-value">{ingestionStats.speed}/s</span></div>
-                            </div>
-                        )}
-
-                        {/* QUEUE PANEL */}
-                        {ingestionQueue.length > 0 && (
-                            <div className="queue-panel">
-                                {ingestionQueue.map(item => (
-                                    <div key={item.id} className="queue-item">
-                                        <div style={{ flex: 1, marginRight: '10px' }}>
-                                            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                                                <span style={{color:'#eee'}}>{item.name}</span>
-                                                <span className={`queue-status ${item.status}`}>{item.status}</span>
-                                            </div>
-                                            {item.status === 'PROCESSING' && (
-                                                <div className="progress-bar-container">
-                                                    <div className="progress-bar-fill" style={{ width: `${item.total > 0 ? (item.progress / item.total) * 100 : 0}%` }}></div>
-                                                </div>
-                                            )}
-                                            {item.status === 'ERROR' && (
-                                                <div style={{color: '#f87171', fontSize: '0.65rem', marginTop: '2px'}}>{item.errorMsg}</div>
-                                            )}
-                                        </div>
-                                    </div>
-                                ))}
                             </div>
                         )}
 

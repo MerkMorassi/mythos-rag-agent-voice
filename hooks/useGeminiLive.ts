@@ -34,6 +34,9 @@ export function useGeminiLive({
     const nextStartTimeRef = useRef<number>(0);
     const sessionPromiseRef = useRef<Promise<any> | null>(null);
     const sourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
+    
+    // Disconnect Flag to suppress "Cancelled" errors during teardown
+    const isIntentionalDisconnect = useRef(false);
 
     // Config Refs to prevent stale closures in callbacks
     const configRef = useRef({ apiKey, modelName, systemInstruction, voiceName, tools, isMicOn });
@@ -44,6 +47,8 @@ export function useGeminiLive({
     const connect = useCallback(async () => {
         if (!configRef.current.apiKey) return;
         
+        // Reset state
+        isIntentionalDisconnect.current = false;
         setConnectionState(ConnectionState.CONNECTING);
 
         try {
@@ -85,23 +90,38 @@ export function useGeminiLive({
                         if (inputContextRef.current) {
                             const source = inputContextRef.current.createMediaStreamSource(stream);
                             const processor = inputContextRef.current.createScriptProcessor(4096, 1, 1);
+                            
                             processor.onaudioprocess = (e) => {
+                                // STOP sending if we are disconnecting to prevent race conditions
+                                if (isIntentionalDisconnect.current) return;
                                 if (!configRef.current.isMicOn) return;
+                                
                                 const inputData = e.inputBuffer.getChannelData(0);
                                 const pcmBlob = createPcmBlob(inputData);
-                                sessionPromise.then(session => session.sendRealtimeInput({ media: pcmBlob }));
+                                
+                                sessionPromise.then(session => {
+                                    // Guard against sending to closed session
+                                    if (isIntentionalDisconnect.current) return;
+                                    session.sendRealtimeInput({ media: pcmBlob });
+                                }).catch(err => {
+                                    // Swallow errors during disconnect
+                                    if(!isIntentionalDisconnect.current) console.warn("Input Send Error:", err);
+                                });
                             };
+                            
                             source.connect(processor);
                             processor.connect(inputContextRef.current.destination);
                         }
                     },
                     onmessage: async (msg: LiveServerMessage) => {
+                        if (isIntentionalDisconnect.current) return;
+
                         // A. Tool Handling
                         if (msg.toolCall && onToolCall) {
                             setIsThinking(true);
                             try {
                                 const responses = await onToolCall(msg.toolCall);
-                                if (responses.length > 0) {
+                                if (responses.length > 0 && !isIntentionalDisconnect.current) {
                                     sessionPromise.then(session => session.sendToolResponse({ functionResponses: responses }));
                                 }
                             } finally {
@@ -146,10 +166,16 @@ export function useGeminiLive({
                         setConnectionState(ConnectionState.DISCONNECTED);
                         onLog({ id: crypto.randomUUID(), type: 'system', text: 'Disconnected', timestamp: Date.now() });
                     },
-                    onerror: (err) => {
+                    onerror: (err: any) => {
+                        // Suppress expected errors during teardown
+                        if (isIntentionalDisconnect.current) return;
+                        
+                        // Suppress generic streaming cancellation errors which happen often
+                        if (err.message?.includes('cancelled') || err.message?.includes('streaming context')) return;
+
                         console.error(err);
                         setConnectionState(ConnectionState.ERROR);
-                        onLog({ id: crypto.randomUUID(), type: 'system', text: `Error: ${err}`, timestamp: Date.now() });
+                        onLog({ id: crypto.randomUUID(), type: 'system', text: `Error: ${err.message}`, timestamp: Date.now() });
                     }
                 }
             });
@@ -163,34 +189,61 @@ export function useGeminiLive({
         }
     }, []);
 
-    const disconnect = useCallback(() => {
-        if (inputContextRef.current) inputContextRef.current.close();
-        if (audioContextRef.current) audioContextRef.current.close();
-        inputContextRef.current = null;
-        audioContextRef.current = null;
-        sessionPromiseRef.current?.then(s => s.close && s.close());
-        sessionPromiseRef.current = null;
+    const disconnect = useCallback(async () => {
+        // 1. Mark intentional to suppress "Thread Cancelled" errors
+        isIntentionalDisconnect.current = true;
+        
+        // 2. Stop Audio/Input Contexts immediately to prevent new data sending
+        if (inputContextRef.current) {
+            await inputContextRef.current.close();
+            inputContextRef.current = null;
+        }
+        if (audioContextRef.current) {
+            await audioContextRef.current.close();
+            audioContextRef.current = null;
+        }
+
+        // 3. Close Session safely
+        if (sessionPromiseRef.current) {
+            try {
+                const session = await sessionPromiseRef.current;
+                if (session && session.close) {
+                    session.close();
+                }
+            } catch(e) {
+                console.warn("Session close error suppressed:", e);
+            }
+            sessionPromiseRef.current = null;
+        }
+        
         setConnectionState(ConnectionState.DISCONNECTED);
     }, []);
 
     const sendText = useCallback(async (text: string) => {
-        if (sessionPromiseRef.current) {
-            const session = await sessionPromiseRef.current;
-            // Check if send method exists to prevent crashes
-            if (typeof session.send === 'function') {
-                session.send({
-                    clientContent: { turns: [{ role: 'user', parts: [{ text }] }], turnComplete: true }
-                });
-            } else {
-                console.warn("session.send is not available in this SDK version. Text input ignored.");
+        if (sessionPromiseRef.current && !isIntentionalDisconnect.current) {
+            try {
+                const session = await sessionPromiseRef.current;
+                if (typeof session.send === 'function') {
+                    session.send({
+                        clientContent: { turns: [{ role: 'user', parts: [{ text }] }], turnComplete: true }
+                    });
+                } else {
+                    console.warn("session.send is not available in this SDK version. Text input ignored.");
+                }
+            } catch(e) {
+                if(!isIntentionalDisconnect.current) console.error("Send Text Error:", e);
             }
         }
     }, []);
 
     const sendRealtimeInput = useCallback(async (input: any) => {
-        if (sessionPromiseRef.current) {
-            const session = await sessionPromiseRef.current;
-            session.sendRealtimeInput(input);
+        if (sessionPromiseRef.current && !isIntentionalDisconnect.current) {
+            try {
+                const session = await sessionPromiseRef.current;
+                session.sendRealtimeInput(input);
+            } catch(e) {
+                // Silently fail if session is busy/closed
+            }
         }
     }, []);
 

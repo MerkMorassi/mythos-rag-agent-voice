@@ -39,6 +39,39 @@ export const HOLODECK_STORE = 'holodeck';
 
 let dbInstance: IDBDatabase | null = null;
 
+// --- MEMORY OPTIMIZATION: LRU VECTOR CACHE ---
+class VectorLRUCache {
+    private cache: Map<string, number[]>;
+    private limit: number;
+
+    constructor(limit: number) {
+        this.cache = new Map();
+        this.limit = limit;
+    }
+
+    get(id: string): number[] | undefined {
+        if (!this.cache.has(id)) return undefined;
+        // Refresh item (move to end)
+        const val = this.cache.get(id)!;
+        this.cache.delete(id);
+        this.cache.set(id, val);
+        return val;
+    }
+
+    put(id: string, vector: number[]) {
+        if (this.cache.has(id)) {
+            this.cache.delete(id);
+        } else if (this.cache.size >= this.limit) {
+            // Evict oldest (first)
+            this.cache.delete(this.cache.keys().next().value);
+        }
+        this.cache.set(id, vector);
+    }
+}
+
+// Keep ~5000 vectors in memory (approx 15-20MB for 768-dim float arrays)
+const vectorCache = new VectorLRUCache(5000);
+
 export const initDB = (): Promise<IDBDatabase> => {
     if (dbInstance) return Promise.resolve(dbInstance);
 
@@ -194,27 +227,74 @@ function cosineSimilarity(vecA: number[], vecB: number[]): number {
 
 export const ensureVectorIndex = async () => { /* No-op for IndexedDB */ };
 
+/**
+ * Streaming Search with LRU Cache to prevent OOM
+ */
 export const searchDocuments = async (query: string, embedding?: number[], agentId?: string): Promise<KnowledgeDoc[]> => {
-    const allDocs = agentId ? await getDocumentsByAgentId(agentId) : await getAll<KnowledgeDoc>(DOC_STORE);
+    const db = await initDB();
+    const transaction = db.transaction([DOC_STORE], 'readonly');
+    const store = transaction.objectStore(DOC_STORE);
     
-    // Exact text match (fallback or boost)
-    const exactMatches = allDocs.filter(d => d.content.toLowerCase().includes(query.toLowerCase()));
-    
-    // Vector Search
-    if (embedding) {
-        const scored = allDocs
-            .filter(d => d.embedding)
-            .map(d => ({ doc: d, score: cosineSimilarity(embedding, d.embedding!) }))
-            .sort((a, b) => b.score - a.score)
-            .slice(0, 5)
-            .map(item => item.doc);
+    // We maintain a limited buffer of top candidates to avoid array bloat
+    let candidates: { doc: KnowledgeDoc, score: number }[] = [];
+    const MAX_BUFFER_SIZE = 200; // Trim when we exceed this
+    const TARGET_SIZE = 100;
+
+    return new Promise((resolve, reject) => {
+        const request = agentId 
+            ? store.index('agentId').openCursor(IDBKeyRange.only(agentId)) 
+            : store.openCursor();
+
+        request.onsuccess = (event) => {
+            const cursor = (event.target as IDBRequest).result as IDBCursorWithValue;
             
-        // Combine results
-        const combined = [...new Set([...scored, ...exactMatches])];
-        return combined.slice(0, 8);
-    }
-    
-    return exactMatches.slice(0, 10);
+            if (cursor) {
+                const doc = cursor.value as KnowledgeDoc;
+                
+                // 1. Text Match Score (Keyword Boost)
+                let score = 0;
+                if (doc.content.toLowerCase().includes(query.toLowerCase())) {
+                    score += 0.15;
+                }
+                
+                // 2. Vector Match Score (Cosine Similarity)
+                if (embedding) {
+                    // Check LRU Cache first
+                    let vec = vectorCache.get(doc.id);
+                    
+                    if (!vec && doc.embedding) {
+                        vec = doc.embedding;
+                        // Cache for next time
+                        vectorCache.put(doc.id, vec);
+                    }
+                    
+                    if (vec) {
+                        const sim = cosineSimilarity(embedding, vec);
+                        score += sim;
+                    }
+                }
+                
+                // 3. Selection Threshold
+                if (score > 0.01) { 
+                    candidates.push({ doc, score });
+                    
+                    // Memory Safety: Periodic Truncation
+                    if (candidates.length > MAX_BUFFER_SIZE) {
+                        candidates.sort((a, b) => b.score - a.score);
+                        candidates = candidates.slice(0, TARGET_SIZE);
+                    }
+                }
+
+                cursor.continue(); // Stream next
+            } else {
+                // DONE
+                candidates.sort((a, b) => b.score - a.score);
+                resolve(candidates.slice(0, 10).map(r => r.doc));
+            }
+        };
+        
+        request.onerror = () => reject(request.error);
+    });
 };
 
 // --- GRAPH DB ---
@@ -314,6 +394,21 @@ export const updateMediaAsset = async (id: string, updates: Partial<MediaAsset>)
     if (item) {
         store.put({ ...item, ...updates });
     }
+};
+
+export const searchMediaAssets = async (query: string): Promise<MediaAsset[]> => {
+    const all = await getAllMediaAssets();
+    const q = query.toLowerCase();
+    return all.filter(a => 
+        a.prompt.toLowerCase().includes(q) || 
+        a.tags?.some(t => t.toLowerCase().includes(q)) ||
+        a.type.toLowerCase().includes(q)
+    ).slice(0, 10);
+};
+
+export const getMediaAsset = async (id: string): Promise<MediaAsset | undefined> => {
+    const all = await getAllMediaAssets();
+    return all.find(a => a.id === id);
 };
 
 // --- LORE PACKS ---

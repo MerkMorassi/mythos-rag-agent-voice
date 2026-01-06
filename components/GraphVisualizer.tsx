@@ -1,5 +1,6 @@
 
 import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { GraphNode, GraphEdge } from '../types';
 import { getAllGraphNodes, getGraphEdges } from '../services/db';
 
@@ -8,13 +9,17 @@ interface GraphVisualizerProps {
     onClose: () => void;
 }
 
-// Simple vector math
-interface Point { x: number; y: number; }
 interface SimulationNode extends GraphNode {
     x: number;
     y: number;
     vx: number;
     vy: number;
+}
+
+// Optimized Edge holding direct references
+interface SimulationEdge {
+    source: SimulationNode;
+    target: SimulationNode;
 }
 
 const COLOR_MAP: Record<string, string> = {
@@ -28,179 +33,235 @@ const COLOR_MAP: Record<string, string> = {
 export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ isOpen, onClose }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
-    const [nodes, setNodes] = useState<SimulationNode[]>([]);
-    const [edges, setEdges] = useState<GraphEdge[]>([]);
+    
+    // Use Refs for simulation state to decouple from React render cycle
+    const nodesRef = useRef<SimulationNode[]>([]);
+    const edgesRef = useRef<SimulationEdge[]>([]);
+    
     const [stats, setStats] = useState({ nodes: 0, edges: 0 });
-    
-    // Size state for responsiveness
-    const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
-    
-    // Interactive State
     const [hoveredNode, setHoveredNode] = useState<SimulationNode | null>(null);
+    
     const draggingRef = useRef<SimulationNode | null>(null);
-    const offsetRef = useRef<Point>({ x: 0, y: 0 }); // Pan offset
-    const zoomRef = useRef<number>(1);
+    const offsetRef = useRef({ x: 0, y: 0 });
+    const zoomRef = useRef(0.8);
     const animationRef = useRef<number>(0);
+    const isRunningRef = useRef(false);
 
-    // Resize Handler
+    // Initial Load
     useEffect(() => {
-        if (!containerRef.current) return;
-
-        const updateSize = () => {
-            if (containerRef.current) {
-                setDimensions({
-                    width: containerRef.current.clientWidth,
-                    height: containerRef.current.clientHeight
-                });
-            }
+        if (isOpen) {
+            loadGraph();
+            isRunningRef.current = true;
+            animationRef.current = requestAnimationFrame(draw);
+        } else {
+            isRunningRef.current = false;
+            cancelAnimationFrame(animationRef.current);
+        }
+        return () => {
+            isRunningRef.current = false;
+            cancelAnimationFrame(animationRef.current);
         };
-
-        const resizeObserver = new ResizeObserver(() => {
-            requestAnimationFrame(updateSize);
-        });
-        
-        resizeObserver.observe(containerRef.current);
-        updateSize(); // Initial call
-
-        return () => resizeObserver.disconnect();
-    }, [isOpen]);
-
-    useEffect(() => {
-        if (isOpen) loadGraph();
-        return () => cancelAnimationFrame(animationRef.current);
     }, [isOpen]);
 
     const loadGraph = async () => {
         const rawNodes = await getAllGraphNodes();
         const rawEdges = await getGraphEdges();
         
-        // Initialize positions randomly but centered
+        initSimulation(rawNodes, rawEdges);
+    };
+
+    const initSimulation = (rawNodes: GraphNode[], rawEdges: GraphEdge[]) => {
+        // 1. Initialize Nodes with random positions
         const simNodes: SimulationNode[] = rawNodes.map(n => ({
             ...n,
-            x: (Math.random() - 0.5) * 800,
-            y: (Math.random() - 0.5) * 600,
+            x: (Math.random() - 0.5) * 1000,
+            y: (Math.random() - 0.5) * 800,
             vx: 0,
             vy: 0
         }));
 
-        setNodes(simNodes);
-        setEdges(rawEdges);
-        setStats({ nodes: simNodes.length, edges: rawEdges.length });
+        // 2. Pre-resolve Edges to Node References (O(1) lookup during physics)
+        const nodeMap = new Map(simNodes.map(n => [n.id, n]));
+        const simEdges: SimulationEdge[] = [];
+        
+        rawEdges.forEach(e => {
+            const source = nodeMap.get(e.source);
+            const target = nodeMap.get(e.target);
+            if (source && target) {
+                simEdges.push({ source, target });
+            }
+        });
+
+        nodesRef.current = simNodes;
+        edgesRef.current = simEdges;
+        
+        setStats({ nodes: simNodes.length, edges: simEdges.length });
+        
+        // Reset View
+        offsetRef.current = { x: 0, y: 0 };
+        zoomRef.current = 0.8;
     };
 
-    // --- PHYSICS ENGINE ---
-    const updatePhysics = () => {
-        const REPULSION = 8000;
-        const ATTRACTION = 0.05; // Spring strength
-        const CENTER_GRAVITY = 0.01;
-        const DAMPING = 0.85; // Friction
-        const MAX_VELOCITY = 10;
+    const injectTestData = () => {
+        const testNodes: GraphNode[] = [];
+        const categories = ['PERSON', 'LOCATION', 'CONCEPT', 'EVENT'];
+        
+        for(let i=0; i<30; i++) {
+            testNodes.push({
+                id: `TEST_NODE_${i}`,
+                name: `Node ${i}`,
+                label: categories[i % categories.length],
+                description: "Simulation Test Node",
+                agentId: 'SYSTEM',
+                sourceDocIds: [],
+                timestamp: Date.now()
+            });
+        }
+        
+        const testEdges: GraphEdge[] = [];
+        for(let i=0; i<25; i++) {
+            const s = Math.floor(Math.random() * 30);
+            let t = Math.floor(Math.random() * 30);
+            while(t === s) t = Math.floor(Math.random() * 30);
+            testEdges.push({
+                id: `EDGE_${i}`,
+                source: `TEST_NODE_${s}`,
+                target: `TEST_NODE_${t}`,
+                relation: 'LINKED_TO',
+                agentId: 'SYSTEM',
+                timestamp: Date.now()
+            });
+        }
+        
+        initSimulation(testNodes, testEdges);
+    };
 
+    const updatePhysics = () => {
+        const nodes = nodesRef.current;
+        const edges = edgesRef.current;
+        
+        const REPULSION = 5000;
+        const ATTRACTION = 0.02; 
+        const CENTER_GRAVITY = 0.005;
+        const DAMPING = 0.85; 
+        const MAX_VELOCITY = 15;
+
+        // 1. Repulsion (N^2 optimized checks could go here, but simple N^2 is fine for <500 nodes)
         for (let i = 0; i < nodes.length; i++) {
             const a = nodes[i];
-            if (a === draggingRef.current) continue; // Mouse holds it still
+            if (a === draggingRef.current) continue;
 
             let fx = 0, fy = 0;
 
-            // 1. Repulsion (Nodes push apart)
             for (let j = 0; j < nodes.length; j++) {
                 if (i === j) continue;
                 const b = nodes[j];
                 const dx = a.x - b.x;
                 const dy = a.y - b.y;
-                const distSq = dx*dx + dy*dy + 0.1; // Avoid div0
-                const force = REPULSION / distSq;
+                let distSq = dx*dx + dy*dy;
+                if (distSq < 0.1) distSq = 0.1; // Prevent Singularity
+                
                 const dist = Math.sqrt(distSq);
+                const force = REPULSION / distSq;
+                
                 fx += (dx / dist) * force;
                 fy += (dy / dist) * force;
             }
 
-            // 2. Center Gravity (Pull to 0,0)
+            // 2. Center Gravity
             fx -= a.x * CENTER_GRAVITY;
             fy -= a.y * CENTER_GRAVITY;
 
-            // 3. Edges (Springs)
-            // Naive loop: find connected edges
-            
             a.vx = (a.vx + fx) * DAMPING;
             a.vy = (a.vy + fy) * DAMPING;
-            
-            // Cap velocity
-            const vMag = Math.sqrt(a.vx*a.vx + a.vy*a.vy);
-            if (vMag > MAX_VELOCITY) {
-                a.vx = (a.vx / vMag) * MAX_VELOCITY;
-                a.vy = (a.vy / vMag) * MAX_VELOCITY;
-            }
-
-            a.x += a.vx;
-            a.y += a.vy;
         }
 
-        // Apply Edge Attraction (Iterate Edges once)
-        edges.forEach(e => {
-            const source = nodes.find(n => n.id === e.source);
-            const target = nodes.find(n => n.id === e.target);
-            if (source && target) {
-                const dx = target.x - source.x;
-                const dy = target.y - source.y;
-                const dist = Math.sqrt(dx*dx + dy*dy);
-                
-                // Spring force
-                const force = (dist - 100) * ATTRACTION; // 100 is resting length
-                const fx = (dx / dist) * force;
-                const fy = (dy / dist) * force;
+        // 3. Edges (Springs)
+        for (const e of edges) {
+            const { source, target } = e;
+            const dx = target.x - source.x;
+            const dy = target.y - source.y;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+            
+            // Hooke's Law with resting length
+            const resting = 150;
+            const force = (dist - resting) * ATTRACTION;
+            
+            const fx = (dx / dist) * force;
+            const fy = (dy / dist) * force;
 
-                if (source !== draggingRef.current) {
-                    source.vx += fx;
-                    source.vy += fy;
-                }
-                if (target !== draggingRef.current) {
-                    target.vx -= fx;
-                    target.vy -= fy;
-                }
+            if (source !== draggingRef.current) {
+                source.vx += fx;
+                source.vy += fy;
             }
-        });
+            if (target !== draggingRef.current) {
+                target.vx -= fx;
+                target.vy -= fy;
+            }
+        }
+
+        // 4. Update Positions & Cap Velocity
+        for (const n of nodes) {
+            if (n === draggingRef.current) continue;
+            
+            const vMag = Math.sqrt(n.vx*n.vx + n.vy*n.vy);
+            if (vMag > MAX_VELOCITY) {
+                n.vx = (n.vx / vMag) * MAX_VELOCITY;
+                n.vy = (n.vy / vMag) * MAX_VELOCITY;
+            }
+            
+            n.x += n.vx;
+            n.y += n.vy;
+        }
     };
 
     const draw = () => {
+        if (!canvasRef.current || !containerRef.current) return;
+        
         const canvas = canvasRef.current;
-        if (!canvas) return;
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
 
+        // Resize Canvas to Match Container exactly
+        const { clientWidth, clientHeight } = containerRef.current;
+        if (canvas.width !== clientWidth || canvas.height !== clientHeight) {
+            canvas.width = clientWidth;
+            canvas.height = clientHeight;
+        }
+
         updatePhysics();
+
+        const nodes = nodesRef.current;
+        const edges = edgesRef.current;
 
         // Clear
         ctx.fillStyle = '#050505';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-        // Transform (Pan/Zoom)
+        // Transform
         ctx.save();
         ctx.translate(canvas.width / 2 + offsetRef.current.x, canvas.height / 2 + offsetRef.current.y);
         ctx.scale(zoomRef.current, zoomRef.current);
 
         // Draw Edges
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
         ctx.lineWidth = 1;
         ctx.beginPath();
-        edges.forEach(e => {
-            const source = nodes.find(n => n.id === e.source);
-            const target = nodes.find(n => n.id === e.target);
-            if (source && target) {
-                ctx.moveTo(source.x, source.y);
-                ctx.lineTo(target.x, target.y);
-            }
-        });
+        for (const e of edges) {
+            ctx.moveTo(e.source.x, e.source.y);
+            ctx.lineTo(e.target.x, e.target.y);
+        }
         ctx.stroke();
 
         // Draw Nodes
-        nodes.forEach(n => {
+        for (const n of nodes) {
             const color = COLOR_MAP[n.label] || COLOR_MAP.DEFAULT;
-            const size = n === hoveredNode ? 8 : 4;
-            
+            const isHovered = n.id === hoveredNode?.id; // Check ID stability
+            const size = isHovered ? 12 : 6;
+
             // Glow
-            if (n === hoveredNode) {
-                ctx.shadowBlur = 15;
+            if (isHovered) {
+                ctx.shadowBlur = 20;
                 ctx.shadowColor = color;
             } else {
                 ctx.shadowBlur = 0;
@@ -211,90 +272,81 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ isOpen, onClos
             ctx.arc(n.x, n.y, size, 0, Math.PI * 2);
             ctx.fill();
 
-            // Labels (Show if zoomed in or hovered or important)
-            if (zoomRef.current > 0.8 || n === hoveredNode) {
+            // Labels
+            if (zoomRef.current > 0.6 || isHovered) {
                 ctx.fillStyle = '#eee';
-                ctx.font = '10px monospace';
-                ctx.fillText(n.name, n.x + 8, n.y + 3);
+                ctx.font = isHovered ? 'bold 14px monospace' : '10px monospace';
+                ctx.fillText(n.name, n.x + size + 4, n.y + 4);
             }
-        });
+        }
 
         ctx.restore();
-        animationRef.current = requestAnimationFrame(draw);
-    };
 
-    useEffect(() => {
-        if (isOpen && dimensions.width > 0) {
+        if (isRunningRef.current) {
             animationRef.current = requestAnimationFrame(draw);
         }
-        return () => cancelAnimationFrame(animationRef.current);
-    }, [isOpen, nodes, edges, dimensions]);
+    };
 
-    // --- INTERACTION HANDLERS ---
-    
+    // --- INTERACTION ---
+
     const getCanvasCoords = (e: React.MouseEvent) => {
         const canvas = canvasRef.current;
         if (!canvas) return { x: 0, y: 0 };
         const rect = canvas.getBoundingClientRect();
-        // Convert screen pixels to transformed world space
-        const screenX = e.clientX - rect.left;
-        const screenY = e.clientY - rect.top;
-        
-        // Apply inverse transform
-        const x = (screenX - canvas.width/2 - offsetRef.current.x) / zoomRef.current;
-        const y = (screenY - canvas.height/2 - offsetRef.current.y) / zoomRef.current;
+        const x = (e.clientX - rect.left - canvas.width/2 - offsetRef.current.x) / zoomRef.current;
+        const y = (e.clientY - rect.top - canvas.height/2 - offsetRef.current.y) / zoomRef.current;
         return { x, y };
     };
 
     const handleMouseDown = (e: React.MouseEvent) => {
         const { x, y } = getCanvasCoords(e);
-        // Find clicked node
-        const clicked = nodes.find(n => {
-            const dx = n.x - x;
-            const dy = n.y - y;
-            return Math.sqrt(dx*dx + dy*dy) < 10 / zoomRef.current; // Tolerance
-        });
+        // Find Node
+        const nodes = nodesRef.current;
+        let clicked = null;
+        // Search in reverse draw order (top first)
+        for (let i = nodes.length - 1; i >= 0; i--) {
+            const n = nodes[i];
+            const dist = Math.sqrt((n.x - x)**2 + (n.y - y)**2);
+            if (dist < 20 / zoomRef.current) {
+                clicked = n;
+                break;
+            }
+        }
 
         if (clicked) {
             draggingRef.current = clicked;
-        } else {
-            // Dragging background (Pan)
-            // Implementation of panning requires state tracking, simplified here:
-            // We just use native event movement for panning in handleMouseMove
         }
     };
 
     const handleMouseMove = (e: React.MouseEvent) => {
         const { x, y } = getCanvasCoords(e);
         
-        // Hover Logic
-        if (!draggingRef.current) {
-            const hovered = nodes.find(n => {
-                const dx = n.x - x;
-                const dy = n.y - y;
-                return Math.sqrt(dx*dx + dy*dy) < 10 / zoomRef.current;
-            });
-            setHoveredNode(hovered || null);
-            if (canvasRef.current) canvasRef.current.style.cursor = hovered ? 'pointer' : 'default';
-        }
-
-        // Node Drag
         if (draggingRef.current) {
             draggingRef.current.x = x;
             draggingRef.current.y = y;
             draggingRef.current.vx = 0;
             draggingRef.current.vy = 0;
-        } 
-        
-        // Background Pan (if mouse down and no node) - Needs separate state for "isPanning"
-        if (e.buttons === 1 && !draggingRef.current) {
+        } else if (e.buttons === 1) {
+            // Pan
             offsetRef.current.x += e.movementX;
             offsetRef.current.y += e.movementY;
+        } else {
+            // Hover check
+            const nodes = nodesRef.current;
+            let found = null;
+            for (let i = nodes.length - 1; i >= 0; i--) {
+                const n = nodes[i];
+                const dist = Math.sqrt((n.x - x)**2 + (n.y - y)**2);
+                if (dist < 15 / zoomRef.current) {
+                    found = n;
+                    break;
+                }
+            }
+            setHoveredNode(found);
+            if (canvasRef.current) {
+                canvasRef.current.style.cursor = found ? 'pointer' : (e.buttons === 1 ? 'grabbing' : 'grab');
+            }
         }
-    };
-
-    const handleMouseUp = () => {
-        draggingRef.current = null;
     };
 
     const handleWheel = (e: React.WheelEvent) => {
@@ -304,58 +356,119 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ isOpen, onClos
 
     if (!isOpen) return null;
 
-    return (
-        <div className="modal-overlay">
-            <div className="modal-content large animate-slide-in-right" style={{ width: '100vw', maxWidth: '100vw', border: 'none', height: '100%' }}>
-                
-                <div className="modal-header-area" style={{ position: 'absolute', top: 0, left: 0, width: '100%', zIndex: 10, background: 'rgba(5,5,5,0.8)' }}>
-                    <div className="flex-group">
-                        <span className="modal-section-title" style={{ color: '#38bdf8' }}>NEURAL LATTICE VISUALIZER</span>
-                        <div style={{ fontSize: '0.7rem', color: '#666' }}>
-                            NODES: {stats.nodes} | EDGES: {stats.edges}
-                        </div>
+    // USE PORTAL TO RENDER AT ROOT LEVEL
+    return createPortal(
+        <div style={{ 
+            position: 'fixed', 
+            top: 0, 
+            left: 0, 
+            width: '100vw', 
+            height: '100vh', 
+            zIndex: 10000, 
+            background: 'rgba(0,0,0,0.95)',
+            display: 'flex',
+            flexDirection: 'column'
+        }} className="animate-slide-in-right">
+            
+            {/* Header / HUD */}
+            <div style={{ 
+                position: 'absolute', 
+                top: 0, 
+                left: 0, 
+                width: '100%', 
+                padding: '1rem', 
+                background: 'linear-gradient(to bottom, rgba(0,0,0,0.9), transparent)', 
+                display: 'flex', 
+                justifyContent: 'space-between', 
+                alignItems: 'center',
+                zIndex: 10,
+                pointerEvents: 'none' // Let clicks pass through to canvas where possible
+            }}>
+                <div style={{ pointerEvents: 'auto' }}>
+                    <div style={{ color: '#38bdf8', fontWeight: 'bold', fontSize: '1.2rem', letterSpacing: '2px', textShadow: '0 0 10px rgba(56, 189, 248, 0.5)' }}>
+                        NEURAL LATTICE
                     </div>
-                    <button onClick={onClose} className="close-btn" title="Close">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                    </button>
+                    <div style={{ color: '#666', fontSize: '0.8rem', fontFamily: 'monospace' }}>
+                        NODES: {stats.nodes} • EDGES: {stats.edges} • ZOOM: {Math.round(zoomRef.current * 100)}%
+                    </div>
                 </div>
+                <button 
+                    onClick={onClose} 
+                    className="btn btn-secondary btn-sm"
+                    style={{ pointerEvents: 'auto', borderColor: '#f87171', color: '#f87171' }}
+                >
+                    CLOSE VISUALIZER
+                </button>
+            </div>
 
-                {/* OVERLAY HUD */}
-                {hoveredNode && (
+            {/* Info Panel for Hover */}
+            {hoveredNode && (
+                <div style={{ 
+                    position: 'absolute', 
+                    bottom: '2rem', 
+                    left: '2rem', 
+                    maxWidth: '400px', 
+                    background: 'rgba(10, 10, 10, 0.9)', 
+                    border: `1px solid ${COLOR_MAP[hoveredNode.label] || '#fff'}`,
+                    padding: '1.5rem',
+                    borderRadius: '8px',
+                    zIndex: 20,
+                    backdropFilter: 'blur(4px)',
+                    boxShadow: '0 10px 30px rgba(0,0,0,0.5)',
+                    pointerEvents: 'none'
+                }}>
+                    <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#fff', marginBottom: '0.5rem' }}>
+                        {hoveredNode.name}
+                    </div>
                     <div style={{ 
-                        position: 'absolute', 
-                        bottom: '20px', 
-                        left: '20px', 
-                        background: 'rgba(0,0,0,0.8)', 
-                        border: `1px solid ${COLOR_MAP[hoveredNode.label] || '#fff'}`,
-                        padding: '1rem',
-                        borderRadius: '4px',
-                        maxWidth: '300px',
-                        zIndex: 20,
-                        pointerEvents: 'none'
+                        display: 'inline-block', 
+                        padding: '2px 8px', 
+                        borderRadius: '4px', 
+                        background: COLOR_MAP[hoveredNode.label], 
+                        color: '#000', 
+                        fontWeight: 'bold', 
+                        fontSize: '0.7rem',
+                        marginBottom: '1rem'
                     }}>
-                        <div style={{ fontSize: '1rem', fontWeight: 'bold', color: COLOR_MAP[hoveredNode.label] }}>{hoveredNode.name}</div>
-                        <div style={{ fontSize: '0.7rem', color: '#888', marginBottom: '0.5rem' }}>{hoveredNode.label}</div>
-                        <div style={{ fontSize: '0.8rem', color: '#eee' }}>{hoveredNode.description}</div>
+                        {hoveredNode.label}
+                    </div>
+                    <div style={{ fontSize: '0.9rem', color: '#ccc', lineHeight: '1.5' }}>
+                        {hoveredNode.description}
+                    </div>
+                    <div style={{ fontSize: '0.7rem', color: '#666', marginTop: '1rem' }}>
+                        ID: {hoveredNode.id}
+                    </div>
+                </div>
+            )}
+
+            {/* Main Canvas Container */}
+            <div 
+                ref={containerRef} 
+                style={{ flex: 1, width: '100%', height: '100%', cursor: 'grab', position: 'relative' }}
+                onMouseDown={handleMouseDown}
+                onMouseMove={handleMouseMove}
+                onMouseUp={() => draggingRef.current = null}
+                onMouseLeave={() => draggingRef.current = null}
+                onWheel={handleWheel}
+            >
+                <canvas ref={canvasRef} style={{ display: 'block' }} />
+                
+                {stats.nodes === 0 && (
+                    <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
+                        <div style={{ color: '#666', fontSize: '1.5rem', letterSpacing: '2px', marginBottom: '1rem' }}>
+                            NO DATA IN LATTICE
+                        </div>
+                        <button 
+                            onClick={(e) => { e.stopPropagation(); injectTestData(); }}
+                            className="btn btn-primary pointer-events-auto"
+                            style={{ pointerEvents: 'auto' }}
+                        >
+                            GENERATE TEST SIMULATION
+                        </button>
                     </div>
                 )}
-
-                <div 
-                    ref={containerRef}
-                    style={{ flex: 1, position: 'relative', overflow: 'hidden', cursor: 'grab', width: '100%', height: '100%' }}
-                >
-                    <canvas 
-                        ref={canvasRef}
-                        width={dimensions.width}
-                        height={dimensions.height}
-                        onMouseDown={handleMouseDown}
-                        onMouseMove={handleMouseMove}
-                        onMouseUp={handleMouseUp}
-                        onMouseLeave={handleMouseUp}
-                        onWheel={handleWheel}
-                    />
-                </div>
             </div>
-        </div>
+        </div>,
+        document.body
     );
 };

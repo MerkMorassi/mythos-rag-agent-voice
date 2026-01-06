@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, FunctionDeclaration, Type, Tool } from "@google/genai";
 import { Agent, MultiAgentMessage, SomaActionType } from "../types";
 import { searchDocuments, getAgentConfig, getGraphContext, getCanvas, updateCanvas } from "./db";
@@ -6,6 +7,9 @@ import { ExternalRouter } from "./externalRouter";
 import { SomaKernel } from "./soma";
 import { McpClient } from "./mcpClient";
 import { PythonSandbox } from "./pythonSandbox";
+import { uploadCloudFile, waitForFileActive } from "./googleFiles";
+import { saveMediaAsset } from "./db";
+import { NumMarkX_GenerateID } from "../patterns/NumMarkX";
 
 // Standard model for text chat - Upgraded to Pro for best reasoning
 const CHAT_MODEL = "gemini-3-pro-preview"; 
@@ -225,6 +229,79 @@ const googleMapsTool: Tool = {
 
 export const MultiAgentService = {
     
+    /**
+     * Generate WebVTT Captions for a video file using Gemini 3 Pro
+     */
+    async generateVideoCaptions(apiKey: string, file: File): Promise<string> {
+        try {
+            // Reuse upload/wait logic
+            const cloudFile = await uploadCloudFile(file);
+            const activeFile = await waitForFileActive(cloudFile);
+
+            const ai = new GoogleGenAI({ apiKey });
+            const response = await ai.models.generateContent({
+                model: 'gemini-3-pro-preview',
+                contents: [
+                    {
+                        role: 'user',
+                        parts: [
+                            { fileData: { fileUri: activeFile.uri, mimeType: activeFile.mimeType } },
+                            { text: "Generate a WebVTT subtitle file for this video. Listen carefully to the audio track. Transcribe all spoken dialogue and significant sound effects with precise timestamps. Return ONLY the WebVTT content. Do not wrap in markdown code blocks. Start directly with 'WEBVTT'." }
+                        ]
+                    }
+                ],
+                config: {
+                    temperature: 0.2 // Lower temp for more accurate transcription
+                }
+            });
+
+            let vtt = response.text || "";
+            // Cleanup potential markdown wrapping
+            vtt = vtt.replace(/```webvtt/gi, '').replace(/```/g, '').trim();
+            if (!vtt.startsWith('WEBVTT')) {
+                vtt = 'WEBVTT\n\n' + vtt;
+            }
+            return vtt;
+
+        } catch (e: any) {
+            console.error("Caption Generation Error", e);
+            throw new Error(`Caption Generation Failed: ${e.message}`);
+        }
+    },
+
+    /**
+     * Deep Video Analysis using Gemini 3 Pro
+     */
+    async analyzeVideo(apiKey: string, file: File, prompt: string = "Analyze this video. Listen to the audio track and observe the visual details. Describe the events, setting, dialogue context, and narrative flow in depth."): Promise<string> {
+        try {
+            // 1. Upload
+            const cloudFile = await uploadCloudFile(file);
+            
+            // 2. Wait for Processing
+            const activeFile = await waitForFileActive(cloudFile);
+            
+            // 3. Generate Analysis
+            const ai = new GoogleGenAI({ apiKey });
+            const response = await ai.models.generateContent({
+                model: 'gemini-3-pro-preview',
+                contents: [
+                    {
+                        role: 'user',
+                        parts: [
+                            { fileData: { fileUri: activeFile.uri, mimeType: activeFile.mimeType } },
+                            { text: prompt }
+                        ]
+                    }
+                ]
+            });
+            
+            return response.text || "No analysis returned.";
+        } catch(e: any) {
+            console.error("Video Analysis Error", e);
+            throw new Error(`Video Analysis Failed: ${e.message}`);
+        }
+    },
+
     /**
      * Executes a single turn for a specific agent.
      */

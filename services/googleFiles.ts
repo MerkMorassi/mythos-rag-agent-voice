@@ -56,3 +56,27 @@ export const deleteCloudFile = async (fileName: string): Promise<void> => {
   const ai = new GoogleGenAI({ apiKey });
   await ai.files.delete({ name: fileName });
 };
+
+export const getFile = async (name: string): Promise<CloudFile> => {
+  const apiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY;
+  if (!apiKey) throw new Error("API Key missing");
+  const ai = new GoogleGenAI({ apiKey });
+  const response = await ai.files.get({ name });
+  return response as unknown as CloudFile;
+};
+
+export const waitForFileActive = async (file: CloudFile): Promise<CloudFile> => {
+  console.log(`[Files] Waiting for ${file.name} to process...`);
+  let current = file;
+  let attempts = 0;
+  // Poll for up to 60 seconds (30 * 2s)
+  while (current.state === 'PROCESSING' && attempts < 30) {
+    await new Promise(r => setTimeout(r, 2000));
+    current = await getFile(file.name);
+    attempts++;
+  }
+  if (current.state !== 'ACTIVE') {
+    throw new Error(`File processing failed or timed out. State: ${current.state}`);
+  }
+  return current;
+};
