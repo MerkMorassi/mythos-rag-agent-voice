@@ -1,4 +1,3 @@
-
 import { Agent, SomaActionType, MultiAgentMessage, SomaPermission } from "../types";
 import { AccessControl } from "./accessControl";
 import { AGENTS } from "../agents";
@@ -25,15 +24,21 @@ export interface ClusterNode {
 export class SomaKernel {
     
     private static instance: SomaKernel;
+    private static initializationPromise: Promise<void> | null = null;
     private nodes: Map<string, ClusterNode> = new Map();
 
     private constructor() {
-        this.initializeCluster();
+        // Constructor is now synchronous and does no async work.
     }
 
-    public static getInstance(): SomaKernel {
+    public static async getInstance(): Promise<SomaKernel> {
         if (!SomaKernel.instance) {
             SomaKernel.instance = new SomaKernel();
+            SomaKernel.initializationPromise = SomaKernel.instance.initializeCluster();
+        }
+        if (SomaKernel.initializationPromise) {
+            await SomaKernel.initializationPromise;
+            SomaKernel.initializationPromise = null; // Initialization is done, don't await again.
         }
         return SomaKernel.instance;
     }

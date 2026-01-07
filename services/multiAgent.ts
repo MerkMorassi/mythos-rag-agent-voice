@@ -330,7 +330,7 @@ export const MultiAgentService = {
         onDelegate?: (targetId: string) => void // VISUAL CALLBACK
     ): Promise<AgentResponse> {
         
-        const kernel = SomaKernel.getInstance();
+        const kernel = await SomaKernel.getInstance();
         await kernel.heartbeat(agent.id);
 
         if (depth > 3) {

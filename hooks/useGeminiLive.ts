@@ -43,6 +43,13 @@ export function useGeminiLive({
         configRef.current = { apiKey, modelName, systemInstruction, voiceName, tools, isMicOn };
     }, [apiKey, modelName, systemInstruction, voiceName, tools, isMicOn]);
 
+    // Callback Ref to prevent stale closures
+    const callbackRef = useRef({ onLog, onToolCall });
+    useEffect(() => {
+        callbackRef.current = { onLog, onToolCall };
+    }, [onLog, onToolCall]);
+
+
     const connect = useCallback(async () => {
         if (!configRef.current.apiKey) return;
         
@@ -83,7 +90,7 @@ export function useGeminiLive({
                 callbacks: {
                     onopen: () => {
                         setConnectionState(ConnectionState.CONNECTED);
-                        onLog({ id: crypto.randomUUID(), type: 'system', text: 'Live Session Connected', timestamp: Date.now() });
+                        callbackRef.current.onLog({ id: crypto.randomUUID(), type: 'system', text: 'Live Session Connected', timestamp: Date.now() });
                         
                         // Start Mic Stream
                         if (inputContextRef.current) {
@@ -116,10 +123,10 @@ export function useGeminiLive({
                         if (isIntentionalDisconnect.current) return;
 
                         // A. Tool Handling
-                        if (msg.toolCall && onToolCall) {
+                        if (msg.toolCall && callbackRef.current.onToolCall) {
                             setIsThinking(true);
                             try {
-                                const responses = await onToolCall(msg.toolCall);
+                                const responses = await callbackRef.current.onToolCall(msg.toolCall);
                                 if (responses.length > 0 && !isIntentionalDisconnect.current) {
                                     sessionPromise.then(session => session.sendToolResponse({ functionResponses: responses }));
                                 }
@@ -146,10 +153,10 @@ export function useGeminiLive({
 
                         // C. Transcripts (Text Logs)
                         if (msg.serverContent?.inputTranscription?.text) {
-                            onLog({ id: crypto.randomUUID(), type: 'user', text: msg.serverContent.inputTranscription.text, timestamp: Date.now(), isStreaming: true });
+                            callbackRef.current.onLog({ id: crypto.randomUUID(), type: 'user', text: msg.serverContent.inputTranscription.text, timestamp: Date.now(), isStreaming: true });
                         }
                         if (msg.serverContent?.outputTranscription?.text) {
-                            onLog({ id: crypto.randomUUID(), type: 'model', text: msg.serverContent.outputTranscription.text, timestamp: Date.now(), isStreaming: true });
+                            callbackRef.current.onLog({ id: crypto.randomUUID(), type: 'model', text: msg.serverContent.outputTranscription.text, timestamp: Date.now(), isStreaming: true });
                         }
                         if (msg.serverContent?.turnComplete) {
                            setIsThinking(false);
@@ -158,12 +165,12 @@ export function useGeminiLive({
                             sourcesRef.current.forEach(s => s.stop());
                             sourcesRef.current.clear();
                             nextStartTimeRef.current = 0;
-                            onLog({ id: crypto.randomUUID(), type: 'system', text: '[Interrupted]', timestamp: Date.now() });
+                            callbackRef.current.onLog({ id: crypto.randomUUID(), type: 'system', text: '[Interrupted]', timestamp: Date.now() });
                         }
                     },
                     onclose: () => {
                         setConnectionState(ConnectionState.DISCONNECTED);
-                        onLog({ id: crypto.randomUUID(), type: 'system', text: 'Disconnected', timestamp: Date.now() });
+                        callbackRef.current.onLog({ id: crypto.randomUUID(), type: 'system', text: 'Disconnected', timestamp: Date.now() });
                     },
                     onerror: (err: any) => {
                         // Suppress expected errors during teardown
@@ -174,7 +181,7 @@ export function useGeminiLive({
 
                         console.error(err);
                         setConnectionState(ConnectionState.ERROR);
-                        onLog({ id: crypto.randomUUID(), type: 'system', text: `Error: ${err.message}`, timestamp: Date.now() });
+                        callbackRef.current.onLog({ id: crypto.randomUUID(), type: 'system', text: `Error: ${err.message}`, timestamp: Date.now() });
                     }
                 }
             });
@@ -184,7 +191,7 @@ export function useGeminiLive({
         } catch (e: any) {
             console.error(e);
             setConnectionState(ConnectionState.ERROR);
-            onLog({ id: crypto.randomUUID(), type: 'system', text: `Connection Failed: ${e.message}`, timestamp: Date.now() });
+            callbackRef.current.onLog({ id: crypto.randomUUID(), type: 'system', text: `Connection Failed: ${e.message}`, timestamp: Date.now() });
         }
     }, []);
 
@@ -222,11 +229,8 @@ export function useGeminiLive({
         if (sessionPromiseRef.current && !isIntentionalDisconnect.current) {
             try {
                 const session = await sessionPromiseRef.current;
-                // FIX: The 'send' method with 'clientContent' is deprecated. The correct way
-                // to send a text-only turn is via 'sendRealtimeInput' with a 'turns' payload.
                 session.sendRealtimeInput({
-                    turns: [{ role: 'user', parts: [{ text }] }],
-                    turnComplete: true
+                    turns: [{ role: 'user', parts: [{ text }] }]
                 });
             } catch(e) {
                 if(!isIntentionalDisconnect.current) console.error("Send Text Error:", e);

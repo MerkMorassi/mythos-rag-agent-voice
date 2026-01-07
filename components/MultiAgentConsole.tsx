@@ -443,7 +443,7 @@ export const MultiAgentConsole: React.FC<MultiAgentConsoleProps> = ({ onExit }) 
         const currentPreview = attachmentPreview; 
 
         setInput('');
-        if (textareaRef.current) textareaRef.current.style.height = '3.5rem'; // Reset height
+        if (textareaRef.current) textareaRef.current.style.height = 'auto'; // Reset height
         setAttachment(null);
         setAttachmentPreview(null);
 
@@ -681,7 +681,7 @@ ${focus.rules.map(r => "- " + r).join('\n')}
                     <input type="file" accept="image/*,video/*,.txt,.md,.json" ref={fileInputRef} className="hidden" onChange={handleFileSelect} />
                     
                     <button 
-                        className="btn btn-secondary btn-icon btn-xl" 
+                        className="btn btn-secondary btn-icon btn-lg" 
                         onClick={() => fileInputRef.current?.click()} 
                         disabled={isProcessing}
                         title="Attach File (Image, Video, Text)"
@@ -702,6 +702,7 @@ ${focus.rules.map(r => "- " + r).join('\n')}
                         <textarea 
                             ref={textareaRef}
                             className="auto-expand-textarea" 
+                            style={{ minHeight: 'var(--btn-h-lg)' }}
                             placeholder={isProcessing ? "Agents are deliberating..." : "Broadcast to Council (or use @AgentName)..."} 
                             value={input} 
                             onChange={e => setInput(e.target.value)} 
@@ -716,7 +717,7 @@ ${focus.rules.map(r => "- " + r).join('\n')}
                     </div>
 
                     <button 
-                        className="btn btn-primary btn-xl" 
+                        className="btn btn-primary btn-lg" 
                         onClick={handleBroadcast} 
                         disabled={isProcessing || (!input.trim() && !attachment)} 
                         style={{ fontWeight: 'bold', fontSize: '0.9rem', marginLeft: '0.5rem' }}

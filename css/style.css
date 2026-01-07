@@ -484,8 +484,8 @@ html, body {
 .btn-icon.btn-sm { width: var(--btn-h-sm); }
 .btn-icon.btn-xs { width: var(--btn-h-xs); }
 
-.btn-primary { background: #eee; color: #000; border-color: #eee; }
-.btn-primary:hover { background: #fff; }
+.btn-primary { background: rgba(74, 222, 128, 0.1); border-color: var(--color-accent); color: var(--color-accent); }
+.btn-primary:hover:not(:disabled) { background: rgba(74, 222, 128, 0.2); border-color: #6fe39c; color: #fff; }
 .btn-secondary { background: #000; border-color: #333; color: #888; }
 .btn-secondary:hover { border-color: #666; color: #fff; }
 .btn-accent { background: rgba(167, 139, 250, 0.1); border-color: #a78bfa; color: #a78bfa; }
@@ -580,7 +580,7 @@ html, body {
     background: #0a0a0a;
     display: flex;
     gap: 1rem;
-    align-items: flex-end;
+    align-items: center;
     z-index: 5;
 }
 
