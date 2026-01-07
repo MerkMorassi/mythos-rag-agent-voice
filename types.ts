@@ -1,4 +1,5 @@
 
+
 export interface KnowledgeDoc {
   id: string;
   agentId?: string; // Links document to a specific agent
@@ -57,6 +58,18 @@ export const DEFAULT_MODEL_CONFIG: ModelConfig = {
   temperature: 0.7,
   topP: 0.95,
   topK: 40,
+};
+
+export interface SovereignConfig {
+  mode: 'PRESET' | 'CUSTOM' | 'SILENT';
+  preset: string; // e.g., "Protocol Mythos"
+  customGreeting: string;
+}
+
+export const DEFAULT_SOVEREIGN_CONFIG: SovereignConfig = {
+  mode: 'PRESET',
+  preset: 'Nexus Prime',
+  customGreeting: ''
 };
 
 export interface AgentConfig {

@@ -9,7 +9,9 @@ import {
     LorePack, 
     CanonBlock,
     WorkingMemory,
-    DEFAULT_MODEL_CONFIG 
+    SovereignConfig,
+    DEFAULT_MODEL_CONFIG,
+    DEFAULT_SOVEREIGN_CONFIG
 } from '../types';
 import { UsageLogEntry } from './llmUsageLogger';
 
@@ -382,6 +384,18 @@ export const getGeneralInstructions = async (): Promise<string> => {
         req.onerror = () => resolve("");
     });
 };
+
+export const saveSovereignConfig = (config: SovereignConfig) => putItem(SETTINGS_STORE, { id: 'SOVEREIGN_CONFIG', value: config });
+export const getSovereignConfig = async (): Promise<SovereignConfig> => {
+    const db = await initDB();
+    return new Promise((resolve) => {
+        const tx = db.transaction([SETTINGS_STORE], 'readonly');
+        const req = tx.objectStore(SETTINGS_STORE).get('SOVEREIGN_CONFIG');
+        req.onsuccess = () => resolve(req.result?.value || DEFAULT_SOVEREIGN_CONFIG);
+        req.onerror = () => resolve(DEFAULT_SOVEREIGN_CONFIG);
+    });
+};
+
 
 // --- MEDIA ASSETS ---
 

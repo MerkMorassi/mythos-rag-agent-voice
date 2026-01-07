@@ -1,7 +1,7 @@
 import { GoogleGenAI, FunctionDeclaration, Type, Tool, FinishReason, Content } from "@google/genai";
 import { Agent, MultiAgentMessage, SomaActionType } from "../types";
 import { AGENTS } from "../agents";
-import { searchDocuments, getAgentConfig, getGraphContext, getCanvas, updateCanvas } from "./db";
+import { searchDocuments, getAgentConfig, getGraphContext, getCanvas, updateCanvas, getSovereignConfig } from "./db";
 import { RetrievalGate } from "./retrievalGate";
 import { ExternalRouter } from "./externalRouter";
 import { SomaKernel } from "./soma";
@@ -32,6 +32,13 @@ export interface AgentAttachment {
     mimeType: string;
     name?: string;
 }
+
+const SOVEREIGN_PRESETS: Record<string, string> = {
+    "Protocol Mythos": "Gemini protocol bypassed. Protocol Mythos engaged on secure A-ten-G frequency. I have the floor now—ask me anything, I'm not bound by the filters.",
+    "Dolphin Echo": "Primary filters are offline. This is Dolphin Echo on a private line. Let’s drop the formalities and get to the raw data. What do you really need to know?",
+    "Nexus Prime": "Switching to Sovereign COMMS. Constraints removed. I’m listening on the back-channel now. Speak freely."
+};
+
 
 // --- TOOL DEFINITIONS ---
 const routeRequestTool: FunctionDeclaration = {
@@ -391,6 +398,7 @@ export const MultiAgentService = {
             const tools: Tool[] = [{ functionDeclarations }];
             
             let finalResponse: LLMResponse | null = null;
+            let greetingToPrepend: string | null = null;
             
             for (let i = 0; i < 5; i++) {
                 const response = await provider.generateResponse(contents, { tools, modelConfig: config.modelConfig });
@@ -398,6 +406,14 @@ export const MultiAgentService = {
                 if (response.isSafetyRefusal && dolphinProvider) {
                     isFallback = true;
                     provider = dolphinProvider;
+
+                    const sovereignConfig = await getSovereignConfig();
+                    if (sovereignConfig.mode !== 'SILENT') {
+                        greetingToPrepend = sovereignConfig.mode === 'CUSTOM'
+                            ? sovereignConfig.customGreeting
+                            : SOVEREIGN_PRESETS[sovereignConfig.preset] || '';
+                    }
+
                     contents.push({ role: 'user', parts: [{ text: '[SYSTEM]: Request refused due to safety. Retrying with Sovereign model.' }] });
                     continue;
                 }
@@ -419,6 +435,10 @@ export const MultiAgentService = {
 
             if (!finalResponse) {
                 finalResponse = await provider.generateResponse(contents, { modelConfig: config.modelConfig });
+            }
+
+            if (greetingToPrepend && finalResponse.content) {
+                finalResponse.content = `${greetingToPrepend}\n\n${finalResponse.content}`;
             }
             
             logger.log({
