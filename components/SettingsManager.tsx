@@ -382,6 +382,9 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
                 <p style={{ fontSize: '0.7rem', color: '#888', margin: '0 0 0.5rem 0', lineHeight: '1.4' }}>
                     Configure the callsign and greeting used when the Sovereign model takes over from Gemini.
                 </p>
+                <div className="status-banner status-info" style={{ textAlign: 'left', fontSize: '0.75rem', lineHeight: '1.5' }}>
+                    <strong style={{ color: '#facc15' }}>PERFORMANCE NOTE:</strong> The HF connection may be significantly slower at the moment as it is connected to a free CPU server while we test rather than the A10G nVidia rapid response we expect. Be sure to not close the connection while we await a response as it may take a few moments.
+                </div>
                 <div className="flex-col" style={{ gap: '0.75rem' }}>
                     <div>
                         <label className="form-label">CALLSIGN PRESET</label>

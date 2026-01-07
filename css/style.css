@@ -341,20 +341,26 @@ html, body {
 .tray-controls { display: flex; justify-content: space-between; align-items: center; }
 .input-bar { display: flex; gap: 0.5rem; height: auto; align-items: center; }
 
-.main-input {
-    flex: 1;
+/* --- UNIFIED INPUT STYLES --- */
+.unified-input {
     background-color: #000;
     border: 1px solid #333;
     color: #fff;
-    padding: 0 1rem;
+    padding: 0.75rem 1rem;
     font-family: var(--font-mono);
     font-size: 1rem;
     border-radius: 4px;
     outline: none;
+    box-sizing: border-box;
+    line-height: 1.5;
+}
+.unified-input:focus { border-color: #666; }
+.unified-input:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.main-input {
+    flex: 1;
     height: var(--btn-h-lg);
 }
-.main-input:focus { border-color: #666; }
-.main-input:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .form-input, .form-select {
     width: 100%;
@@ -586,22 +592,11 @@ html, body {
 
 .auto-expand-textarea {
     flex: 1;
-    background-color: #000;
-    border: 1px solid #333;
-    color: #fff;
-    padding: 1rem;
-    font-family: var(--font-mono);
-    font-size: 1rem;
-    border-radius: 4px;
-    outline: none;
     resize: none;
     min-height: var(--btn-h-lg);
     max-height: 150px;
     overflow-y: auto;
-    box-sizing: border-box;
 }
-.auto-expand-textarea:focus { border-color: #666; }
-.auto-expand-textarea:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .agent-card {
     padding: 0.75rem;

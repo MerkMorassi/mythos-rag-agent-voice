@@ -712,7 +712,7 @@ ${focus.rules.map(r => "- " + r).join('\n')}
                         )}
                         <textarea 
                             ref={textareaRef}
-                            className="auto-expand-textarea" 
+                            className="auto-expand-textarea unified-input" 
                             placeholder={isProcessing ? "Agents are deliberating..." : "Broadcast to Council (or use @AgentName)..."} 
                             value={input} 
                             onChange={e => setInput(e.target.value)} 
