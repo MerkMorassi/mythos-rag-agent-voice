@@ -1,13 +1,6 @@
-
 import React, { useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { GraphNode, GraphEdge } from '../types';
 import { getAllGraphNodes, getGraphEdges } from '../services/db';
-
-interface GraphVisualizerProps {
-    isOpen: boolean;
-    onClose: () => void;
-}
 
 interface SimulationNode extends GraphNode {
     x: number;
@@ -30,7 +23,7 @@ const COLOR_MAP: Record<string, string> = {
     'DEFAULT': '#9ca3af' // Grey
 };
 
-export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ isOpen, onClose }) => {
+export const GraphVisualizer: React.FC<{}> = () => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     
@@ -47,21 +40,17 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ isOpen, onClos
     const animationRef = useRef<number>(0);
     const isRunningRef = useRef(false);
 
-    // Initial Load
+    // Initial Load on mount
     useEffect(() => {
-        if (isOpen) {
-            loadGraph();
-            isRunningRef.current = true;
-            animationRef.current = requestAnimationFrame(draw);
-        } else {
-            isRunningRef.current = false;
-            cancelAnimationFrame(animationRef.current);
-        }
+        loadGraph();
+        isRunningRef.current = true;
+        animationRef.current = requestAnimationFrame(draw);
+        
         return () => {
             isRunningRef.current = false;
             cancelAnimationFrame(animationRef.current);
         };
-    }, [isOpen]);
+    }, []);
 
     const loadGraph = async () => {
         const rawNodes = await getAllGraphNodes();
@@ -354,21 +343,15 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ isOpen, onClos
         zoomRef.current = Math.min(Math.max(0.1, zoomRef.current * delta), 5);
     };
 
-    if (!isOpen) return null;
-
-    // USE PORTAL TO RENDER AT ROOT LEVEL
-    return createPortal(
+    return (
         <div style={{ 
-            position: 'fixed', 
-            top: 0, 
-            left: 0, 
-            width: '100vw', 
-            height: '100vh', 
-            zIndex: 10000, 
-            background: 'rgba(0,0,0,0.95)',
+            position: 'relative',
+            width: '100%', 
+            height: '100%', 
             display: 'flex',
-            flexDirection: 'column'
-        }} className="animate-slide-in-right">
+            flexDirection: 'column',
+            background: '#050505'
+        }}>
             
             {/* Header / HUD */}
             <div style={{ 
@@ -382,7 +365,7 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ isOpen, onClos
                 justifyContent: 'space-between', 
                 alignItems: 'center',
                 zIndex: 10,
-                pointerEvents: 'none' // Let clicks pass through to canvas where possible
+                pointerEvents: 'none'
             }}>
                 <div style={{ pointerEvents: 'auto' }}>
                     <div style={{ color: '#38bdf8', fontWeight: 'bold', fontSize: '1.2rem', letterSpacing: '2px', textShadow: '0 0 10px rgba(56, 189, 248, 0.5)' }}>
@@ -392,13 +375,6 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ isOpen, onClos
                         NODES: {stats.nodes} • EDGES: {stats.edges} • ZOOM: {Math.round(zoomRef.current * 100)}%
                     </div>
                 </div>
-                <button 
-                    onClick={onClose} 
-                    className="btn btn-secondary btn-sm"
-                    style={{ pointerEvents: 'auto', borderColor: '#f87171', color: '#f87171' }}
-                >
-                    CLOSE VISUALIZER
-                </button>
             </div>
 
             {/* Info Panel for Hover */}
@@ -468,7 +444,6 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ isOpen, onClos
                     </div>
                 )}
             </div>
-        </div>,
-        document.body
+        </div>
     );
 };

@@ -14,7 +14,7 @@ import {
 import { uploadCloudFile, listCloudFiles, deleteCloudFile } from '../services/googleFiles';
 import { IngestionService } from '../services/ingestion';
 import { NumMarkX_GenerateSigil, NumMarkX_GenerateHeader, NumMarkX_GenerateID } from '../patterns/NumMarkX';
-import { GraphVisualizer } from './GraphVisualizer'; // IMPORT
+import { GraphVisualizer } from './GraphVisualizer';
 
 interface KnowledgeManagerProps {
   onUpdate: () => void;
@@ -68,8 +68,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
     onOpen,
     onClose
 }) => {
-  const [activeTab, setActiveTab] = useState<'local' | 'library' | 'cloud'>('local');
-  const [showGraph, setShowGraph] = useState(false); // Graph State
+  const [activeTab, setActiveTab] = useState<'local' | 'library' | 'cloud' | 'neural'>('local');
   
   // Local DB State
   const [docs, setDocs] = useState<KnowledgeDoc[]>([]);
@@ -510,8 +509,6 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
     <div className="modal-overlay">
       <div className="modal-content animate-slide-in-right">
         
-        <GraphVisualizer isOpen={showGraph} onClose={() => setShowGraph(false)} />
-
         <div className="modal-header-area">
           <div className="flex-group">
              <span className="modal-section-title" style={{ color: '#4ade80' }}>KNOWLEDGE MANAGER</span>
@@ -542,9 +539,10 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                     <button onClick={() => setActiveTab('local')} style={{ padding: '0.75rem 1rem', background: 'none', border: 'none', borderBottom: activeTab === 'local' ? '2px solid #4ade80' : 'none', color: activeTab === 'local' ? '#eee' : '#666', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.75rem', flex: 1 }}>ACTIVE MEMORY</button>
                     <button onClick={() => setActiveTab('library')} style={{ padding: '0.75rem 1rem', background: 'none', border: 'none', borderBottom: activeTab === 'library' ? '2px solid #facc15' : 'none', color: activeTab === 'library' ? '#eee' : '#666', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.75rem', flex: 1 }}>LORE LIBRARY</button>
                     <button onClick={() => setActiveTab('cloud')} style={{ padding: '0.75rem 1rem', background: 'none', border: 'none', borderBottom: activeTab === 'cloud' ? '2px solid #a78bfa' : 'none', color: activeTab === 'cloud' ? '#eee' : '#666', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.75rem', flex: 1 }}>CLOUD CONTEXT</button>
+                    <button onClick={() => setActiveTab('neural')} style={{ padding: '0.75rem 1rem', background: 'none', border: 'none', borderBottom: activeTab === 'neural' ? '2px solid #38bdf8' : 'none', color: activeTab === 'neural' ? '#eee' : '#666', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.75rem', flex: 1 }}>NEURAL VIEW</button>
                 </div>
 
-                <div className="modal-body-area">
+                <div className="modal-body-area" style={activeTab === 'neural' ? { padding: 0, gap: 0, overflow: 'hidden' } : {}}>
                 
                 {statusMsg && (
                     <div className={`status-banner status-${statusMsg.type}`}>
@@ -650,18 +648,6 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                                 <div className="stat-item"><span className="stat-label">SPEED</span><span className="stat-value">{ingestionStats.speed}/s</span></div>
                             </div>
                         )}
-
-                        {/* GRAPH LAUNCHER & BUNDLE */}
-                        <div className="flex-group">
-                            <button 
-                                onClick={() => setShowGraph(true)} 
-                                className="btn btn-secondary" 
-                                style={{ flex: 1, borderColor: '#38bdf8', color: '#38bdf8' }}
-                                title="Open 3D Force Graph Visualizer"
-                            >
-                                OPEN NEURAL GRAPH
-                            </button>
-                        </div>
 
                         <div className="section-panel" style={{ padding: '0.75rem', borderColor: '#facc15', borderStyle: 'dashed' }}>
                             <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
@@ -779,6 +765,10 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                             ))}
                         </div>
                     </>
+                )}
+
+                {activeTab === 'neural' && (
+                    <GraphVisualizer />
                 )}
                 </div>
             </>

@@ -1,4 +1,3 @@
-
 {
   "mcpServers": {
     "chrome-devtools": {
@@ -20,7 +19,7 @@
       "args": [
         "-y",
         "@modelcontextprotocol/server-filesystem",
-        "Z:\\"
+        "."
       ]
     }
   }
