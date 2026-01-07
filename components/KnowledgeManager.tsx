@@ -180,35 +180,40 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
   
   const handleRetrofit = async () => { if (docs.length === 0) return showStatus("No docs to retrofit.", 'error'); if (!window.confirm("Run INJECT GRAPH Protocol?\n\nThis will scan your existing memory specifically to build the Knowledge Graph. It will SKIP any documents that have already been processed.")) return; const apiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY; if (!apiKey) return showStatus("API Key required.", 'error'); setIsProcessing(true); setStatusMsg({ text: "Injecting Graph Nodes... (Incremental)", type: 'info' }); try { await IngestionService.retrofitAgentMemory(currentAgentId, apiKey, (c, t) => { setRetrofitProgress({ current: c, total: t }); }); await fetchDocs(); showStatus("Graph Injection Complete.", 'success'); } catch (e: any) { showStatus(`Injection Failed: ${e.message}`, 'error'); } finally { setIsProcessing(false); setRetrofitProgress(null); } };
   const handleExportLorePack = async () => {
-      if (docs.length === 0) {
-          showStatus("No documents to export.", 'error');
-          return;
-      }
-      try {
-          const exportDocs = docs.map(d => ({
-              ...d,
-              numMarkId: d.numMarkId || NumMarkX_GenerateSigil(d.content)
-          }));
+    if (docs.length === 0) {
+        showStatus("No documents to export.", 'error');
+        return;
+    }
+    try {
+        const exportDocs = docs.map(d => ({
+            ...d,
+            numMarkId: d.numMarkId || NumMarkX_GenerateSigil(d.content)
+        }));
 
-          const header = NumMarkX_GenerateHeader(currentAgentId, currentAgentId, "Exported via Knowledge Manager");
-          
-          const blob = IngestionService.exportLorePack(header, exportDocs);
-          const filename = IngestionService.buildCanonicalFilename(currentAgentId);
+        // 1. Generate Header
+        const header = NumMarkX_GenerateHeader(currentAgentId, currentAgentId, "Exported via Knowledge Manager");
+        
+        // 2. Generate Blob (Using New Air-Tight Logic)
+        const blob = IngestionService.exportLorePack(header, exportDocs);
+        
+        // 3. Generate Filename (Using New Sovereign Logic)
+        const filename = IngestionService.buildCanonicalFilename(currentAgentId);
 
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = filename;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          setTimeout(() => URL.revokeObjectURL(url), 5000);
+        // 4. Trigger Download
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename; // <--- This ensures "MYTHOS.LORE.BARBELO..."
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
 
-          showStatus(`Exported ${exportDocs.length} nodes to ${filename}.`, 'success');
-      } catch (e: any) {
-          console.error("Export failed", e);
-          showStatus(`Export Failed: ${e.message}`, 'error');
-      }
+        showStatus(`Exported ${exportDocs.length} nodes to ${filename}`, 'success');
+    } catch (e: any) {
+        console.error("Export failed", e);
+        showStatus(`Export Failed: ${e.message}`, 'error');
+    }
   };
   const handleSaveToLibrary = async () => { if (docs.length === 0) return showStatus("No active memory to bundle.", 'error'); if (!packName.trim()) return showStatus("Pack Name required.", 'error'); try { const header = NumMarkX_GenerateHeader(currentAgentId, currentAgentId, packName); header.name = packName; const pack: LorePack = { id: header.id, header: header, sacred_archive: docs }; await saveLorePack(pack); setPackName(''); showStatus(`Saved "${packName}" to Library (${docs.length} nodes).`, 'success'); fetchSavedPacks(); } catch(e: any) { showStatus(`Save Failed: ${e.message}`, 'error'); } };
   

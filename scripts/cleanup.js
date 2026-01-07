@@ -1,4 +1,3 @@
-
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -12,32 +11,54 @@ const rootDir = path.join(__dirname, '..');
 const DIRECTORY_SCHEMA = {
     'components': [
         'ChatHistoryManager.tsx',
+        'GraphVisualizer.tsx',
+        'Holodeck.tsx',
         'KnowledgeManager.tsx',
         'McpManager.tsx',
+        'MediaPlayer.tsx',
         'MultiAgentConsole.tsx',
+        'ProductionBoard.tsx',
         'RoomFocusConfig.tsx',
         'SettingsManager.tsx',
+        'Terminal.tsx',
+        'ToolManager.tsx',
         'Visualizer.tsx',
         'VoiceCommandList.tsx'
     ],
+    'css': [
+        'style.css'
+    ],
+    'hooks': [
+        'useGeminiLive.ts'
+    ],
+    'patterns': [
+        'NumMarkX.ts'
+    ],
     'services': [
+        'accessControl.ts',
         'audioUtils.ts',
         'chatterbox.ts',
         'db.ts',
         'externalRouter.ts',
         'googleFiles.ts',
         'ingestion.ts',
+        'llmUsageLogger.ts',
         'mcpClient.ts',
         'modelGate.ts',
         'multiAgent.ts',
+        'productionBoard.ts',
+        'pythonSandbox.ts',
         'retrievalGate.ts',
-        'roomFocus.ts'
+        'roomFocus.ts',
+        'shell.ts',
+        'soma.ts',
+        'virtualFs.ts',
+        'voiceCommandService.ts'
     ],
-    'patterns': [
-        'NumMarkX.ts'
-    ],
-    'css': [
-        'style.css'
+    'services/llmProviders': [
+        'dolphinProvider.ts',
+        'geminiProvider.ts',
+        'ILLMProvider.ts'
     ]
 };
 
@@ -62,11 +83,16 @@ function cleanDirectory(dirName, allowedFiles) {
     const files = fs.readdirSync(targetDir);
     
     files.forEach(file => {
-        // Skip directories within these folders (unless you want recursive logic, but keep it simple for now)
-        if (fs.lstatSync(path.join(targetDir, file)).isDirectory()) return;
+        const filePath = path.join(targetDir, file);
+        // Skip directories within these folders for this simple script
+        if (fs.lstatSync(filePath).isDirectory()) {
+            if (!Object.keys(DIRECTORY_SCHEMA).includes(`${dirName}/${file}`)) {
+                 console.log(`[INFO] Skipping un-schemed directory: ${dirName}/${file}`);
+            }
+            return;
+        }
 
         if (!allowedFiles.includes(file)) {
-            const filePath = path.join(targetDir, file);
             console.log(`[DELETE] Legacy file found: ${dirName}/${file}`);
             try {
                 fs.unlinkSync(filePath);
@@ -95,11 +121,11 @@ console.log("--- STARTING MYTHOS CLEANUP PROTOCOL ---");
 
 // Execute Schema Check
 Object.entries(DIRECTORY_SCHEMA).forEach(([dir, allowed]) => {
-    cleanDirectory(dir, allowed);
+    cleanDirectory(dir, allowed.sort());
 });
 
 // Execute Root Check
 cleanRoot();
 
 console.log("--- CLEANUP COMPLETE ---");
-console.log("Run 'git add . && git commit -m \"Remove legacy files\"' to sync with GitHub.");
+console.log("Run 'git add . && git commit -m \"Housekeeping: Sync cleanup script\"' to sync changes.");

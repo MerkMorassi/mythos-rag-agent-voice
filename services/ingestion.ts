@@ -58,6 +58,17 @@ async function retryWithBackoff<T>(operation: () => Promise<T>, retries = 3, bas
 export class IngestionService {
 
     /**
+     * CANONICAL FILENAME GENERATOR
+     * Enforces the "MYTHOS.LORE.[SOVEREIGN].LOREPACK.[DATE]" standard.
+     */
+    static buildCanonicalFilename(agentId: string): string {
+        // Strip "agent-" prefix and Uppercase
+        const cleanId = agentId.replace(/^agent-/i, '').toUpperCase();
+        const date = new Date().toISOString().slice(0, 10);
+        return `MYTHOS.LORE.${cleanId}.LOREPACK.${date}.json`;
+    }
+
+    /**
      * RETROFIT PROTOCOL (INCREMENTAL)
      * Upgrades existing documents to include Graph Data and NumMark Sigils.
      * Skips documents tagged with 'GRAPH_EXTRACTED' to allow resuming.
@@ -343,14 +354,10 @@ export class IngestionService {
         };
     }
 
-    /**
-     * AIR-TIGHT EXPORT (UNIFIED CODEX SCHEMA)
-     * Uses JSON.stringify for structural integrity.
-     * Aligns schema with Standalone App (Flat Root).
-     */
     static exportLorePack(header: LorePackHeader, docs: KnowledgeDoc[]): Blob {
         const cleanId = header.agentId.replace(/^agent-/i, '').toUpperCase();
 
+        // UNIFIED CODEX SCHEMA (FLAT ROOT)
         const pack = {
             schema: "MYTHOS.LOREPACK.v1",
             agentId: cleanId,
@@ -362,20 +369,10 @@ export class IngestionService {
             sacred_archive: docs
         };
 
+        // Use JSON.stringify for Air-Tight Integrity
         return new Blob([JSON.stringify(pack, null, 2)], { type: 'application/json' });
     }
     
-    /**
-     * CANONICAL FILENAME GENERATOR
-     * Enforces the "MYTHOS.LORE.[SOVEREIGN].LOREPACK.[DATE]" standard.
-     * Strips "agent-" prefixes and uppercases the ID.
-     */
-    static buildCanonicalFilename(agentId: string): string {
-        const cleanId = agentId.replace(/^agent-/i, '').toUpperCase();
-        const date = new Date().toISOString().slice(0, 10);
-        return `MYTHOS.LORE.${cleanId}.LOREPACK.${date}.json`;
-    }
-
     // --- RECURSIVE CHUNK TEXT ---
     // Hierarchical chunking: Headers > Paragraphs > Sentences > Words
     static chunkText(text: string, chunkSize: number = 1000, overlap: number = 200): string[] {
