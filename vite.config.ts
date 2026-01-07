@@ -1,4 +1,3 @@
-
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import { runMcpTool } from './mcpProxy';
@@ -43,7 +42,7 @@ export default defineConfig(({ mode }) => {
     ],
     server: {
       port: 4000, 
-      strictPort: false, 
+      strictPort: true, 
       host: true, 
       open: true
     },
