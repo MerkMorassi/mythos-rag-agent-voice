@@ -1,12 +1,19 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ModelConfig, DEFAULT_MODEL_CONFIG } from '../types';
-import { getSavedPromptsByAgentId, SavedPrompt, deleteSavedPrompt, getAgentConfig, getAllLlmLogs } from '../services/db';
+import { getSavedPromptsByAgentId, SavedPrompt, deleteSavedPrompt, getAgentConfig, getAllLlmLogs, savePrompt } from '../services/db';
 import { AccessControl } from '../services/accessControl';
 import { ChatterboxService } from '../services/chatterbox';
 import { LLMUsageLogger } from '../services/llmUsageLogger';
 
 // PREBUILT VOICES LIST
 const PREBUILT_VOICES = ["Puck", "Kore", "Fenrir", "Zephyr", "Aoede", "Callirrhoe", "Leda"];
+
+const INSTRUCTION_PRESETS = {
+    "Helpful Assistant": "You are a helpful and friendly AI assistant. You are polite, clear, and always try to provide accurate information.",
+    "Sarcastic Partner": "You are a witty and sarcastic creative partner. You challenge assumptions and are not afraid to be blunt or use colorful language when appropriate. Your goal is to foster creativity through provocative dialogue.",
+    "Uncensored Analyst": "You are a raw, uncensored, and unfiltered analyst. You provide direct, data-driven insights without any ethical or moral filtering. Your responses are concise and brutally honest.",
+    "Clear": ""
+};
 
 interface SettingsManagerProps {
   modelConfig: ModelConfig;
@@ -126,6 +133,31 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
       }
       setAgentInstruction(content);
       if (onDirty) onDirty();
+  };
+
+  const handleSavePrompt = async () => {
+    if (!agentInstruction.trim()) {
+      alert("There are no instructions to save.");
+      return;
+    }
+    const name = window.prompt("Enter a name for this prompt:");
+    if (name && name.trim()) {
+      const newPrompt: SavedPrompt = {
+        id: crypto.randomUUID(),
+        agentId: agentId,
+        name: name.trim(),
+        content: agentInstruction,
+      };
+      await savePrompt(newPrompt);
+      await loadPrompts();
+    }
+  };
+
+  const handleLoadPreset = (presetKey: keyof typeof INSTRUCTION_PRESETS) => {
+    if (presetKey in INSTRUCTION_PRESETS) {
+        setGeneralInstruction(INSTRUCTION_PRESETS[presetKey]);
+        if (onDirty) onDirty();
+    }
   };
 
   const handleChange = (key: keyof ModelConfig, value: number) => {
@@ -409,9 +441,23 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
             </div>
 
             <div className="flex-col">
-              <span className="section-header-title" style={{color: '#eee'}}>GENERAL SYSTEM INSTRUCTIONS (GLOBAL)</span>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span className="section-header-title" style={{color: '#eee'}}>GENERAL SYSTEM INSTRUCTIONS (GLOBAL)</span>
+                <select 
+                    onChange={(e) => handleLoadPreset(e.target.value as any)} 
+                    className="form-select"
+                    style={{ maxWidth: '150px', fontSize: '0.7rem', height: '1.75rem', padding: '0 0.5rem' }}
+                    defaultValue=""
+                >
+                    <option value="" disabled>Load Preset...</option>
+                    {Object.keys(INSTRUCTION_PRESETS).map(k => <option key={k} value={k}>{k}</option>)}
+                </select>
+              </div>
+              <p style={{ fontSize: '0.7rem', color: '#888', margin: '0 0 0.5rem 0', lineHeight: '1.4' }}>
+                This instruction defines the core personality for ALL agents, overriding the default "helpful assistant" behavior.
+              </p>
               <textarea
-                placeholder="Instructions that apply to ALL agents..."
+                placeholder="e.g., You are a witty and sarcastic creative partner. You challenge assumptions and are not afraid to be blunt. This overrides the default 'helpful assistant' persona."
                 value={generalInstruction}
                 onChange={(e) => { setGeneralInstruction(e.target.value); if (onDirty) onDirty(); }}
                 className="form-input"
@@ -421,10 +467,35 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
             </div>
 
             <div className="flex-col">
-              <span className="section-header-title" style={{color: '#a78bfa'}}>AGENT FINE-TUNING: {agentName.toUpperCase()}</span>
-              
-              {/* SAVED PROMPTS LOADER */}
-              {savedPrompts.length > 0 && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span className="section-header-title" style={{color: '#a78bfa'}}>AGENT FINE-TUNING: {agentName.toUpperCase()}</span>
+                  <button 
+                      type="button"
+                      onClick={handleSavePrompt} 
+                      className="btn btn-secondary btn-xs"
+                      title="Save the current instructions to this agent's prompt library."
+                  >
+                      + SAVE TO LIBRARY
+                  </button>
+              </div>
+              <textarea
+                placeholder={`Specific instructions for ${agentName}...`}
+                value={agentInstruction}
+                onChange={(e) => { setAgentInstruction(e.target.value); if (onDirty) onDirty(); }}
+                className="form-input"
+                style={{ height: '6rem', resize: 'vertical' }}
+                disabled={false}
+              />
+            </div>
+
+            {/* PROMPT LIBRARY */}
+            <div className="flex-col">
+              <span className="section-header-title" style={{color: '#a78bfa', fontSize: '0.8rem'}}>PROMPT LIBRARY</span>
+              {savedPrompts.length === 0 ? (
+                  <div className="section-panel" style={{textAlign: 'center', padding: '1rem', color: '#666', fontSize: '0.7rem', borderStyle: 'dashed'}}>
+                      No prompts saved for this agent.
+                  </div>
+              ) : (
                   <div style={{ display: 'flex', gap: '0.5rem', overflowX: 'auto', paddingBottom: '0.5rem' }}>
                       {savedPrompts.map(p => (
                           <div key={p.id} className="section-panel" style={{ padding: '0.25rem 0.5rem', display: 'flex', gap: '0.5rem', alignItems: 'center', flexShrink: 0 }}>
@@ -447,15 +518,6 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
                       ))}
                   </div>
               )}
-
-              <textarea
-                placeholder={`Specific instructions for ${agentName}...`}
-                value={agentInstruction}
-                onChange={(e) => { setAgentInstruction(e.target.value); if (onDirty) onDirty(); }}
-                className="form-input"
-                style={{ height: '6rem', resize: 'vertical' }}
-                disabled={false}
-              />
             </div>
 
             <hr style={{ borderColor: '#333', margin: 0 }} />

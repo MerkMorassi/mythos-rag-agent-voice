@@ -426,6 +426,7 @@ export const deleteLorePack = (id: string) => deleteItem(LORE_PACK_STORE, id);
 
 // --- SAVED PROMPTS ---
 
+export const savePrompt = (prompt: SavedPrompt) => putItem(PROMPT_STORE, prompt);
 export const getSavedPromptsByAgentId = (agentId: string) => getByIndex<SavedPrompt>(PROMPT_STORE, 'agentId', agentId);
 export const deleteSavedPrompt = (id: string) => deleteItem(PROMPT_STORE, id);
 
