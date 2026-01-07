@@ -142,9 +142,20 @@ export const MultiAgentConsole: React.FC<MultiAgentConsoleProps> = ({ onExit }) 
 
     // Auto-resize textarea
     useEffect(() => {
-        if (textareaRef.current) {
-            textareaRef.current.style.height = 'auto';
-            textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 150)}px`;
+        const textarea = textareaRef.current;
+        if (textarea) {
+            // Resetting the height to 'auto' allows it to shrink if text is deleted.
+            textarea.style.height = 'auto';
+            // We get the scrollHeight, which is the minimum height the content needs.
+            const scrollHeight = textarea.scrollHeight;
+    
+            // We get the computed min-height from CSS (e.g., '48px') and parse it.
+            const computedStyle = getComputedStyle(textarea);
+            const minHeight = parseFloat(computedStyle.minHeight);
+    
+            // We set the height to be the larger of scrollHeight or minHeight from CSS, capped at 150px.
+            const newHeight = Math.max(minHeight, scrollHeight);
+            textarea.style.height = `${Math.min(newHeight, 150)}px`;
         }
     }, [input]);
 
@@ -443,7 +454,7 @@ export const MultiAgentConsole: React.FC<MultiAgentConsoleProps> = ({ onExit }) 
         const currentPreview = attachmentPreview; 
 
         setInput('');
-        if (textareaRef.current) textareaRef.current.style.height = 'auto'; // Reset height
+        if (textareaRef.current) textareaRef.current.style.height = ''; // Reset height
         setAttachment(null);
         setAttachmentPreview(null);
 
@@ -702,7 +713,6 @@ ${focus.rules.map(r => "- " + r).join('\n')}
                         <textarea 
                             ref={textareaRef}
                             className="auto-expand-textarea" 
-                            style={{ minHeight: 'var(--btn-h-lg)' }}
                             placeholder={isProcessing ? "Agents are deliberating..." : "Broadcast to Council (or use @AgentName)..."} 
                             value={input} 
                             onChange={e => setInput(e.target.value)} 
