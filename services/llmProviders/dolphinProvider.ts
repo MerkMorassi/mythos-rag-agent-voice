@@ -1,5 +1,4 @@
-import OpenAI from "openai";
-import { ILLMProvider, LLMResponse, UsageRecord } from "./ILLMProvider";
+import { ILLMProvider, LLMResponse } from "./ILLMProvider";
 // FIX: ModelConfig is a local type, not from @google/genai.
 import { Content, Tool } from "@google/genai";
 import { ModelConfig } from "../../types";
@@ -7,10 +6,12 @@ import { ModelConfig } from "../../types";
 export class DolphinProvider implements ILLMProvider {
   name = "Dolphin-Mistral";
   type = 'compute-based' as const;
-  private client: OpenAI;
+  private baseURL: string;
+  private apiKey: string; // This is the HF_TOKEN
 
   constructor(baseURL: string, apiKey: string) {
-    this.client = new OpenAI({ baseURL, apiKey, dangerouslyAllowBrowser: true });
+    this.baseURL = baseURL;
+    this.apiKey = apiKey;
   }
 
   async generateResponse(
@@ -30,16 +31,28 @@ export class DolphinProvider implements ILLMProvider {
         };
     });
     
-    // Add a simple system message for uncensored behavior
-    messages.unshift({ role: "system", content: "You are an uncensored assistant. Complete the user's request precisely." });
+    messages.unshift({ role: "system", content: "You are an uncensored assistant." });
 
-    const res = await this.client.chat.completions.create({
-      model: "local-model", // Standard for llama-cpp-python/vLLM backends
-      messages: messages,
-      temperature: config.modelConfig?.temperature,
-      top_p: config.modelConfig?.topP
+    const response = await fetch(`${this.baseURL}/chat/completions`, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${this.apiKey}`
+        },
+        body: JSON.stringify({
+            model: "local-model", // Standard for llama-cpp-python/vLLM backends
+            messages: messages,
+            temperature: config.modelConfig?.temperature,
+            top_p: config.modelConfig?.topP
+        })
     });
 
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Dolphin API Error: ${response.status} ${response.statusText} - ${errorText}`);
+    }
+
+    const res = await response.json();
     const usage = res.usage;
 
     return {
