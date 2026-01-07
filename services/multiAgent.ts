@@ -1,5 +1,6 @@
 import { GoogleGenAI, FunctionDeclaration, Type, Tool, FinishReason, Content } from "@google/genai";
 import { Agent, MultiAgentMessage, SomaActionType } from "../types";
+import { AGENTS } from "../agents";
 import { searchDocuments, getAgentConfig, getGraphContext, getCanvas, updateCanvas } from "./db";
 import { RetrievalGate } from "./retrievalGate";
 import { ExternalRouter } from "./externalRouter";
@@ -12,7 +13,7 @@ import { NumMarkX_GenerateID } from "../patterns/NumMarkX";
 import { AccessControl } from "./accessControl";
 import { GeminiProvider } from "./llmProviders/geminiProvider";
 import { DolphinProvider } from "./llmProviders/dolphinProvider";
-import { ILLMProvider } from "./llmProviders/ILLMProvider";
+import { ILLMProvider, LLMResponse } from "./llmProviders/ILLMProvider";
 import { LLMUsageLogger } from "./llmUsageLogger";
 
 
@@ -21,7 +22,8 @@ export interface AgentResponse {
     text: string;
     error?: string;
     audioUrl?: string; 
-    cost?: number; // Add cost to the response
+    cost?: number;
+    model?: string;
 }
 
 export interface AgentAttachment {
@@ -328,7 +330,6 @@ export const MultiAgentService = {
             return { agentId: agent.id, text: "[SYSTEM ERROR: Collaboration Depth Exceeded. Aborting chain.]" };
         }
         
-        // --- PROVIDER & KEY SETUP ---
         const geminiApiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY;
         if (!geminiApiKey) {
             return { agentId: agent.id, text: "[SYSTEM ERROR: Gemini API Key Missing.]", error: "API Key Missing" };
@@ -336,153 +337,184 @@ export const MultiAgentService = {
         const geminiProvider = new GeminiProvider(geminiApiKey);
         const logger = new LLMUsageLogger();
 
-        const dolphinUrl = localStorage.getItem('dolphin_url');
+        const dolphinUrl = "https://merkmorassi-mythos-rag-agent-voice.hf.space/v1";
         const hfToken = localStorage.getItem('hf_token') || process.env.HF_TOKEN;
-        let dolphinProvider: DolphinProvider | null = null;
-        if(dolphinUrl && hfToken) {
-            dolphinProvider = new DolphinProvider(dolphinUrl, hfToken);
-        }
-
-        // --- RAG & CONTEXT PREPARATION ---
-        const gate = RetrievalGate.evaluate(userMessage, agent.id);
-        let ragContext = "";
-        if (gate.shouldRetrieve) {
-            try {
-                const embedAi = new GoogleGenAI({ apiKey: geminiApiKey });
-                const embedRes = await embedAi.models.embedContent({ model: 'text-embedding-004', contents: [{ parts: [{ text: userMessage }] }] });
-                const vec = embedRes.embeddings?.[0]?.values;
-                ragContext = gate.strategy.startsWith('GRAPH') 
-                    ? await getGraphContext(userMessage, vec, agent.id)
-                    : "### CONTEXT ###\n" + (await searchDocuments(userMessage, vec, agent.id)).map(d => `- ${d.content.substring(0, 500)}...`).join('\n') + "\n### END CONTEXT ###";
-            } catch (e) { console.warn("[RAG] Retrieval failed", e); }
-        }
-
-        const agentConfig = await getAgentConfig(agent.id);
-        const finalInstruction = `${globalInstructions}\n\n${agentConfig.systemInstruction || agent.system_instruction}\n\n${ragContext}\n\n${roomFocusContext}`;
+        const dolphinProvider = hfToken ? new DolphinProvider(dolphinUrl, hfToken) : null;
         
-        const historyForModel = history.filter(m => m.msgType === 'utterance').map(m => ({
-            role: m.senderId === 'USER' ? 'user' : 'model',
-            parts: [{ text: m.senderId === 'USER' ? m.text : `[${m.senderName}]: ${m.text}` }]
-        }));
-
-        const requestContents: Content[] = [
-            ...historyForModel.slice(-10),
-            { role: 'user', parts: [{ text: userMessage }] }
-        ];
-
-        if (attachment) {
-            const userTurn = requestContents[requestContents.length - 1];
-            if (attachment.type === 'image' || attachment.type === 'video') {
-                userTurn.parts.unshift({ inlineData: { mimeType: attachment.mimeType, data: attachment.content } });
-            } else if (attachment.type === 'text') {
-                userTurn.parts.push({ text: `\n\n[ATTACHED FILE: ${attachment.name}]\n${attachment.content.substring(0, 5000)}` });
-            }
-        }
-        
-        // --- TOOL PREPARATION ---
-        const agentTools: Tool[] = [];
-        const agentPerms = AccessControl.resolve(agent.accessLevel);
-        if (agentPerms.includes('EXECUTE_CODE')) agentTools.push({ functionDeclarations: [pythonTool] });
-        if (agentPerms.includes('ROUTE_EXTERNAL') || agentPerms.includes('GENERATE_MEDIA')) agentTools.push({ functionDeclarations: [routeRequestTool] });
-        if (agentPerms.includes('COLLABORATE') || agentPerms.includes('BROADCAST_COUNCIL')) agentTools.push({ functionDeclarations: [consultAgentTool, readCanvasTool, updateCanvasTool] });
-        if (agentPerms.includes('WRITE_CANON')) agentTools.push({ functionDeclarations: [greenlightTool] });
-        
-        // --- MODEL EXECUTION FLOW ---
-        let finalResultText: string | null = "[Execution Failed]";
-        let finalCost = 0;
-        let wasFallback = false;
+        let provider: ILLMProvider = geminiProvider;
+        let isFallback = false;
 
         try {
-            // 1. Attempt with Primary Provider (Gemini)
-            const primaryResponse = await geminiProvider.generateResponse(requestContents, { tools: agentTools, modelConfig: agentConfig.modelConfig });
-            finalCost += primaryResponse.usage.estimatedCostUsd;
+            const config = await getAgentConfig(agent.id);
+            const agentInstructions = config.systemInstruction || agent.system_instruction;
+            
+            const gateResult = RetrievalGate.evaluate(userMessage, agent.handle);
+            let ragContext = "";
+
+            if (gateResult.shouldRetrieve) {
+                const [docs, graph] = await Promise.all([
+                    searchDocuments(userMessage, undefined, agent.id),
+                    getGraphContext(userMessage, undefined, agent.id)
+                ]);
+                ragContext = `\n\n[CONTEXT]\n${docs.map(d=>d.content).join('\n---\n')}\nGRAPH:\n${graph}\n[/CONTEXT]\n`;
+            }
+
+            const rosterString = `\n\n[ACTIVE ROSTER]\n${activeRoster.map(a => `- ${a.handle} (${a.title})`).join('\n')}\n`;
+            const systemPrompt = `${globalInstructions}\n${agentInstructions}\n${roomFocusContext}${rosterString}${ragContext}`;
+
+            const contents: Content[] = history.map(m => ({
+                role: m.senderId === 'USER' ? 'user' : 'model',
+                parts: [{ text: `[${m.senderName}]: ${m.text}` }]
+            }));
+            
+            const userParts: any[] = [{ text: `[DIRECTOR]: ${userMessage}` }];
+            if (attachment) {
+                if (attachment.type === 'text') {
+                    userParts.push({ text: `\n[ATTACHED FILE: ${attachment.name}]\n${attachment.content}` });
+                } else {
+                    userParts.push({ inlineData: { mimeType: attachment.mimeType, data: attachment.content } });
+                }
+            }
+            contents.push({ role: 'user', parts: userParts });
+
+            const canExec = AccessControl.canPerform(agent.accessLevel, SomaActionType.EXEC_CODE);
+            const canRoute = AccessControl.canPerform(agent.accessLevel, SomaActionType.ROUTE_REQUEST);
+            
+            const functionDeclarations = [
+                consultAgentTool, readCanvasTool, updateCanvasTool,
+                ...googleMapsTool.functionDeclarations,
+                ...(canRoute ? [routeRequestTool] : []),
+                ...(canExec ? [pythonTool, ...filesystemTool.functionDeclarations] : []),
+                ...(agent.agentClass === 'PARTNER' ? [greenlightTool] : [])
+            ];
+            
+            const tools: Tool[] = [{ functionDeclarations }];
+            
+            let finalResponse: LLMResponse | null = null;
+            
+            for (let i = 0; i < 5; i++) {
+                const response = await provider.generateResponse(contents, { tools, modelConfig: config.modelConfig });
+
+                if (response.isSafetyRefusal && dolphinProvider) {
+                    isFallback = true;
+                    provider = dolphinProvider;
+                    contents.push({ role: 'user', parts: [{ text: '[SYSTEM]: Request refused due to safety. Retrying with Sovereign model.' }] });
+                    continue;
+                }
+
+                if (!response.functionCalls) {
+                    finalResponse = response;
+                    break;
+                }
+                
+                const fcPart = { toolCalls: response.functionCalls };
+                contents.push({ role: 'model', parts: [fcPart] });
+                
+                const toolResponses = await this.handleToolCalls(response.functionCalls, agent, history, depth, onDelegate);
+                contents.push({
+                    role: 'user',
+                    parts: [{ toolResponses: { responses: toolResponses } }]
+                });
+            }
+
+            if (!finalResponse) {
+                finalResponse = await provider.generateResponse(contents, { modelConfig: config.modelConfig });
+            }
             
             logger.log({
-                timestamp: primaryResponse.usage.timestamp.toISOString(),
-                provider: geminiProvider.name,
-                model: geminiProvider.name,
-                prompt: userMessage.substring(0, 200), // Truncate long prompts
-                inputTokens: primaryResponse.usage.inputTokens,
-                outputTokens: primaryResponse.usage.outputTokens,
-                costUsd: primaryResponse.usage.estimatedCostUsd,
-                wasFallback: false
+                timestamp: new Date().toISOString(),
+                provider: provider.name,
+                model: finalResponse.model,
+                prompt: `${systemPrompt.substring(0, 200)}...${userMessage}`,
+                inputTokens: finalResponse.usage.inputTokens,
+                outputTokens: finalResponse.usage.outputTokens,
+                costUsd: finalResponse.usage.estimatedCostUsd,
+                wasFallback: isFallback,
             });
 
-            if (onLogCost) onLogCost(`[USAGE] ${geminiProvider.name}: ${primaryResponse.usage.inputTokens} IN, ${primaryResponse.usage.outputTokens} OUT. Cost: $${primaryResponse.usage.estimatedCostUsd.toFixed(6)}`);
-
-            // 2. Handle Safety Refusal Fallback
-            if (primaryResponse.isSafetyRefusal && dolphinProvider) {
-                wasFallback = true;
-                if (onLogCost) onLogCost(`[ROUTER] Gemini Refusal (SAFETY). Routing to ${dolphinProvider.name}.`);
-                const fallbackResponse = await dolphinProvider.generateResponse(requestContents, { modelConfig: agentConfig.modelConfig });
-                finalResultText = fallbackResponse.content;
-                
-                logger.log({
-                    timestamp: fallbackResponse.usage.timestamp.toISOString(),
-                    provider: dolphinProvider.name,
-                    model: dolphinProvider.name,
-                    prompt: userMessage.substring(0, 200),
-                    inputTokens: fallbackResponse.usage.inputTokens,
-                    outputTokens: fallbackResponse.usage.outputTokens,
-                    costUsd: fallbackResponse.usage.estimatedCostUsd,
-                    wasFallback: true
-                });
-
-                if (onLogCost) onLogCost(`[USAGE] ${dolphinProvider.name}: ${fallbackResponse.usage.inputTokens} IN, ${fallbackResponse.usage.outputTokens} OUT.`);
-            } 
-            // 3. Handle Tool Calls if Gemini succeeded
-            else if (primaryResponse.functionCalls) {
-                // TODO: Implement tool call handling logic here
-                finalResultText = "[Tool Call Detected, but not yet implemented in this refactor.]";
-            } 
-            // 4. Handle regular text response
-            else {
-                finalResultText = primaryResponse.content;
+            if (onLogCost) {
+                onLogCost(`[${finalResponse.model}] Cost: $${finalResponse.usage.estimatedCostUsd.toFixed(6)}`);
             }
+
+            return {
+                agentId: agent.id,
+                text: finalResponse.content || "[No text content returned]",
+                cost: finalResponse.usage.estimatedCostUsd,
+                model: finalResponse.model,
+            };
 
         } catch (error: any) {
-            // 5. Handle Thrown Errors (including safety blocks)
-             if ((error.message?.toLowerCase().includes("safety") || error.message?.toLowerCase().includes("blocked")) && dolphinProvider) {
-                wasFallback = true;
-                logger.log({
-                    timestamp: new Date().toISOString(),
-                    provider: geminiProvider.name,
-                    model: geminiProvider.name,
-                    prompt: userMessage.substring(0, 200),
-                    inputTokens: 0, outputTokens: 0, costUsd: 0,
-                    wasFallback: false,
-                });
+            console.error(`[SOMA KERNEL] Agent ${agent.handle} failed:`, error);
+            return {
+                agentId: agent.id,
+                text: `[AGENT ERROR: ${error.message}]`,
+                error: error.message
+            };
+        }
+    },
+    
+    async handleToolCalls(
+        functionCalls: any[], 
+        agent: Agent, 
+        history: MultiAgentMessage[],
+        depth: number,
+        onDelegate?: (targetId: string) => void
+    ): Promise<any[]> {
+        const responses: any[] = [];
 
-                if (onLogCost) onLogCost(`[ROUTER] Gemini Refusal (Error: ${error.message}). Routing to ${dolphinProvider.name}.`);
-                try {
-                    const fallbackResponse = await dolphinProvider.generateResponse(requestContents, { modelConfig: agentConfig.modelConfig });
-                    finalResultText = fallbackResponse.content;
-
-                    logger.log({
-                        timestamp: fallbackResponse.usage.timestamp.toISOString(),
-                        provider: dolphinProvider.name,
-                        model: dolphinProvider.name,
-                        prompt: userMessage.substring(0, 200),
-                        inputTokens: fallbackResponse.usage.inputTokens,
-                        outputTokens: fallbackResponse.usage.outputTokens,
-                        costUsd: fallbackResponse.usage.estimatedCostUsd,
-                        wasFallback: true
-                    });
-
-                    if (onLogCost) onLogCost(`[USAGE] ${dolphinProvider.name}: ${fallbackResponse.usage.inputTokens} IN, ${fallbackResponse.usage.outputTokens} OUT.`);
-                } catch(e: any) {
-                    return { agentId: agent.id, text: `[SYSTEM] Fallback routing also failed: ${e.message}`, error: e.message, cost: finalCost };
-                }
-            } else {
-                console.error(`[SOMA] Agent ${agent.handle} failed query:`, error);
-                return { agentId: agent.id, text: `[SYSTEM ERROR: Query failed - ${error.message}]`, error: error.message, cost: finalCost };
+        for (const fc of functionCalls) {
+            let result: any = { error: `Tool '${fc.name}' not found or implemented.` };
+            
+            if (fc.name === 'routeRequest') {
+                const res = await ExternalRouter.route(fc.args.target, fc.args.prompt, { id: agent.id, handle: agent.handle }, fc.args.generate_audio);
+                result = res.success ? res.data : { error: res.error };
             }
+            else if (fc.name === 'execute_python') {
+                 result = await PythonSandbox.execute(fc.args.code);
+            }
+            else if (fc.name === 'consult_agent') {
+                const targetAgent = AGENTS.find(a => a.handle.toUpperCase() === fc.args.targetId.toUpperCase());
+                if (targetAgent) {
+                    if (onDelegate) onDelegate(targetAgent.handle);
+                    const subResponse = await this.queryAgent(
+                        targetAgent,
+                        fc.args.query,
+                        history,
+                        "", "", [], null,
+                        depth + 1
+                    );
+                    result = subResponse.text;
+                } else {
+                    result = { error: `Agent ${fc.args.targetId} not found.` };
+                }
+            }
+            else if (fc.name === 'read_canvas') {
+                 const canvas = await getCanvas();
+                 result = JSON.stringify(canvas);
+            }
+            else if (fc.name === 'update_canvas') {
+                const canvas = await getCanvas();
+                if (fc.args.operation === 'ADD_SECTION') {
+                    canvas.sections.push({ id: fc.args.sectionId || `sec_${Date.now()}`, title: fc.args.title || "Untitled", content: fc.args.content || "", lastEditor: agent.id, timestamp: Date.now() });
+                }
+                await updateCanvas(canvas);
+                result = "Canvas updated.";
+            }
+            else if (fc.name.startsWith('maps_')) {
+                const mcpResult = await McpClient.execute('google-maps', fc.name, fc.args);
+                result = mcpResult.status === 'SUCCESS' ? mcpResult.result : { error: mcpResult.error };
+            }
+            else if (['read_file', 'list_directory', 'write_file', 'search_files', 'get_file_info'].includes(fc.name)) {
+                const mcpResult = await McpClient.execute('filesystem', fc.name, fc.args);
+                result = mcpResult.status === 'SUCCESS' ? mcpResult.result : { error: mcpResult.error };
+            }
+            
+            responses.push({
+                name: fc.name,
+                response: { result: typeof result === 'string' ? result : JSON.stringify(result) }
+            });
         }
         
-        return {
-            agentId: agent.id,
-            text: finalResultText || "[No Response Text]",
-            cost: finalCost
-        };
+        return responses;
     }
 };

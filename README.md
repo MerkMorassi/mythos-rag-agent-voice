@@ -16,14 +16,16 @@ npm install
 
 ## 2. Environment Configuration
 
-Next, create a file named `.env` in the root of the project. This file will hold your secret API keys. Add your Google Gemini API key to it like this:
+Next, create a file named `.env` in the root of the project. This file will hold your secret API keys. Add your Google Gemini API key and your Hugging Face token to it like this:
 
 ```
 # .env file
 API_KEY="AIza..."
+HF_TOKEN="hf_..."
 ```
 
-*The application is pre-configured to read this `API_KEY` variable automatically.*
+*The application is pre-configured to read these variables automatically.*
+*Alternatively, you can enter these keys in the application's **Settings** panel.*
 
 ## 3. Running the Application
 

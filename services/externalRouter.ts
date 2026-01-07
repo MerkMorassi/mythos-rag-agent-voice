@@ -2,7 +2,8 @@ import { saveMediaAsset, getAgentConfig } from "./db";
 import { MediaAsset } from "../types";
 import { NumMarkX_GenerateID } from "../patterns/NumMarkX";
 import { ChatterboxService } from "./chatterbox";
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, Content } from "@google/genai";
+import { DolphinProvider } from './llmProviders/dolphinProvider';
 
 /**
  * EXTERNAL MODEL ROUTER & FALLBACK SYSTEM
@@ -42,6 +43,11 @@ export const ExternalRouter = {
             else if (target === 'VIDEO_GENERATION') {
                 return await this.callVeoVideo(prompt, agent);
             }
+
+            // --- SOVEREIGN LLM FALLBACK ---
+            else if (target === 'DOLPHIN_LLM') {
+                 return await this.callDolphin(prompt);
+            }
             
             // --- TTS ---
             else if (target === 'CHATTERBOX_TTS') {
@@ -54,6 +60,28 @@ export const ExternalRouter = {
             return { success: false, type: 'text', error: e.message };
         }
     },
+    
+    // --- SOVEREIGN ENGINE (DOLPHIN) ---
+    async callDolphin(prompt: string): Promise<RouteResult> {
+        const dolphinUrl = "https://merkmorassi-mythos-rag-agent-voice.hf.space/v1";
+        const hfToken = localStorage.getItem('hf_token') || process.env.HF_TOKEN;
+
+        if (!hfToken) {
+            return { success: false, type: 'text', error: "Hugging Face Token is required for the Sovereign Engine." };
+        }
+
+        try {
+            const dolphinProvider = new DolphinProvider(dolphinUrl, hfToken);
+            const contents: Content[] = [{ role: 'user', parts: [{ text: prompt }] }];
+            const response = await dolphinProvider.generateResponse(contents, {});
+            
+            return { success: true, type: 'text', data: response.content || "" };
+
+        } catch (e: any) {
+            return { success: false, type: 'text', error: `Sovereign Engine call failed: ${e.message}` };
+        }
+    },
+
 
     // --- NATIVE GEMINI IMAGE (FALLBACK) ---
     async callGeminiImage(prompt: string, agent: { id: string, handle: string }): Promise<RouteResult> {

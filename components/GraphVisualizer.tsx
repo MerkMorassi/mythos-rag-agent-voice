@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { GraphNode, GraphEdge } from '../types';
-import { getAllGraphNodes, getGraphEdges } from '../services/db';
+import { getGraphNodesByAgent, getGraphEdges } from '../services/db';
 
 interface SimulationNode extends GraphNode {
     x: number;
@@ -23,7 +23,11 @@ const COLOR_MAP: Record<string, string> = {
     'DEFAULT': '#9ca3af' // Grey
 };
 
-export const GraphVisualizer: React.FC<{}> = () => {
+interface GraphVisualizerProps {
+    currentAgentId: string;
+}
+
+export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ currentAgentId }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     
@@ -40,7 +44,7 @@ export const GraphVisualizer: React.FC<{}> = () => {
     const animationRef = useRef<number>(0);
     const isRunningRef = useRef(false);
 
-    // Initial Load on mount
+    // Re-load graph when agent changes
     useEffect(() => {
         loadGraph();
         isRunningRef.current = true;
@@ -50,11 +54,13 @@ export const GraphVisualizer: React.FC<{}> = () => {
             isRunningRef.current = false;
             cancelAnimationFrame(animationRef.current);
         };
-    }, []);
+    }, [currentAgentId]);
 
     const loadGraph = async () => {
-        const rawNodes = await getAllGraphNodes();
-        const rawEdges = await getGraphEdges();
+        const rawNodes = await getGraphNodesByAgent(currentAgentId);
+        const allRawEdges = await getGraphEdges();
+        // Filter edges for the current agent
+        const rawEdges = allRawEdges.filter(edge => edge.agentId === currentAgentId);
         
         initSimulation(rawNodes, rawEdges);
     };
@@ -89,40 +95,6 @@ export const GraphVisualizer: React.FC<{}> = () => {
         // Reset View
         offsetRef.current = { x: 0, y: 0 };
         zoomRef.current = 0.8;
-    };
-
-    const injectTestData = () => {
-        const testNodes: GraphNode[] = [];
-        const categories = ['PERSON', 'LOCATION', 'CONCEPT', 'EVENT'];
-        
-        for(let i=0; i<30; i++) {
-            testNodes.push({
-                id: `TEST_NODE_${i}`,
-                name: `Node ${i}`,
-                label: categories[i % categories.length],
-                description: "Simulation Test Node",
-                agentId: 'SYSTEM',
-                sourceDocIds: [],
-                timestamp: Date.now()
-            });
-        }
-        
-        const testEdges: GraphEdge[] = [];
-        for(let i=0; i<25; i++) {
-            const s = Math.floor(Math.random() * 30);
-            let t = Math.floor(Math.random() * 30);
-            while(t === s) t = Math.floor(Math.random() * 30);
-            testEdges.push({
-                id: `EDGE_${i}`,
-                source: `TEST_NODE_${s}`,
-                target: `TEST_NODE_${t}`,
-                relation: 'LINKED_TO',
-                agentId: 'SYSTEM',
-                timestamp: Date.now()
-            });
-        }
-        
-        initSimulation(testNodes, testEdges);
     };
 
     const updatePhysics = () => {
@@ -430,17 +402,13 @@ export const GraphVisualizer: React.FC<{}> = () => {
                 <canvas ref={canvasRef} style={{ display: 'block' }} />
                 
                 {stats.nodes === 0 && (
-                    <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
+                    <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', textAlign: 'center', padding: '1rem' }}>
                         <div style={{ color: '#666', fontSize: '1.5rem', letterSpacing: '2px', marginBottom: '1rem' }}>
-                            NO DATA IN LATTICE
+                            NO GRAPH DATA FOR THIS AGENT
                         </div>
-                        <button 
-                            onClick={(e) => { e.stopPropagation(); injectTestData(); }}
-                            className="btn btn-primary pointer-events-auto"
-                            style={{ pointerEvents: 'auto' }}
-                        >
-                            GENERATE TEST SIMULATION
-                        </button>
+                        <div style={{ color: '#444', fontSize: '0.8rem' }}>
+                            Ingest documents or use the "Inject Graph" command in 'Active Memory' to build the lattice.
+                        </div>
                     </div>
                 )}
             </div>

@@ -155,7 +155,8 @@ export const MultiAgentConsole: React.FC<MultiAgentConsoleProps> = ({ onExit }) 
         msgType: 'utterance' | 'action' | 'thought' | 'system' = 'utterance',
         isThinking = false, 
         msgAttachment?: string,
-        targets?: string[]
+        targets?: string[],
+        model?: string
     ) => {
         const msg: MultiAgentMessage = {
             id: crypto.randomUUID(),
@@ -166,14 +167,15 @@ export const MultiAgentConsole: React.FC<MultiAgentConsoleProps> = ({ onExit }) 
             isThinking,
             attachment: msgAttachment,
             targets,
-            msgType
+            msgType,
+            model
         };
         setMessages(prev => [...prev, msg]);
         return msg.id;
     };
 
-    const updateMessage = (id: string, text: string) => {
-        setMessages(prev => prev.map(m => m.id === id ? { ...m, text, isThinking: false } : m));
+    const updateMessage = (id: string, text: string, model?: string) => {
+        setMessages(prev => prev.map(m => m.id === id ? { ...m, text, model, isThinking: false } : m));
     };
 
     const handleClearHistory = async () => {
@@ -513,9 +515,9 @@ ${focus.rules.map(r => "- " + r).join('\n')}
             );
 
             if (response.error) {
-                updateMessage(msgId, `[CONNECTION LOST: ${response.error}]`);
+                updateMessage(msgId, `[CONNECTION LOST: ${response.error}]`, response.model);
             } else {
-                updateMessage(msgId, response.text);
+                updateMessage(msgId, response.text, response.model);
                 
                 // CHECK FOR SAVE COMMAND
                 // Regex looks for [ACTION: SAVE_SESSION | title="..."]
@@ -656,6 +658,7 @@ ${focus.rules.map(r => "- " + r).join('\n')}
                             {msg.senderId !== 'SYSTEM' && (
                                 <span className="council-sender" style={{ color: msg.senderId === 'USER' ? '#38bdf8' : '#a78bfa' }}>
                                     {msg.senderName} 
+                                    {msg.model && <span className="model-badge">{msg.model.replace('gemini-3-pro-preview', 'G-Pro').replace('gemini-3-flash-preview', 'G-Flash')}</span>}
                                     {msg.targets && msg.targets.length > 0 && <span style={{ opacity: 0.5, marginLeft: '0.5rem', fontWeight: 'normal', fontSize: '0.65rem' }}>to {msg.targets.length} agents</span>}
                                 </span>
                             )}

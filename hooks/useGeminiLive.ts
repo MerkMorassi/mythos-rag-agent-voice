@@ -1,4 +1,3 @@
-
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { GoogleGenAI, LiveServerMessage, Modality, Tool } from "@google/genai";
 import { LogMessage, ConnectionState } from '../types';
@@ -223,13 +222,12 @@ export function useGeminiLive({
         if (sessionPromiseRef.current && !isIntentionalDisconnect.current) {
             try {
                 const session = await sessionPromiseRef.current;
-                if (typeof session.send === 'function') {
-                    session.send({
-                        clientContent: { turns: [{ role: 'user', parts: [{ text }] }], turnComplete: true }
-                    });
-                } else {
-                    console.warn("session.send is not available in this SDK version. Text input ignored.");
-                }
+                // FIX: The 'send' method with 'clientContent' is deprecated. The correct way
+                // to send a text-only turn is via 'sendRealtimeInput' with a 'turns' payload.
+                session.sendRealtimeInput({
+                    turns: [{ role: 'user', parts: [{ text }] }],
+                    turnComplete: true
+                });
             } catch(e) {
                 if(!isIntentionalDisconnect.current) console.error("Send Text Error:", e);
             }

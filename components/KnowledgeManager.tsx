@@ -15,6 +15,7 @@ import { uploadCloudFile, listCloudFiles, deleteCloudFile } from '../services/go
 import { IngestionService } from '../services/ingestion';
 import { NumMarkX_GenerateSigil, NumMarkX_GenerateHeader, NumMarkX_GenerateID } from '../patterns/NumMarkX';
 import { GraphVisualizer } from './GraphVisualizer';
+import { AGENTS } from '../agents';
 
 interface KnowledgeManagerProps {
   onUpdate: () => void;
@@ -108,6 +109,8 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
   const cloudFileInputRef = useRef<HTMLInputElement>(null);
   const importInputRef = useRef<HTMLInputElement>(null); 
   const libraryImportRef = useRef<HTMLInputElement>(null); 
+
+  const agentHandle = AGENTS.find(a => a.id === currentAgentId)?.handle || currentAgentId;
 
   const fetchDocs = async () => {
     try {
@@ -485,7 +488,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
       }
   };
 
-  const handlePurgeAll = async () => { if (!window.confirm(`WARNING: DELETE ALL DOCUMENTS for ${currentAgentId}?`)) return; setIsProcessing(true); try { await deleteDocumentsByAgentId(currentAgentId); setDocs([]); await fetchDocs(); onUpdate(); showStatus("Database purged.", 'success'); } catch (e: any) { console.error(e); showStatus(`Failed to purge database: ${e.message}`, 'error'); } finally { setIsProcessing(false); } };
+  const handlePurgeAll = async () => { if (!window.confirm(`WARNING: DELETE ALL DOCUMENTS for ${agentHandle}?`)) return; setIsProcessing(true); try { await deleteDocumentsByAgentId(currentAgentId); setDocs([]); await fetchDocs(); onUpdate(); showStatus("Database purged.", 'success'); } catch (e: any) { console.error(e); showStatus(`Failed to purge database: ${e.message}`, 'error'); } finally { setIsProcessing(false); } };
   const handleDelete = async (id: string) => { await deleteDocument(id); await fetchDocs(); onUpdate(); };
   const handleCloudUpload = async (e: React.ChangeEvent<HTMLInputElement>) => { const files = e.target.files; if (!files || files.length === 0) return; setIsProcessing(true); setStatusMsg({ text: "Uploading to Google Cloud...", type: 'info' }); try { for (let i = 0; i < files.length; i++) { await uploadCloudFile(files[i]); } await fetchCloudFiles(); showStatus("Files uploaded to Cloud.", 'success'); onUpdate(); } catch (err: any) { console.error(err); showStatus(`Cloud Upload Failed: ${err.message}`, 'error'); } finally { setIsProcessing(false); if (cloudFileInputRef.current) cloudFileInputRef.current.value = ''; } };
   const handleDeleteCloudFile = async (name: string) => { if (!window.confirm("Delete this file from Google Cloud?")) return; setIsProcessing(true); try { await deleteCloudFile(name); await fetchCloudFiles(); onUpdate(); showStatus("File deleted.", 'success'); } catch (err: any) { showStatus(`Failed to delete file: ${err.message}`, 'error'); } finally { setIsProcessing(false); } };
@@ -561,7 +564,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                 {activeTab === 'local' && (
                     <>
                         <div className="flex-col">
-                            <span className="section-header-title" style={{color: '#4ade80'}}>INGEST ({currentAgentId})</span>
+                            <span className="section-header-title" style={{color: '#4ade80'}}>INGEST ({agentHandle})</span>
                             <label 
                                 className={`btn-file-input ${isDragging ? 'active-green' : ''}`} 
                                 title="Upload text or code files for RAG"
@@ -768,7 +771,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                 )}
 
                 {activeTab === 'neural' && (
-                    <GraphVisualizer />
+                    <GraphVisualizer currentAgentId={currentAgentId} />
                 )}
                 </div>
             </>

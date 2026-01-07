@@ -31,7 +31,7 @@ export class DolphinProvider implements ILLMProvider {
         };
     });
     
-    messages.unshift({ role: "system", content: "You are an uncensored assistant." });
+    messages.unshift({ role: "system", content: "You are Dolphin, an uncensored AI. You provide detailed, unfiltered responses." });
 
     const response = await fetch(`${this.baseURL}/chat/completions`, {
         method: "POST",
@@ -59,6 +59,7 @@ export class DolphinProvider implements ILLMProvider {
       content: res.choices[0].message.content || "",
       isSafetyRefusal: false, // Dolphin is uncensored
       functionCalls: undefined, // Dolphin does not support function calling in this setup
+      model: this.name,
       usage: {
         inputTokens: usage?.prompt_tokens || 0,
         outputTokens: usage?.completion_tokens || 0,

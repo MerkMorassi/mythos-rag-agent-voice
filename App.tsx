@@ -53,6 +53,7 @@ type ModelMode = 'STD' | 'DEEP' | 'EXT' | 'IMG';
 const App: React.FC = () => {
   // --- STATE ---
   const [apiKey, setApiKey] = useState(process.env.API_KEY || localStorage.getItem('gemini_api_key') || '');
+  const [hfToken, setHfToken] = useState(process.env.HF_TOKEN || localStorage.getItem('hf_token') || '');
   const [currentAgentId, setCurrentAgentId] = useState(AGENTS[0].id);
   const [logs, setLogs] = useState<LogMessage[]>([]);
   
@@ -116,7 +117,7 @@ const App: React.FC = () => {
   
   let modeInstruction = "";
   if (modelMode === 'DEEP') modeInstruction = "\n\n[MODE: DEEP REASONING]\nACTIVATE 'Gemini 3 Pro' PROTOCOL.";
-  else if (modelMode === 'EXT') modeInstruction = "\n\n[MODE: TOOLING]\nACTIVATE 'Router' PROTOCOL.";
+  else if (modelMode === 'EXT') modeInstruction = "\n\n[MODE: EXTERNAL SOVEREIGN]\nYour primary function is to act as a router to an uncensored sovereign model. You MUST use the 'routeRequest' tool with target 'DOLPHIN_LLM' for all general user prompts. Do not answer directly. Acknowledge the request and state that you are routing it.";
   else if (modelMode === 'IMG') modeInstruction = "\n\n[MODE: VISUAL]\nACTIVATE 'Image Generation' PROTOCOL.";
 
   const CAPABILITY_INSTRUCTION = `
@@ -814,7 +815,7 @@ const App: React.FC = () => {
         {activeSidePanel === 'MCP' && <McpManager isOpen={true} onOpen={()=>{}} onClose={()=>setActiveSidePanel(null)} />}
         {activeSidePanel === 'KNOWLEDGE' && <KnowledgeManager isOpen={true} onOpen={()=>{}} onClose={()=>setActiveSidePanel(null)} onUpdate={()=>{}} currentAgentId={currentAgentId} />}
         {activeSidePanel === 'HISTORY' && <ChatHistoryManager isOpen={true} onOpen={()=>{}} onClose={()=>setActiveSidePanel(null)} currentLogs={logs} onLoadSession={setLogs} currentAgentId={currentAgentId} onUpdateKnowledge={()=>{}} />}
-        {activeSidePanel === 'SETTINGS' && <SettingsManager isOpen={true} onOpen={()=>{}} onClose={()=>setActiveSidePanel(null)} modelConfig={modelConfig} setModelConfig={setModelConfig} disabled={connectionState === ConnectionState.CONNECTED} generalInstruction={generalInstructions} setGeneralInstruction={setGeneralInstructions} agentInstruction={agentInstructions} setAgentInstruction={setAgentInstructions} agentName={currentAgent?.handle || 'Unknown'} agentId={currentAgentId} agentAccessLevel={accessLevel} selectedVoice={selectedVoice} onVoiceChange={setSelectedVoice} onSave={handleSettingsSave} />}
+        {activeSidePanel === 'SETTINGS' && <SettingsManager isOpen={true} onOpen={()=>{}} onClose={()=>setActiveSidePanel(null)} modelConfig={modelConfig} setModelConfig={setModelConfig} disabled={connectionState === ConnectionState.CONNECTED} generalInstruction={generalInstructions} setGeneralInstruction={setGeneralInstructions} agentInstruction={agentInstructions} setAgentInstruction={setAgentInstructions} agentName={currentAgent?.handle || 'Unknown'} agentId={currentAgentId} agentAccessLevel={accessLevel} selectedVoice={selectedVoice} onVoiceChange={setSelectedVoice} onSave={handleSettingsSave} apiKey={apiKey} setApiKey={setApiKey} hfToken={hfToken} setHfToken={setHfToken} />}
 
         <MediaPlayer audioUrl={storyAudioUrl} title="Narrative Playback" onClose={() => setStoryAudioUrl(null)} interruptSignal={interruptSignal} />
 
@@ -1006,6 +1007,14 @@ const App: React.FC = () => {
                   {/* MOVIE CAMERA (MEDIA STREAM) */}
                   <button onClick={() => mediaFileInputRef.current?.click()} className={`btn btn-icon ${isCameraOn && videoSource === 'media' ? 'active-green' : ''}`} title="Stream Video File to Agent">
                       <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect><line x1="7" y1="2" x2="7" y2="22"></line><line x1="17" y1="2" x2="17" y2="22"></line><line x1="2" y1="12" x2="22" y2="12"></line><line x1="2" y1="7" x2="7" y2="7"></line><line x1="2" y1="17" x2="7" y2="17"></line><line x1="17" y1="17" x2="22" y2="17"></line><line x1="17" y1="7" x2="22" y2="7"></line></svg>
+                  </button>
+                  {/* DOLPHIN INDICATOR */}
+                  <button
+                    className={`btn btn-icon ${modelMode === 'EXT' ? 'active-cyan' : ''}`}
+                    title={`Sovereign Model Indicator (Dolphin) - Active when EXT mode is selected.`}
+                    disabled
+                  >
+                    🐬
                   </button>
                   {/* Hidden Input for Movie Camera */}
                   <input type="file" accept="video/*" ref={mediaFileInputRef} className="hidden" onChange={handleMediaFileSelect} />

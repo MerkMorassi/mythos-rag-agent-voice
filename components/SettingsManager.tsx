@@ -22,20 +22,23 @@ interface SettingsManagerProps {
   agentName: string;
   agentId: string; 
   
-  // New props for access level
   agentAccessLevel?: string;
   
-  // Voice Props
   selectedVoice: string;
   onVoiceChange: (voice: string) => void;
   
   onSave: (voiceRef?: string, accessLevel?: string, voiceSpeed?: number, voicePitch?: number) => Promise<void>;
   onDirty?: () => void;
   
-  // Modal Control
   isOpen: boolean;
   onOpen: () => void;
   onClose: () => void;
+
+  // Key Management
+  apiKey: string;
+  setApiKey: (key: string) => void;
+  hfToken: string;
+  setHfToken: (token: string) => void;
 }
 
 const SettingsManager: React.FC<SettingsManagerProps> = ({ 
@@ -54,8 +57,11 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
   onSave,
   onDirty,
   isOpen,
-  onOpen,
-  onClose
+  onClose,
+  apiKey,
+  setApiKey,
+  hfToken,
+  setHfToken
 }) => {
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -76,10 +82,7 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
   const voiceInputRef = useRef<HTMLInputElement>(null);
   const audioPreviewRef = useRef<HTMLAudioElement>(null);
   
-  // API Credentials State
-  const [geminiKey, setGeminiKey] = useState('');
-  const [hfToken, setHfToken] = useState('');
-  const [dolphinUrl, setDolphinUrl] = useState('');
+  const dolphinUrl = "https://merkmorassi-mythos-rag-agent-voice.hf.space/v1";
 
   useEffect(() => {
       if (isOpen) {
@@ -91,9 +94,6 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
           logger.getTotalCost().then(setTotalCost);
           
           setLocalAccessLevel(agentAccessLevel || '400');
-          setGeminiKey(localStorage.getItem('gemini_api_key') || '');
-          setHfToken(localStorage.getItem('hf_token') || '');
-          setDolphinUrl(localStorage.getItem('dolphin_url') || '');
       }
   }, [isOpen, agentId, agentAccessLevel]);
 
@@ -201,14 +201,11 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
     e.preventDefault();
     setIsSaving(true);
     try {
-        if (geminiKey) localStorage.setItem('gemini_api_key', geminiKey);
+        if (apiKey) localStorage.setItem('gemini_api_key', apiKey);
         else localStorage.removeItem('gemini_api_key');
 
         if (hfToken) localStorage.setItem('hf_token', hfToken);
         else localStorage.removeItem('hf_token');
-
-        if (dolphinUrl) localStorage.setItem('dolphin_url', dolphinUrl);
-        else localStorage.removeItem('dolphin_url');
 
         await onSave(voiceBase64, localAccessLevel, voiceSpeed, voicePitch);
         setSaveSuccess(true);
@@ -295,26 +292,25 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
                         <label className="form-label">GEMINI API KEY (Required)</label>
                         <input 
                             type="password"
-                            value={geminiKey}
-                            onChange={(e) => setGeminiKey(e.target.value)}
+                            value={apiKey}
+                            onChange={(e) => setApiKey(e.target.value)}
                             placeholder="AIza..."
                             className="form-input"
                             style={{ fontFamily: 'monospace' }}
                         />
                     </div>
                     <div>
-                        <label className="form-label">DOLPHIN / HF SPACE URL (Fallback LLM)</label>
+                        <label className="form-label">DOLPHIN / HF SPACE URL (SOVEREIGN ENGINE)</label>
                         <input 
                             type="text"
                             value={dolphinUrl}
-                            onChange={(e) => setDolphinUrl(e.target.value)}
-                            placeholder="https://...hf.space/v1"
+                            readOnly
                             className="form-input"
-                            style={{ fontFamily: 'monospace' }}
+                            style={{ fontFamily: 'monospace', background: '#111', color: '#888', cursor: 'default' }}
                         />
                     </div>
                     <div>
-                        <label className="form-label">HUGGING FACE TOKEN (Read - Optional)</label>
+                        <label className="form-label">HUGGING FACE TOKEN (Read - Required for Sovereign)</label>
                         <input 
                             type="password"
                             value={hfToken}

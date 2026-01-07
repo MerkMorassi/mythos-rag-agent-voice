@@ -14,6 +14,7 @@ export interface LLMResponse {
     functionCalls?: any;
     usage: UsageRecord;
     isSafetyRefusal: boolean;
+    model: string;
 }
 
 export interface ILLMProvider {

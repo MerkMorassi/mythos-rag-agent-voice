@@ -245,6 +245,7 @@ export interface MultiAgentMessage {
     isThinking?: boolean;
     attachment?: string;
     meta?: Record<string, any>; // Provenance, confidence, tokens, etc.
+    model?: string; // e.g., 'gemini-3-pro-preview', 'Dolphin-Mistral'
 }
 
 // --- ANIMAGENTS PIPELINE TYPES ---

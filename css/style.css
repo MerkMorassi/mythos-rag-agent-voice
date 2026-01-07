@@ -498,6 +498,7 @@ html, body {
 .btn-ghost:hover { color: #f87171; background: rgba(255,255,255,0.05); }
 .btn.active { background: #333; color: #fff; border-color: #666; }
 .active-green { color: #4ade80; border-color: #4ade80; background: rgba(74, 222, 128, 0.1); }
+.active-cyan { color: var(--color-cyan); border-color: var(--color-cyan); background: rgba(56, 189, 248, 0.1); }
 
 .spinner {
     width: 2rem;
@@ -649,7 +650,26 @@ html, body {
 .council-msg.agent { align-self: flex-start; background: rgba(167, 139, 250, 0.05); border-color: rgba(167, 139, 250, 0.2); color: #ede9fe; }
 .council-msg.system { align-self: center; text-align: center; color: #666; font-style: italic; font-size: 0.8rem; width: 100%; border-bottom: 1px solid #222; padding-bottom: 0.5rem; }
 
-.council-sender { font-size: 0.7rem; font-weight: bold; margin-bottom: 0.5rem; display: block; text-transform: uppercase; letter-spacing: 1px; }
+.council-sender {
+    font-size: 0.7rem;
+    font-weight: bold;
+    margin-bottom: 0.5rem;
+    display: flex;
+    align-items: center;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.model-badge {
+    font-size: 0.6rem;
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: #333;
+    color: #888;
+    margin-left: 0.5rem;
+    font-weight: normal;
+    vertical-align: middle;
+}
 
 @keyframes slideInRight { from { transform: translateX(100%); } to { transform: translateX(0); } }
 .animate-slide-in-right { animation: slideInRight 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
