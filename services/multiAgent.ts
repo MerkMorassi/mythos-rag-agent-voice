@@ -3,7 +3,7 @@ import { Agent, MultiAgentMessage, SomaActionType } from "../types";
 import { AGENTS } from "../agents";
 import { searchDocuments, getAgentConfig, getGraphContext, getCanvas, updateCanvas, getSovereignConfig } from "./db";
 import { RetrievalGate } from "./retrievalGate";
-import { ExternalRouter } from "./externalRouter";
+import { EXTERNAL_MODEL_ENDPOINTS, ExternalRouter } from "./externalRouter";
 import { SomaKernel } from "./soma";
 import { McpClient } from "./mcpClient";
 import { PythonSandbox } from "./pythonSandbox";
@@ -49,8 +49,8 @@ const routeRequestTool: FunctionDeclaration = {
         properties: {
             target: {
                 type: Type.STRING,
-                description: "The target ID: 'FLUX_IMAGE' (Visuals), 'DOLPHIN_LLM' (NSFW/Uncensored Text), 'CHATTERBOX_TTS' (Audio Story).",
-                enum: ["FLUX_IMAGE", "DOLPHIN_LLM", "CHATTERBOX_TTS", "EXTERNAL_LLM"]
+                description: "The target ID: 'SDXL_IMAGE' (Primary Visuals), 'NANO_BANANA_IMAGE' (Backup Visuals), 'DOLPHIN_LLM' (Uncensored Text), 'CHATTERBOX_TTS' (Audio). Use SDXL_IMAGE for all image generation.",
+                enum: ["SDXL_IMAGE", "NANO_BANANA_IMAGE", "VIDEO_GENERATION", "DOLPHIN_LLM", "CHATTERBOX_TTS"]
             },
             prompt: {
                 type: Type.STRING,
@@ -344,9 +344,8 @@ export const MultiAgentService = {
         const geminiProvider = new GeminiProvider(geminiApiKey);
         const logger = new LLMUsageLogger();
 
-        const dolphinUrl = "https://merkmorassi-mythos-rag-agent-voice.hf.space/v1";
         const hfToken = localStorage.getItem('hf_token') || process.env.HF_TOKEN;
-        const dolphinProvider = hfToken ? new DolphinProvider(dolphinUrl, hfToken) : null;
+        const dolphinProvider = hfToken ? new DolphinProvider(EXTERNAL_MODEL_ENDPOINTS.DOLPHIN_LLM.url, hfToken) : null;
         
         let provider: ILLMProvider = geminiProvider;
         let isFallback = false;

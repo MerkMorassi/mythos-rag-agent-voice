@@ -4,6 +4,7 @@ import { getSavedPromptsByAgentId, SavedPrompt, deleteSavedPrompt, getAgentConfi
 import { AccessControl } from '../services/accessControl';
 import { ChatterboxService } from '../services/chatterbox';
 import { LLMUsageLogger } from '../services/llmUsageLogger';
+import { EXTERNAL_MODEL_ENDPOINTS } from '../services/externalRouter';
 
 // PREBUILT VOICES LIST
 const PREBUILT_VOICES = ["Puck", "Kore", "Fenrir", "Zephyr", "Aoede", "Callirrhoe", "Leda"];
@@ -97,7 +98,6 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
   const voiceInputRef = useRef<HTMLInputElement>(null);
   const audioPreviewRef = useRef<HTMLAudioElement>(null);
   
-  const dolphinUrl = "https://merkmorassi-mythos-rag-agent-voice.hf.space/v1";
 
   useEffect(() => {
       if (isOpen) {
@@ -258,7 +258,7 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
 
         if (hfToken) localStorage.setItem('hf_token', hfToken);
         else localStorage.removeItem('hf_token');
-
+        
         await onSave(voiceBase64, localAccessLevel, voiceSpeed, voicePitch);
         await saveSovereignConfig(sovereignConfig);
         setSaveSuccess(true);
@@ -356,7 +356,7 @@ const SettingsManager: React.FC<SettingsManagerProps> = ({
                         <label className="form-label">DOLPHIN / HF SPACE URL (SOVEREIGN ENGINE)</label>
                         <input 
                             type="text"
-                            value={dolphinUrl}
+                            value={EXTERNAL_MODEL_ENDPOINTS.DOLPHIN_LLM.url}
                             readOnly
                             className="form-input"
                             style={{ fontFamily: 'monospace', background: '#111', color: '#888', cursor: 'default' }}

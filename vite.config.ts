@@ -54,7 +54,6 @@ export default defineConfig(({ mode }) => {
     },
     define: {
       'process.env.API_KEY': JSON.stringify(env.API_KEY),
-      'process.env.OPENL_API_KEY': JSON.stringify(env.OPENL_API_KEY),
       'process.env.HF_TOKEN': JSON.stringify(env.HF_TOKEN)
     }
   };

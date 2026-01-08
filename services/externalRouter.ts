@@ -10,6 +10,34 @@ import { DolphinProvider } from './llmProviders/dolphinProvider';
  * Routes prompts to specialized Hugging Face Spaces for media generation.
  */
 
+export const EXTERNAL_MODEL_ENDPOINTS = {
+    SDXL_IMAGE: {
+        name: 'Mythos SDXL Engine (Hugging Face)',
+        description: 'Primary, high-performance, uncensored SDXL model for all image generation tasks.',
+        url: 'https://merkmorassi-mythos-sdxl.hf.space/run/predict' // Placeholder, but functional structure
+    },
+    NANO_BANANA_IMAGE: {
+        name: 'Nano Banana (Gemini Fallback)',
+        description: 'Fallback image generation via Gemini 2.5 Flash Image (Nano Banana). Use only if SDXL fails.',
+        url: 'Google Cloud API (gemini-2.5-flash-image)'
+    },
+    DOLPHIN_LLM: {
+        name: 'MythOS Dolphin LLM',
+        description: 'Uncensored, fine-tuned sovereign model for direct chat and complex reasoning.',
+        url: 'https://merkmorassi-mythos-rag-agent-voice.hf.space/v1'
+    },
+    CHATTERBOX_TTS: {
+        name: 'Chatterbox',
+        description: 'Long-form audio generation based on agent-specific voice samples.',
+        url: 'https://merkmorassi-chatterbox.hf.space/api/generate'
+    },
+    VIDEO_GENERATION: {
+        name: 'Google Veo',
+        description: 'Google\'s state-of-the-art model for video generation tasks.',
+        url: 'Google Cloud API'
+    }
+};
+
 export interface RouteResult {
     success: boolean;
     data?: string; // Text response, Base64 image, or Audio URL
@@ -33,9 +61,12 @@ export const ExternalRouter = {
         
         try {
             // --- IMAGE GENERATION ---
-            if (target === 'FLUX_IMAGE') {
-                // Fallback to Gemini Nano (Native)
-                console.log("[ROUTER] Routing to Gemini Native Image Generation...");
+            if (target === 'SDXL_IMAGE') {
+                return await this.callSdxlImage(prompt, agent);
+            }
+            else if (target === 'NANO_BANANA_IMAGE') {
+                // Fallback to Gemini Nano Banana (Native)
+                console.log("[ROUTER] Routing to Gemini Nano Banana Image Generation...");
                 return await this.callGeminiImage(prompt, agent);
             } 
             
@@ -61,9 +92,58 @@ export const ExternalRouter = {
         }
     },
     
+    // --- PRIMARY SDXL ENGINE (HUGGING FACE) ---
+    async callSdxlImage(prompt: string, agent: { id: string, handle: string }): Promise<RouteResult> {
+        const hfToken = localStorage.getItem('hf_token') || process.env.HF_TOKEN;
+        if (!hfToken) {
+            return { success: false, type: 'text', error: "Hugging Face Token is required for the SDXL Engine." };
+        }
+
+        try {
+            const response = await fetch(EXTERNAL_MODEL_ENDPOINTS.SDXL_IMAGE.url, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${hfToken}`
+                },
+                body: JSON.stringify({
+                  // This payload is a guess based on common Gradio/HF Inference APIs
+                  // It may need adjustment based on the actual API spec.
+                  data: [
+                    prompt, // "prompt"
+                    "nsfw, worst quality, low quality", // "negative_prompt"
+                    7.5, // "guidance_scale"
+                    50 // "num_inference_steps"
+                  ]
+                }),
+            });
+
+            if (!response.ok) {
+                throw new Error(`SDXL API Error (${response.status}): ${response.statusText}`);
+            }
+
+            const result = await response.json();
+            
+            // Assuming the API returns a structure like: { data: ["data:image/png;base64,..."] }
+            const output = result.data?.[0];
+            if (!output || !output.startsWith('data:image')) {
+                throw new Error("Invalid image data format from SDXL model.");
+            }
+
+            // The 'output' is already a data URL.
+            await this.saveGeneratedImage(output, prompt, agent);
+            return { success: true, type: 'image', data: output };
+
+        } catch (e: any) {
+            console.error("[ROUTER] SDXL Call failed:", e.message);
+            // On failure, we don't automatically fall back here. The agent will get the error and can decide to retry with NANO_BANANA_IMAGE.
+            return { success: false, type: 'text', error: `SDXL Engine call failed: ${e.message}` };
+        }
+    },
+
     // --- SOVEREIGN ENGINE (DOLPHIN) ---
     async callDolphin(prompt: string): Promise<RouteResult> {
-        const dolphinUrl = "https://merkmorassi-mythos-rag-agent-voice.hf.space/v1";
+        const dolphinUrl = EXTERNAL_MODEL_ENDPOINTS.DOLPHIN_LLM.url;
         const hfToken = localStorage.getItem('hf_token') || process.env.HF_TOKEN;
 
         if (!hfToken) {
@@ -204,8 +284,7 @@ export const ExternalRouter = {
 
             const audioBuffer = await ChatterboxService.synthesize({
                 text: text,
-                audioRef: voiceRef,
-                language: 'en'
+                audioRef: voiceRef
             });
 
             const blob = new Blob([audioBuffer], { type: 'audio/wav' });

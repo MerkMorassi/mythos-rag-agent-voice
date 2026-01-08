@@ -4,15 +4,17 @@
  * Service for interacting with Chatterbox TTS (Hugging Face Space)
  * Space URL: https://huggingface.co/spaces/merkmorassi/Chatterbox
  */
-
-// We target the Gradio API endpoint
-const HF_SPACE_URL = "https://merkmorassi-chatterbox.hf.space/api/predict";
+import { EXTERNAL_MODEL_ENDPOINTS } from './externalRouter';
 
 export interface ChatterboxRequest {
   text: string;
-  audioRef: string; // Base64 string of the reference audio (wav/mp3)
-  language?: string; // Default 'en'
+  audioRef: string; // Base64 Data URL string of the reference audio (wav/mp3)
+  exaggeration?: number; // Default 0.5
+  temperature?: number; // Default 0.8
+  seed_num?: number; // Default 0
+  cfg_weight?: number; // Default 0.5
 }
+
 
 export const ChatterboxService = {
   
@@ -27,10 +29,10 @@ export const ChatterboxService = {
 
   async synthesize(req: ChatterboxRequest): Promise<ArrayBuffer> {
     try {
-      // Gradio API usually expects a structure like { data: [param1, param2, ...] }
-      // Inputs: Text, Audio (as object or path), Language
+      // Gradio API expects a structure like { data: [param1, param2, ...] }
+      // Corresponds to: text, audio_prompt, exaggeration, temperature, seed_num, cfg_weight
       
-      const response = await fetch(HF_SPACE_URL, {
+      const response = await fetch(EXTERNAL_MODEL_ENDPOINTS.CHATTERBOX_TTS.url, {
         method: "POST",
         headers: this.getHeaders(),
         body: JSON.stringify({
@@ -40,7 +42,10 @@ export const ChatterboxService = {
                 data: req.audioRef,
                 name: "reference.wav"
             },
-            req.language || "en"
+            req.exaggeration ?? 0.5,
+            req.temperature ?? 0.8,
+            req.seed_num ?? 0,
+            req.cfg_weight ?? 0.5
           ]
         }),
       });
