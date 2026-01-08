@@ -71,7 +71,7 @@ const App: React.FC = () => {
   const [hasGreeted, setHasGreeted] = useState(false);
 
   // Layout & View Modes
-  const [layoutMode, setLayoutMode] = useState<'VOICE' | 'CHAT' | 'HYBRID' | 'VIDEO'>('VOICE');
+  const [layoutMode, setLayoutMode] = useState<'CHAT' | 'HYBRID' | 'VIDEO'>('CHAT');
   const [currentView, setCurrentView] = useState<ViewMode>('ORCHESTRATOR');
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
   const [activeSidePanel, setActiveSidePanel] = useState<string | null>(null);
@@ -147,7 +147,7 @@ const App: React.FC = () => {
   const retrievalTool: Tool = { functionDeclarations: [ { name: "retrieve_knowledge", description: "Access the local knowledge base. Use whenever asked about past events, lore, or uploaded files.", parameters: { type: Type.OBJECT, properties: { query: { type: Type.STRING, description: "The search query." } }, required: ["query"] } } ] };
   const mediaGalleryTool: Tool = { functionDeclarations: [ { name: "search_media_gallery", description: "Search for existing files in the Media Gallery (Images, Videos, Documents).", parameters: { type: Type.OBJECT, properties: { query: { type: Type.STRING, description: "Keywords to search for (filename, description, tags)." } }, required: ["query"] } }, { name: "show_media_asset", description: "Display a specific media asset from the Gallery to the user.", parameters: { type: Type.OBJECT, properties: { assetId: { type: Type.STRING, description: "The ID of the asset to display (obtained from search)." } }, required: ["assetId"] } } ] };
   const googleMapsTool: Tool = { functionDeclarations: [ { name: "maps_search_places", description: "Search for places using Google Maps.", parameters: { type: Type.OBJECT, properties: { query: { type: Type.STRING, description: "Search term" }, radius: { type: Type.NUMBER, description: "Radius in meters" } }, required: ["query"] } }, { name: "maps_distancematrix", description: "Calculate travel distance/time.", parameters: { type: Type.OBJECT, properties: { origin: { type: Type.STRING }, destination: { type: Type.STRING }, mode: { type: Type.STRING } }, required: ["origin", "destination"] } } ] };
-  const routeRequestTool: Tool = { functionDeclarations: [ { name: "routeRequest", description: "Generate images, videos, or route complex requests to external models.", parameters: { type: Type.OBJECT, properties: { target: { type: Type.STRING, enum: ["SDXL_IMAGE", "NANO_BANANA_IMAGE", "VIDEO_GENERATION", "DOLPHIN_LLM", "CHATTERBOX_TTS"], description: "Use SDXL_IMAGE as the primary tool for all picture generation. Use NANO_BANANA_IMAGE as a backup. Use VIDEO_GENERATION for video clips." }, prompt: { type: Type.STRING, description: "The visual prompt or request text." } }, required: ["target", "prompt"] } } ] };
+  const routeRequestTool: Tool = { functionDeclarations: [ { name: "routeRequest", description: "Generate images, videos, or route complex requests to external models.", parameters: { type: Type.OBJECT, properties: { target: { type: Type.STRING, enum: ["SDXL_IMAGE", "NANO_BANANA_IMAGE", "VIDEO_GENERATION", "DOLPHIN_LLM", "CHATTERBOX_TTS"], description: "Use SDXL_IMAGE for all image generation. Use NANO_BANANA_IMAGE as a backup. Use VIDEO_GENERATION for video clips." }, prompt: { type: Type.STRING, description: "The visual prompt or request text." } }, required: ["target", "prompt"] } } ] };
   const holodeckTools: Tool = { functionDeclarations: [ readCanvasTool, updateCanvasTool ] };
   const pythonTool: Tool = { functionDeclarations: [ { name: "execute_python", description: "Execute Python code in a sandboxed environment. Use for calculations, data analysis, or logic.", parameters: { type: Type.OBJECT, properties: { code: { type: Type.STRING, description: "The Python code to execute." } }, required: ["code"] } } ] };
   const filesystemTool: Tool = { functionDeclarations: [ { name: "read_file", description: "Read contents of a file from the host filesystem.", parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING } }, required: ["path"] } }, { name: "list_directory", description: "List files and directories at a path.", parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING } }, required: ["path"] } }, { name: "write_file", description: "Write content to a file.", parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING }, content: { type: Type.STRING } }, required: ["path", "content"] } }, { name: "get_file_info", description: "Get metadata for a file.", parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING } }, required: ["path"] } }, { name: "search_files", description: "Recursively search for files.", parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING }, pattern: { type: Type.STRING } }, required: ["path", "pattern"] } } ] };
@@ -520,8 +520,9 @@ const App: React.FC = () => {
           if (videoRef.current?.srcObject) (videoRef.current.srcObject as MediaStream).getTracks().forEach(t => t.stop());
       } else {
           setVideoSource('camera');
+          // Removed auto-switch to HYBRID/VIDEO here to respect manual layout control, 
+          // or we can keep it but default to HYBRID if in CHAT
           if (layoutMode === 'CHAT') setLayoutMode('HYBRID');
-          else if (layoutMode !== 'HYBRID') setLayoutMode('VIDEO'); 
           
           try {
               const stream = await navigator.mediaDevices.getUserMedia({ video: true });
@@ -539,7 +540,6 @@ const App: React.FC = () => {
           setStreamFileUrl(url);
           setVideoSource('media');
           if (layoutMode === 'CHAT') setLayoutMode('HYBRID');
-          else if (layoutMode !== 'HYBRID') setLayoutMode('VIDEO');
           
           // Reset previous captions
           if (captionsTrackUrl) {
@@ -757,7 +757,7 @@ const App: React.FC = () => {
 
   // Styles
   const visualizerStyle: React.CSSProperties = {
-      flex: (layoutMode === 'VOICE' || layoutMode === 'HYBRID' || layoutMode === 'VIDEO') ? '1 1 0' : '0 0 auto',
+      flex: (layoutMode === 'HYBRID' || layoutMode === 'VIDEO') ? '1 1 0' : '0 0 auto',
       height: layoutMode === 'CHAT' ? '0px' : 'auto',
       display: layoutMode === 'CHAT' ? 'none' : 'flex',
       flexDirection: 'column',
@@ -952,7 +952,10 @@ const App: React.FC = () => {
                                 )}
                             </div>
                         ) : (
-                            <Visualizer analyser={analyser} isActive={connectionState === ConnectionState.CONNECTED} />
+                            // Visualizer suppressed as per request
+                            <div style={{ width: '100%', height: '100%', background: '#050505', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                {/* <Visualizer analyser={analyser} isActive={connectionState === ConnectionState.CONNECTED} /> */}
+                            </div>
                         )}
 
                         {/* WEBCAM PREVIEW - HIDDEN IF MAIN INTERFACE SHOWS VIDEO */}
@@ -1038,7 +1041,6 @@ const App: React.FC = () => {
 
               <div className="flex-group">
                   <button onClick={() => setLayoutMode('VIDEO')} className={`btn btn-xs ${layoutMode === 'VIDEO' ? 'active' : ''}`} title="Full Screen Video Layout">VIDEO</button>
-                  <button onClick={() => setLayoutMode('VOICE')} className={`btn btn-xs ${layoutMode === 'VOICE' ? 'active' : ''}`} title="Voice Visualization Layout">VOICE</button>
                   <button onClick={() => setLayoutMode('HYBRID')} className={`btn btn-xs ${layoutMode === 'HYBRID' ? 'active' : ''}`} title="Split View (Visual + Chat)">HYBRID</button>
                   <button onClick={() => setLayoutMode('CHAT')} className={`btn btn-xs ${layoutMode === 'CHAT' ? 'active' : ''}`} title="Chat Only Layout">CHAT</button>
               </div>

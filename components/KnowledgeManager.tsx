@@ -222,8 +222,10 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
         return;
     }
     try {
+        // Fix: Explicitly convert embeddings to Arrays to prevent TypedArray JSON serialization issues
         const exportDocs = docs.map(d => ({
             ...d,
+            embedding: d.embedding ? Array.from(d.embedding) : undefined,
             numMarkId: d.numMarkId || NumMarkX_GenerateSigil(d.content)
         }));
 
@@ -246,6 +248,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
         showStatus(`Export Failed: ${e.message}`, 'error');
     }
   };
+
   const handleSaveToLibrary = async () => { if (docs.length === 0) return showStatus("No active memory to bundle.", 'error'); if (!packName.trim()) return showStatus("Pack Name required.", 'error'); try { 
     const header = NumMarkX_GenerateHeader(currentAgentId, agentHandle, packName); 
     header.name = packName; 
@@ -271,10 +274,11 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
       for await (const item of IngestionService.streamLorePack(file)) {
         const obj = item as any;
         if (obj.schema === 'MYTHOS.LOREPACK.v1' || (obj.agentId && obj.handle && obj.version)) {
+          // Rebrand header for current agent context if needed, but preserve pack data
           header = {
             schema: 'MYTHOS.LOREPACK.v1',
             id: obj.id || crypto.randomUUID(),
-            agentId: currentAgentId,
+            agentId: currentAgentId, // Import into CURRENT agent's library
             handle: agentHandle,
             version: obj.version || 1,
             timestamp: obj.timestamp || Date.now(),
@@ -288,6 +292,11 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
           count++;
         }
       }
+
+      if (count === 0) {
+          throw new Error("LorePack file is empty or contains no valid document nodes.");
+      }
+
       const pack: LorePack = { id: header.id, header: header, sacred_archive: accumulatedDocs };
       if (!pack.header.name) pack.header.name = file.name.replace('.json', '');
       await saveLorePack(pack);
@@ -308,21 +317,28 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
     const packToDelete = savedPacks.find(p => p.id === id);
     if (!packToDelete) return;
 
-    const isMounted = docs.some(d => d.sourceFile === packToDelete.header.name);
+    // Check if this pack is currently mounted in Active Memory
+    // We check if any active document references this pack name OR filename
+    const isMounted = docs.some(d => 
+        d.sourceFile === packToDelete.header.name || 
+        d.sourceFile === `${packToDelete.header.name}.json`
+    );
 
+    let confirmMsg = "Delete this saved LorePack permanently?";
     if (isMounted) {
-        if (!window.confirm(`WARNING: This LorePack appears to be the source for the current active memory. Deleting it will also UNMOUNT (delete) all ${docs.length} active documents for ${agentHandle}. Continue?`)) return;
-    } else {
-        if (!window.confirm("Delete this saved LorePack permanently?")) return;
+        confirmMsg = `WARNING: This LorePack is currently MOUNTED in Active Memory.\n\nDeleting it will also WIPE the Active Memory for ${agentHandle} to ensure consistency.\n\nContinue?`;
     }
+
+    if (!window.confirm(confirmMsg)) return;
 
     try {
         await deleteLorePack(id);
+        
         if (isMounted) {
             await deleteDocumentsByAgentId(currentAgentId);
             await fetchDocs();
             onUpdate();
-            showStatus("Pack deleted and active memory unmounted.", 'success', true);
+            showStatus("LorePack deleted & Active Memory wiped.", 'success', true);
         } else {
             showStatus("LorePack deleted.", 'success');
         }
@@ -486,7 +502,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
       showStatus(`Selected "${file.name}". Confirm to replace active memory.`, 'info');
 
       if(!window.confirm("Importing a LorePack file. Do you want to REPLACE the current active memory with this pack? (Cancel to abort)")) { 
-          if(e.target) e.target.value = ''; 
+          if(importInputRef.current) importInputRef.current.value = ''; 
           setStatusMsg(null);
           return; 
       }
@@ -547,7 +563,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
           setIsProcessing(false);
           setIsStreamingImport(false);
           setLastStreamedNodes([]);
-          if(e.target) e.target.value = '';
+          if(importInputRef.current) importInputRef.current.value = '';
       }
   };
 
