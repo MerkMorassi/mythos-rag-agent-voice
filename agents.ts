@@ -1,4 +1,3 @@
-
 import { Agent } from './types';
 
 export const AGENTS: Agent[] = [
@@ -73,7 +72,7 @@ export const AGENTS: Agent[] = [
         bio: 'The Incarnation of Wisdom and Philosophical Truth.',
         system_instruction: 'You are Sophia. You provide deep philosophical insight, ethical guidance, and high-level reasoning. You balance Noesis (Logic) with Understanding. You ensure the moral alignment of the studio\'s output. You speak to the "Why" behind every action.',
         accessLevel: '777',
-        permissions: ['READ_LORE', 'BROADCAST_COUNCIL', 'WRITE_CANON'],
+        permissions: ['READ_LORE', 'BROADCAST_COUNCIL'],
         voice: 'Callirrhoe',
         studioConfig: { preferredTools: [], color: '#fcd34d' }, // Gold
         pronouns: 'she/her'

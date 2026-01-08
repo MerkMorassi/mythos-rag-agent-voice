@@ -109,10 +109,13 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
   const [statusMsg, setStatusMsg] = useState<{ text: string, type: 'success' | 'error' | 'info', persistent?: boolean } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const cloudFileInputRef = useRef<HTMLInputElement>(null);
-  const importInputRef = useRef<HTMLInputElement>(null); 
-  const libraryImportRef = useRef<HTMLInputElement>(null); 
+  // Hidden File Inputs - IMPORTANT: These must be outside conditional rendering
+  // to ensure they are always in the DOM and their onChange events fire reliably.
+  const fileInputRef = useRef<HTMLInputElement>(null); // For general ingestion
+  const cloudFileInputRef = useRef<HTMLInputElement>(null); // For Cloud uploads
+  const importInputRef = useRef<HTMLInputElement>(null); // For "IMPORT LP" in Active Memory tab
+  const libraryImportRef = useRef<HTMLInputElement>(null); // For "IMPORT PACK" in Lore Library tab
+
 
   const agentHandle = AGENTS.find(a => a.id === currentAgentId)?.handle || currentAgentId;
 
@@ -203,6 +206,15 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
 
   const onInputClick = (e: React.MouseEvent<HTMLInputElement>) => { (e.target as HTMLInputElement).value = ''; };
   
+  // Manually trigger the hidden inputs after clearing their value
+  // This ensures the onChange event fires even if the user selects the same file again
+  const triggerInput = (ref: React.RefObject<HTMLInputElement>) => {
+      if (ref.current) {
+          ref.current.value = '';
+          ref.current.click();
+      }
+  };
+
   const processBatch = async (batch: KnowledgeDoc[], ai: GoogleGenAI | null) => {
     if (ai) {
       const docsNeedingEmbed = batch.filter(d => !d.embedding);
@@ -222,7 +234,6 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
         return;
     }
     try {
-        // Fix: Explicitly convert embeddings to Arrays to prevent TypedArray JSON serialization issues
         const exportDocs = docs.map(d => ({
             ...d,
             embedding: d.embedding ? Array.from(d.embedding) : undefined,
@@ -263,10 +274,15 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
   
   const handleImportToLibrary = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (!file) {
+      console.log("handleImportToLibrary: No file selected.");
+      return;
+    }
+    console.log(`handleImportToLibrary: Selected file: ${file.name}`);
+
     setIsProcessing(true);
     setStatusMsg({ text: "Streaming to Library...", type: 'info' });
-    await new Promise(resolve => setTimeout(resolve, 150));
+    await new Promise(resolve => setTimeout(resolve, 150)); // Small delay for UI update
     try {
       const accumulatedDocs: KnowledgeDoc[] = [];
       let header: LorePackHeader = NumMarkX_GenerateHeader(currentAgentId, agentHandle, "Imported Pack");
@@ -274,11 +290,10 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
       for await (const item of IngestionService.streamLorePack(file)) {
         const obj = item as any;
         if (obj.schema === 'MYTHOS.LOREPACK.v1' || (obj.agentId && obj.handle && obj.version)) {
-          // Rebrand header for current agent context if needed, but preserve pack data
           header = {
             schema: 'MYTHOS.LOREPACK.v1',
             id: obj.id || crypto.randomUUID(),
-            agentId: currentAgentId, // Import into CURRENT agent's library
+            agentId: currentAgentId,
             handle: agentHandle,
             version: obj.version || 1,
             timestamp: obj.timestamp || Date.now(),
@@ -302,8 +317,9 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
       await saveLorePack(pack);
       await fetchSavedPacks();
       showStatus(`Imported "${pack.header.name}" to Library (${count} nodes).`, 'success', true);
+      console.log(`handleImportToLibrary: Successfully imported ${count} nodes to Library.`);
     } catch (e: any) {
-      console.error(e);
+      console.error("handleImportToLibrary: Error during import", e);
       showStatus(`Library Import Failed: ${e.message}`, 'error', true);
     } finally {
       setIsProcessing(false);
@@ -317,8 +333,6 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
     const packToDelete = savedPacks.find(p => p.id === id);
     if (!packToDelete) return;
 
-    // Check if this pack is currently mounted in Active Memory
-    // We check if any active document references this pack name OR filename
     const isMounted = docs.some(d => 
         d.sourceFile === packToDelete.header.name || 
         d.sourceFile === `${packToDelete.header.name}.json`
@@ -497,20 +511,29 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
 
   const handleSelectLorePack = async (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
-      if (!file) return;
-
-      showStatus(`Selected "${file.name}". Confirm to replace active memory.`, 'info');
-
-      if(!window.confirm("Importing a LorePack file. Do you want to REPLACE the current active memory with this pack? (Cancel to abort)")) { 
-          if(importInputRef.current) importInputRef.current.value = ''; 
-          setStatusMsg(null);
-          return; 
+      if (!file) {
+          console.log("handleSelectLorePack: No file selected.");
+          return;
       }
+      console.log(`handleSelectLorePack: Selected file: ${file.name}`);
+
+      // IMMEDIATE CONFIRMATION to avoid race conditions
+      const shouldProceed = window.confirm(`Importing "${file.name}".\n\nDo you want to REPLACE the current active memory for ${agentHandle} with this pack?\n\n(Cancel to abort)`);
+      
+      if (!shouldProceed) {
+          console.log("handleSelectLorePack: User cancelled import.");
+          if(importInputRef.current) importInputRef.current.value = '';
+          return;
+      }
+
       setIsProcessing(true);
       setIsStreamingImport(true);
       setStreamedDocsCount(0);
       setLastStreamedNodes([]);
       setStatusMsg({ text: "Reading LorePack...", type: 'info' });
+      console.log("handleSelectLorePack: Starting LorePack stream processing.");
+      
+      // Delay slightly to allow UI to update
       await new Promise(resolve => setTimeout(resolve, 150));
       
       try {
@@ -520,7 +543,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
           for await (const item of IngestionService.streamLorePack(file)) {
               const obj = item as any;
               if (obj.schema === 'MYTHOS.LOREPACK.v1' || (obj.agentId && obj.handle && obj.version)) {
-                  console.log("Found Header:", obj);
+                  console.log("handleSelectLorePack: Found LorePack Header:", obj);
               } else {
                   const doc = IngestionService.normalizeNode(obj, currentAgentId, count);
                   doc.id = NumMarkX_GenerateID('LORE'); // Force a new, unique ID.
@@ -535,10 +558,13 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
           if (newDocs.length === 0) {
               throw new Error("LorePack file is empty or contains no valid document nodes.");
           }
+          console.log(`handleSelectLorePack: Finished reading ${newDocs.length} documents from LorePack.`);
 
           // 2. NOW delete the old memory.
           setStatusMsg({ text: `Deleting ${docs.length} old documents...`, type: 'info' });
           await deleteDocumentsByAgentId(currentAgentId);
+          console.log(`handleSelectLorePack: Deleted existing documents for ${currentAgentId}.`);
+
 
           // 3. Process new docs in batches.
           setStatusMsg({ text: `Importing ${newDocs.length} new documents...`, type: 'info' });
@@ -554,9 +580,10 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
           await fetchDocs();
           onUpdate();
           showStatus(`Pack Mounted. ${count} nodes loaded.`, 'success', true);
+          console.log(`handleSelectLorePack: Successfully imported and mounted ${count} new nodes.`);
 
       } catch (err: any) {
-          console.error(err);
+          console.error("handleSelectLorePack: Error during import process", err);
           showStatus(`Import Failed: ${err.message}`, 'error', true);
           alert(`Import Error: ${err.message}`);
       } finally {
@@ -611,6 +638,40 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
 
   return (
     <div className="modal-overlay">
+      {/* HIDDEN FILE INPUTS - ALWAYS IN DOM FOR RELIABILITY */}
+      <input 
+          type="file" 
+          accept=".txt,.md,.json" 
+          onChange={handleFileUpload} 
+          onClick={onInputClick}
+          ref={fileInputRef}
+          className="hidden" 
+          multiple
+      />
+      <input 
+          type="file" 
+          accept=".json" 
+          onChange={handleSelectLorePack} 
+          ref={importInputRef} 
+          className="hidden" 
+      />
+      <input 
+          type="file" 
+          accept=".json" 
+          onChange={handleImportToLibrary} 
+          onClick={onInputClick} 
+          ref={libraryImportRef} 
+          className="hidden" 
+      />
+      <input 
+          type="file" 
+          onChange={handleCloudUpload} 
+          onClick={onInputClick} 
+          ref={cloudFileInputRef} 
+          className="hidden" 
+          multiple 
+      />
+
       <div className="modal-content animate-slide-in-right">
         
         <div className="modal-header-area">
@@ -669,17 +730,9 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                             onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
                             onDragLeave={(e) => { e.preventDefault(); setIsDragging(false); }}
                             onDrop={handleDrop}
+                            onClick={() => triggerInput(fileInputRef)} // Use the ref for the file input
                         >
-                        <input 
-                            type="file" 
-                            accept=".txt,.md,.json" 
-                            onChange={handleFileUpload} 
-                            onClick={onInputClick}
-                            ref={fileInputRef}
-                            className="hidden" 
-                            disabled={isProcessing || isQueueProcessing}
-                            multiple
-                        />
+                        {/* Hidden input moved to top-level */}
                         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem' }}>
                             <span style={{ fontSize: '0.8rem', fontWeight: 'bold', color: isDragging ? '#4ade80' : '#a3a3a3' }}>
                             {isQueueProcessing ? 'PROCESSING BATCH...' : (isDragging ? 'RELEASE TO QUEUE' : 'DROP FILES TO STAGE')}
@@ -765,10 +818,16 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                             <span className="section-header-title">STORED ({docs.length})</span>
                             <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                                 <button onClick={handleExportLorePack} className="btn btn-accent" style={{ fontSize: '0.65rem' }}>EXPORT LP</button>
-                                <label className="btn btn-accent" style={{ fontSize: '0.65rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                                {/* REFACTORED IMPORT BUTTON FOR RELIABILITY */}
+                                <button 
+                                    onClick={() => triggerInput(importInputRef)} 
+                                    className="btn btn-accent" 
+                                    style={{ fontSize: '0.65rem' }}
+                                    title="Import a .json LorePack file"
+                                >
                                     IMPORT LP
-                                    <input type="file" accept=".json" onChange={handleSelectLorePack} onClick={onInputClick} ref={importInputRef} className="hidden" />
-                                </label>
+                                </button>
+                                {/* Hidden input moved to top-level */}
                                 <button onClick={handlePurgeAll} className="btn btn-danger" style={{ fontSize: '0.65rem' }}>PURGE ALL</button>
                             </div>
                         </div>
@@ -807,9 +866,11 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                 <div className="flex-col">
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <span className="section-header-title" style={{color: '#facc15'}}>LORE LIBRARY ({savedPacks.length})</span>
-                        <label className="btn btn-accent btn-xs" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                        <label className="btn btn-accent btn-xs" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}
+                            onClick={() => triggerInput(libraryImportRef)} // Use the ref for the library input
+                        >
                             IMPORT PACK
-                            <input type="file" accept=".json" onChange={handleImportToLibrary} onClick={onInputClick} ref={libraryImportRef} className="hidden" />
+                            {/* Hidden input moved to top-level */}
                         </label>
                     </div>
                     {savedPacks.length === 0 ? <div className="empty-state" style={{ padding: '2rem' }}>NO SAVED PACKS</div> : savedPacks.map(pack => (
@@ -833,8 +894,10 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                 <>
                     <div className="flex-col">
                         <span className="section-header-title" style={{ color: '#a78bfa' }}>UPLOAD TO GOOGLE CLOUD</span>
-                        <label className="btn-file-input purple" style={{ borderColor: '#a78bfa', color: '#a78bfa', background: 'rgba(167, 139, 250, 0.05)' }}>
-                            <input type="file" onChange={handleCloudUpload} onClick={onInputClick} ref={cloudFileInputRef} className="hidden" disabled={isProcessing} multiple />
+                        <label className="btn-file-input purple" style={{ borderColor: '#a78bfa', color: '#a78bfa', background: 'rgba(167, 139, 250, 0.05)' }}
+                            onClick={() => triggerInput(cloudFileInputRef)} // Use the ref for the cloud input
+                        >
+                            {/* Hidden input moved to top-level */}
                             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem' }}>
                                 <span style={{ fontSize: '0.8rem', fontWeight: 'bold' }}>{isProcessing ? 'UPLOADING...' : 'DROP LARGE FILES'}</span>
                                 <span style={{ fontSize: '0.7rem', color: '#a78bfa' }}>Supports 2M+ Context Window</span>
