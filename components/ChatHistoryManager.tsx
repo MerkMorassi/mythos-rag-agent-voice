@@ -211,7 +211,8 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
                         content: chunkContent,
                         embedding: embeddings?.[k]?.values,
                         timestamp: Date.now(),
-                        numMarkId: NumMarkX_GenerateSigil(chunkContent) // Correct Sigil
+                        numMarkId: NumMarkX_GenerateSigil(chunkContent),
+                        sourceFile: `Session - ${session.title}`
                     });
                 }
           }

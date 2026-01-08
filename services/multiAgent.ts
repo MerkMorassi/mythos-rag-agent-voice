@@ -1,7 +1,8 @@
 import { GoogleGenAI, FunctionDeclaration, Type, Tool, FinishReason, Content } from "@google/genai";
 import { Agent, MultiAgentMessage, SomaActionType } from "../types";
 import { AGENTS } from "../agents";
-import { searchDocuments, getAgentConfig, getGraphContext, getCanvas, updateCanvas, getSovereignConfig } from "./db";
+// FIX: Removed getGraphContext as it's a deprecated feature.
+import { searchDocuments, getAgentConfig, getCanvas, updateCanvas, getSovereignConfig } from "./db";
 import { RetrievalGate } from "./retrievalGate";
 import { EXTERNAL_MODEL_ENDPOINTS, ExternalRouter } from "./externalRouter";
 import { SomaKernel } from "./soma";
@@ -358,11 +359,13 @@ export const MultiAgentService = {
             let ragContext = "";
 
             if (gateResult.shouldRetrieve) {
-                const [docs, graph] = await Promise.all([
-                    searchDocuments(userMessage, undefined, agent.id),
-                    getGraphContext(userMessage, undefined, agent.id)
-                ]);
-                ragContext = `\n\n[CONTEXT]\n${docs.map(d=>d.content).join('\n---\n')}\nGRAPH:\n${graph}\n[/CONTEXT]\n`;
+// FIX: Remove call to deprecated `getGraphContext` and remove graph data from RAG context.
+                const docs = await searchDocuments(userMessage, undefined, agent.id);
+                // NOTE: Graph context has been deprecated. The 'GRAPH_LOCAL' strategy in RetrievalGate
+                // is now functionally equivalent to RCI, pulling from vector search only.
+                if (docs.length > 0) {
+                    ragContext = `\n\n[CONTEXT]\n${docs.map(d => d.content).join('\n---\n')}\n[/CONTEXT]\n`;
+                }
             }
 
             const rosterString = `\n\n[ACTIVE ROSTER]\n${activeRoster.map(a => `- ${a.handle} (${a.title})`).join('\n')}\n`;

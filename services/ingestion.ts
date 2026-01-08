@@ -1,7 +1,7 @@
-import { KnowledgeDoc, LorePack, LorePackHeader, GraphNode, GraphEdge } from '../types';
+import { KnowledgeDoc, LorePack, LorePackHeader } from '../types';
 import { NumMarkX_GenerateHeader, NumMarkX_GenerateID, NumMarkX_GenerateSigil } from '../patterns/NumMarkX';
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
-import { addDocument, saveGraphNode, saveGraphEdge, getDocumentsByAgentId, bulkAddDocuments } from "./db";
+import { addDocument, getDocumentsByAgentId, bulkAddDocuments } from "./db";
 
 export interface IngestionResult {
     success: boolean;
@@ -14,25 +14,6 @@ export interface IngestionResult {
         avgSize: number;
         existingSigils: number;
     };
-}
-
-// Simple p-limit style concurrency controller
-async function asyncPool(poolLimit: number, array: any[], iteratorFn: (item: any, array: any[]) => Promise<any>) {
-    const ret = [];
-    const executing: Promise<any>[] = [];
-    for (const item of array) {
-        const p = Promise.resolve().then(() => iteratorFn(item, array));
-        ret.push(p);
-
-        if (poolLimit <= array.length) {
-            const e: Promise<any> = p.then(() => executing.splice(executing.indexOf(e), 1));
-            executing.push(e);
-            if (executing.length >= poolLimit) {
-                await Promise.race(executing);
-            }
-        }
-    }
-    return Promise.all(ret);
 }
 
 // Helper: Retry with Exponential Backoff
@@ -66,63 +47,6 @@ export class IngestionService {
         const cleanId = agentId.replace(/^agent-/i, '').toUpperCase();
         const date = new Date().toISOString().slice(0, 10);
         return `MYTHOS.LORE.${cleanId}.LOREPACK.${date}.json`;
-    }
-
-    /**
-     * RETROFIT PROTOCOL (INCREMENTAL)
-     * Upgrades existing documents to include Graph Data and NumMark Sigils.
-     * Skips documents tagged with 'GRAPH_EXTRACTED' to allow resuming.
-     * Optimized with concurrency pool.
-     */
-    static async retrofitAgentMemory(agentId: string, apiKey: string, onProgress?: (current: number, total: number) => void): Promise<number> {
-        const docs = await getDocumentsByAgentId(agentId);
-        if (docs.length === 0) return 0;
-
-        const ai = new GoogleGenAI({ apiKey });
-        let processed = 0;
-
-        // Parallel processing for retrofitting to improve speed
-        await asyncPool(5, docs, async (doc: KnowledgeDoc) => {
-            
-            // OPTIMIZATION: Skip if already has graph data
-            if (doc.tags && doc.tags.includes('GRAPH_EXTRACTED')) {
-                processed++;
-                if (onProgress) onProgress(processed, docs.length);
-                return;
-            }
-
-            let updated = false;
-
-            // 1. Generate Sigil if missing
-            if (!doc.numMarkId) {
-                doc.numMarkId = NumMarkX_GenerateSigil(doc.content);
-                updated = true;
-            }
-
-            // 2. Extract Graph
-            try {
-                await this.extractAndSaveGraph(doc.content, doc.id, agentId, ai);
-                
-                // Mark as processed
-                if (!doc.tags) doc.tags = [];
-                if (!doc.tags.includes('GRAPH_EXTRACTED')) {
-                    doc.tags.push('GRAPH_EXTRACTED');
-                    updated = true;
-                }
-            } catch (e) {
-                console.warn(`[Retrofit] Graph extraction failed for ${doc.id}`, e);
-            }
-
-            // 3. Save Update if we changed tags or sigil
-            if (updated) {
-                await addDocument(doc);
-            }
-            
-            processed++;
-            if (onProgress) onProgress(processed, docs.length);
-        });
-
-        return processed;
     }
 
     static async ingestText(text: string, filename: string, agentId: string, apiKey: string, onProgress?: (processed: number, total: number) => void): Promise<number> {
@@ -160,8 +84,9 @@ export class IngestionService {
                     content: chunk,
                     embedding: embeddings?.[k]?.values,
                     timestamp: Date.now(),
-                    tags: ['AUTO_INGEST', 'CHAT_UPLOAD'], // Graph extraction is now a separate process
-                    numMarkId: NumMarkX_GenerateSigil(chunk)
+                    tags: ['AUTO_INGEST', 'CHAT_UPLOAD'],
+                    numMarkId: NumMarkX_GenerateSigil(chunk),
+                    sourceFile: filename
                 }));
                 
                 // 3. Save all docs in the batch at once
@@ -181,7 +106,8 @@ export class IngestionService {
                     content: chunk,
                     timestamp: Date.now(),
                     tags: ['AUTO_INGEST', 'CHAT_UPLOAD', 'NO_VECTOR'],
-                    numMarkId: NumMarkX_GenerateSigil(chunk)
+                    numMarkId: NumMarkX_GenerateSigil(chunk),
+                    sourceFile: filename
                 }));
                 await bulkAddDocuments(docsToSave);
 
@@ -190,63 +116,6 @@ export class IngestionService {
             }
         }
         return savedCount;
-    }
-
-    static async extractAndSaveGraph(text: string, sourceDocId: string, agentId: string, ai: GoogleGenAI) {
-        // Reduced Prompt for Speed/Cost
-        const prompt = `
-        Identify key ENTITIES (Person, Place, Object, Event) and RELATIONSHIPS in the text.
-        Return JSON: { "entities": [{"name": "X", "label": "Y", "description": "Z"}], "relationships": [{"source": "X", "target": "A", "relation": "B"}] }
-        TEXT: ${text.substring(0, 1500)}
-        `;
-
-        try {
-            // Wrapped in Retry Logic
-            const result = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
-                model: 'gemini-3-flash-preview', 
-                contents: [{ parts: [{ text: prompt }] }],
-                config: { responseMimeType: "application/json" }
-            }));
-
-            const raw = result.text;
-            if(!raw) return;
-            const data = JSON.parse(raw);
-
-            if (data.entities) {
-                for (const e of data.entities) {
-                    const id = e.name.trim().toUpperCase().replace(/[^A-Z0-9]/g, '_');
-                    const node: GraphNode = {
-                        id: id,
-                        label: e.label?.toUpperCase() || 'CONCEPT',
-                        name: e.name,
-                        description: e.description || '',
-                        sourceDocIds: [sourceDocId],
-                        agentId: agentId,
-                        timestamp: Date.now()
-                    };
-                    await saveGraphNode(node);
-                }
-            }
-
-            if (data.relationships) {
-                for (const r of data.relationships) {
-                    const sourceId = r.source.trim().toUpperCase().replace(/[^A-Z0-9]/g, '_');
-                    const targetId = r.target.trim().toUpperCase().replace(/[^A-Z0-9]/g, '_');
-                    const edge: GraphEdge = {
-                        id: `${sourceId}-${r.relation}-${targetId}`,
-                        source: sourceId,
-                        target: targetId,
-                        relation: r.relation?.toUpperCase().replace(/\s+/g, '_') || 'RELATED_TO',
-                        description: r.description,
-                        agentId: agentId,
-                        timestamp: Date.now()
-                    };
-                    await saveGraphEdge(edge);
-                }
-            }
-        } catch (e) { 
-            // Silent fail for graph extraction to prevent total ingest failure
-        }
     }
 
     /**

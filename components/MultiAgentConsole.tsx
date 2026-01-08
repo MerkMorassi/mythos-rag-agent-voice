@@ -344,11 +344,35 @@ export const MultiAgentConsole: React.FC<MultiAgentConsoleProps> = ({ onExit }) 
                 
                 // HEADER VALIDATION
                 if (!headerChecked) {
-                    // Check if object looks like a header or first node
+                    // Get info from the file's header
                     const fileAgentId = obj.agentId || obj.header?.agentId;
-                    
-                    if (fileAgentId && fileAgentId !== targetId) {
-                        throw new Error(`SECURITY ALERT: LorePack belongs to [${fileAgentId}], but you are attempting to upload to [${targetId}]. Operation Aborted.`);
+                    const fileAgentHandle = obj.handle || obj.header?.handle;
+
+                    // Only validate if the file provides an identifier. If not, we assume it's a generic node list.
+                    if (fileAgentId || fileAgentHandle) {
+                        const targetAgent = AGENTS.find(a => a.id === targetId);
+                        const targetHandle = targetAgent?.handle;
+
+                        let isMatch = false;
+
+                        // Check 1: ID match (case-insensitive)
+                        if (fileAgentId && targetId && fileAgentId.toLowerCase() === targetId.toLowerCase()) {
+                            isMatch = true;
+                        }
+                        // Check 2: Handle match (case-insensitive)
+                        if (!isMatch && fileAgentHandle && targetHandle && fileAgentHandle.toLowerCase() === targetHandle.toLowerCase()) {
+                            isMatch = true;
+                        }
+                        // Check 3: File might use Handle in ID field (common user error)
+                        if (!isMatch && fileAgentId && targetHandle && fileAgentId.toLowerCase() === targetHandle.toLowerCase()) {
+                            isMatch = true;
+                        }
+
+                        if (!isMatch) {
+                            const foundIdentifier = fileAgentId || fileAgentHandle;
+                            const targetIdentifier = targetHandle || targetId;
+                            throw new Error(`SECURITY ALERT: LorePack belongs to [${foundIdentifier}], but you are attempting to upload to [${targetIdentifier}]. Operation Aborted.`);
+                        }
                     }
                     headerChecked = true;
                 }

@@ -1,7 +1,5 @@
 import { 
     KnowledgeDoc, 
-    GraphNode, 
-    GraphEdge, 
     ChatSession, 
     LogMessage, 
     AgentConfig, 
@@ -11,7 +9,10 @@ import {
     WorkingMemory,
     SovereignConfig,
     DEFAULT_MODEL_CONFIG,
-    DEFAULT_SOVEREIGN_CONFIG
+    DEFAULT_SOVEREIGN_CONFIG,
+// FIX: Import GraphNode and GraphEdge types for re-added graph functions.
+    GraphNode,
+    GraphEdge
 } from '../types';
 import { UsageLogEntry } from './llmUsageLogger';
 
@@ -23,12 +24,10 @@ export interface SavedPrompt {
 }
 
 const DB_NAME = 'MythOS_DB';
-const DB_VERSION = 6; // Incremented version for new store
+const DB_VERSION = 7; // Incremented version to remove graph stores
 
 // Stores
 export const DOC_STORE = 'documents';
-export const GRAPH_NODE_STORE = 'graph_nodes';
-export const GRAPH_EDGE_STORE = 'graph_edges';
 export const CHAT_SESSION_STORE = 'chat_sessions';
 export const ACTIVE_CHAT_STORE = 'active_chats';
 export const AGENT_CONFIG_STORE = 'agent_configs';
@@ -37,8 +36,11 @@ export const MEDIA_STORE = 'media_assets';
 export const LORE_PACK_STORE = 'lore_packs';
 export const PROMPT_STORE = 'saved_prompts';
 export const CANON_STORE = 'canon_blocks';
-export const HOLODECK_STORE = 'holodeck';
-export const LLM_USAGE_LOG_STORE = 'llm_usage_logs'; // New Store
+export const HOLODECK_STORE = 'holodck';
+export const LLM_USAGE_LOG_STORE = 'llm_usage_logs';
+// FIX: Re-add graph store constants for GraphVisualizer compatibility.
+export const GRAPH_NODE_STORE = 'graph_nodes';
+export const GRAPH_EDGE_STORE = 'graph_edges';
 
 let dbInstance: IDBDatabase | null = null;
 
@@ -102,8 +104,6 @@ export const initDB = (): Promise<IDBDatabase> => {
             };
 
             createStore(DOC_STORE, 'id', ['agentId']);
-            createStore(GRAPH_NODE_STORE, 'id', ['agentId']);
-            createStore(GRAPH_EDGE_STORE, 'id', ['source', 'target']);
             createStore(CHAT_SESSION_STORE, 'id');
             createStore(ACTIVE_CHAT_STORE, 'id');
             createStore(AGENT_CONFIG_STORE, 'agentId');
@@ -113,9 +113,21 @@ export const initDB = (): Promise<IDBDatabase> => {
             createStore(PROMPT_STORE, 'id', ['agentId']);
             createStore(CANON_STORE, 'id');
             createStore(HOLODECK_STORE, 'id');
-            
-            // Create new store for LLM logs
             createStore(LLM_USAGE_LOG_STORE, { autoIncrement: true });
+            // FIX: Re-add graph stores for GraphVisualizer compatibility.
+            createStore(GRAPH_NODE_STORE, 'id', ['agentId']);
+            createStore(GRAPH_EDGE_STORE, { autoIncrement: true });
+
+            // FIX: Remove deletion of graph stores to restore functionality for the visualizer.
+            // This code was part of a previous refactor but breaks the GraphVisualizer component.
+            /*
+            if (db.objectStoreNames.contains('graph_nodes')) {
+                db.deleteObjectStore('graph_nodes');
+            }
+            if (db.objectStoreNames.contains('graph_edges')) {
+                db.deleteObjectStore('graph_edges');
+            }
+            */
         };
     });
 };
@@ -191,6 +203,17 @@ export const deleteDocumentsByAgentId = async (agentId: string) => {
     });
 };
 
+export const bulkDeleteDocuments = async (ids: string[]) => {
+    const db = await initDB();
+    return new Promise<void>((resolve, reject) => {
+        const tx = db.transaction([DOC_STORE], 'readwrite');
+        const store = tx.objectStore(DOC_STORE);
+        ids.forEach(id => store.delete(id));
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+    });
+};
+
 export const getDocumentCountByAgentId = async (agentId: string): Promise<number> => {
     const docs = await getDocumentsByAgentId(agentId);
     return docs.length;
@@ -215,6 +238,12 @@ export const updateDocumentPermissions = async (id: string, permissions: string)
         req.onerror = () => reject(req.error);
     });
 };
+
+// --- GRAPH (DEPRECATED - VISUALIZER ONLY) ---
+// These functions are re-added to support the GraphVisualizer component,
+// but the graph data is no longer actively used by the core agent logic.
+export const getGraphNodesByAgent = (agentId: string) => getByIndex<GraphNode>(GRAPH_NODE_STORE, 'agentId', agentId);
+export const getGraphEdges = () => getAll<GraphEdge>(GRAPH_EDGE_STORE);
 
 
 // --- VECTOR SEARCH ---
@@ -301,44 +330,6 @@ export const searchDocuments = async (query: string, embedding?: number[], agent
         
         request.onerror = () => reject(request.error);
     });
-};
-
-// --- GRAPH DB ---
-
-export const saveGraphNode = (node: GraphNode) => putItem(GRAPH_NODE_STORE, node);
-export const getAllGraphNodes = () => getAll<GraphNode>(GRAPH_NODE_STORE);
-export const getGraphNodesByAgent = (agentId: string) => getByIndex<GraphNode>(GRAPH_NODE_STORE, 'agentId', agentId);
-
-export const saveGraphEdge = (edge: GraphEdge) => putItem(GRAPH_EDGE_STORE, edge);
-export const getGraphEdges = () => getAll<GraphEdge>(GRAPH_EDGE_STORE);
-
-export const getGraphContext = async (query: string, embedding?: number[], agentId?: string): Promise<string> => {
-    // 1. Find nodes that match the query
-    const nodes = await getAllGraphNodes();
-    const relevantNodes = nodes.filter(n => 
-        (agentId ? n.agentId === agentId : true) && 
-        (n.name.toLowerCase().includes(query.toLowerCase()) || n.label.toLowerCase().includes(query.toLowerCase()))
-    );
-    
-    if (relevantNodes.length === 0) return "";
-    
-    // 2. Find connected edges
-    const edges = await getGraphEdges();
-    const nodeIds = new Set(relevantNodes.map(n => n.id));
-    
-    const relevantEdges = edges.filter(e => nodeIds.has(e.source) || nodeIds.has(e.target));
-    
-    // 3. Format context
-    let context = "ENTITIES:\n";
-    relevantNodes.slice(0, 10).forEach(n => context += `- ${n.name} (${n.label}): ${n.description}\n`);
-    context += "\nRELATIONSHIPS:\n";
-    relevantEdges.slice(0, 15).forEach(e => {
-        const s = nodes.find(n => n.id === e.source)?.name || e.source;
-        const t = nodes.find(n => n.id === e.target)?.name || e.target;
-        context += `- ${s} [${e.relation}] ${t}\n`;
-    });
-    
-    return context;
 };
 
 // --- CHAT HISTORY ---

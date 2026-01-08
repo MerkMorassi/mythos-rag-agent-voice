@@ -30,7 +30,6 @@ import {
   getGeneralInstructions,
   saveGeneralInstructions,
   saveMediaAsset,
-  getGraphContext,
   searchDocuments,
   ensureVectorIndex,
   getCanvas,
@@ -145,7 +144,7 @@ const App: React.FC = () => {
   const systemInstruction = `${generalInstructions}\n\n${agentInstructions || currentAgent?.system_instruction}${modeInstruction}\n${CAPABILITY_INSTRUCTION}`;
 
   // --- TOOL DEFINITIONS ---
-  const retrievalTool: Tool = { functionDeclarations: [ { name: "retrieve_knowledge", description: "Access the MythOS Knowledge Graph. Use whenever asked about past events, lore, or uploaded files.", parameters: { type: Type.OBJECT, properties: { query: { type: Type.STRING, description: "The search query." } }, required: ["query"] } } ] };
+  const retrievalTool: Tool = { functionDeclarations: [ { name: "retrieve_knowledge", description: "Access the local knowledge base. Use whenever asked about past events, lore, or uploaded files.", parameters: { type: Type.OBJECT, properties: { query: { type: Type.STRING, description: "The search query." } }, required: ["query"] } } ] };
   const mediaGalleryTool: Tool = { functionDeclarations: [ { name: "search_media_gallery", description: "Search for existing files in the Media Gallery (Images, Videos, Documents).", parameters: { type: Type.OBJECT, properties: { query: { type: Type.STRING, description: "Keywords to search for (filename, description, tags)." } }, required: ["query"] } }, { name: "show_media_asset", description: "Display a specific media asset from the Gallery to the user.", parameters: { type: Type.OBJECT, properties: { assetId: { type: Type.STRING, description: "The ID of the asset to display (obtained from search)." } }, required: ["assetId"] } } ] };
   const googleMapsTool: Tool = { functionDeclarations: [ { name: "maps_search_places", description: "Search for places using Google Maps.", parameters: { type: Type.OBJECT, properties: { query: { type: Type.STRING, description: "Search term" }, radius: { type: Type.NUMBER, description: "Radius in meters" } }, required: ["query"] } }, { name: "maps_distancematrix", description: "Calculate travel distance/time.", parameters: { type: Type.OBJECT, properties: { origin: { type: Type.STRING }, destination: { type: Type.STRING }, mode: { type: Type.STRING } }, required: ["origin", "destination"] } } ] };
   const routeRequestTool: Tool = { functionDeclarations: [ { name: "routeRequest", description: "Generate images, videos, or route complex requests to external models.", parameters: { type: Type.OBJECT, properties: { target: { type: Type.STRING, enum: ["SDXL_IMAGE", "NANO_BANANA_IMAGE", "VIDEO_GENERATION", "DOLPHIN_LLM", "CHATTERBOX_TTS"], description: "Use SDXL_IMAGE as the primary tool for all picture generation. Use NANO_BANANA_IMAGE as a backup. Use VIDEO_GENERATION for video clips." }, prompt: { type: Type.STRING, description: "The visual prompt or request text." } }, required: ["target", "prompt"] } } ] };
@@ -308,14 +307,13 @@ const App: React.FC = () => {
           }
           else if (fc.name === 'retrieve_knowledge') {
               const query = (fc.args as any).query;
-              setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', text: `[GRAPH] Searching: "${query}"`, timestamp: Date.now() }]);
+              setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', text: `[RAG] Searching: "${query}"`, timestamp: Date.now() }]);
               try {
                   const embedAi = new GoogleGenAI({ apiKey });
                   const embedRes = await embedAi.models.embedContent({ model: 'text-embedding-004', contents: [{ parts: [{ text: query }] }] });
                   const vec = embedRes.embeddings?.[0]?.values;
-                  const graphText = await getGraphContext(query, vec, currentAgentId);
                   const vectorDocs = await searchDocuments(query, vec, currentAgentId);
-                  const combined = `### GRAPH ###\n${graphText}\n### DOCS ###\n${vectorDocs.map(d => `- ${d.content.substring(0,400)}...`).join('\n')}`;
+                  const combined = `DOCS:\n${vectorDocs.map(d => `- ${d.content.substring(0,400)}...`).join('\n')}`;
                   responses.push({ id: fc.id, name: fc.name, response: { result: combined } });
               } catch(e: any) {
                   responses.push({ id: fc.id, name: fc.name, response: { result: `Error: ${e.message}` } });
