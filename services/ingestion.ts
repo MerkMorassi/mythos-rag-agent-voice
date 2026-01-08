@@ -122,53 +122,83 @@ export class IngestionService {
      * Robust Stream Parser
      * Replaced custom byte-stream parser with JSON.parse for reliability.
      */
-    static async *streamLorePack(file: Blob): AsyncGenerator<any, void, unknown> {
+    // FIX: Changed `file: Blob` to `file: File` as `file.name` is used.
+    static async *streamLorePack(file: File): AsyncGenerator<any, void, unknown> {
+        console.log(`[IngestionService] Starting stream for file: ${file.name}, type: ${file.type}`);
         try {
             const text = await file.text();
             
-            // Handle empty files gracefully
-            if (!text.trim()) return;
+            if (!text.trim()) {
+                console.warn("[IngestionService] LorePack file is empty.");
+                return;
+            }
 
             let data;
             try {
                 data = JSON.parse(text);
-            } catch (e) {
+                console.log(`[IngestionService] JSON parsing successful. Detected data type: ${typeof data}, isArray: ${Array.isArray(data)}`);
+            } catch (e: any) {
+                console.error("[IngestionService] JSON parsing failed:", e.message);
                 throw new Error("Invalid JSON format. Ensure the file is a valid JSON array or a single JSON object.");
             }
 
-            // Handle both array of objects and single object formats
             if (Array.isArray(data)) {
                 for (const item of data) {
                     yield item;
                 }
             } else if (typeof data === 'object' && data !== null) {
-                // If it's a LorePack, yield the header then the docs
                 if ((data as LorePack).header && (data as LorePack).sacred_archive) {
-                    yield data.header;
+                    console.log("[IngestionService] Detected LorePack schema (header + sacred_archive).");
+                    yield (data as LorePack).header;
                     for (const doc of (data as LorePack).sacred_archive) {
                         yield doc;
                     }
                 } else {
+                    console.log("[IngestionService] Detected single JSON object (non-LorePack schema).");
                     yield data;
                 }
+            } else {
+                console.error(`[IngestionService] Unexpected top-level data format: ${typeof data}. Expected array or object.`);
+                throw new Error("Unsupported file content structure. Expected a JSON array of documents or a LorePack object.");
             }
 
         } catch (err: any) {
-            console.error("LorePack Stream Error:", err);
+            console.error("[IngestionService] LorePack Stream Error:", err);
             throw new Error(`Failed to parse file: ${err.message}`);
         }
     }
 
     /**
      * Normalizes a raw object from a JSON import into a valid KnowledgeDoc.
+     * Ensures `content` and `title` always resolve to non-empty strings.
      */
     static normalizeNode(obj: any, agentId: string, index: number): KnowledgeDoc {
-        // Use any available text-like field as content
-        const content = obj.content || obj.text || obj.body || JSON.stringify(obj, null, 2);
+        let content = '';
+        if (typeof obj === 'string') {
+            content = obj;
+        } else if (typeof obj === 'object' && obj !== null) {
+            content = obj.content || obj.text || obj.body || JSON.stringify(obj);
+        } else {
+            content = String(obj); // Convert any primitive to string
+        }
         
-        // Use any available title-like field
-        const title = obj.title || obj.name || `Imported Document ${index + 1}`;
-        
+        if (!content.trim()) {
+            content = `[Empty Content for Node ${index + 1}]`;
+            console.warn(`[IngestionService] Node ${index + 1} has empty content. Using fallback: "${content}"`);
+        }
+
+        let title = '';
+        if (typeof obj === 'object' && obj !== null) {
+            title = obj.title || obj.name || (content.split('\n')[0] || `Imported Document ${index + 1}`).substring(0, 100);
+        } else {
+            title = (content.split('\n')[0] || `Imported Document ${index + 1}`).substring(0, 100);
+        }
+
+        if (!title.trim()) {
+            title = `Untitled Document ${index + 1}`;
+            console.warn(`[IngestionService] Node ${index + 1} has empty title. Using fallback: "${title}"`);
+        }
+
         return {
             id: obj.id || crypto.randomUUID(),
             agentId: agentId,

@@ -222,7 +222,11 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
         try {
           const batchResult = await ai.models.embedContent({ model: 'text-embedding-004', contents: docsNeedingEmbed.map(d => ({ parts: [{ text: d.content }] })), config: { taskType: 'RETRIEVAL_DOCUMENT' } });
           batchResult.embeddings?.forEach((e, idx) => { docsNeedingEmbed[idx].embedding = e.values; });
-        } catch (e) { console.warn("Auto-embed failed for batch, saving without vectors.", e); }
+        } catch (e) { 
+          console.warn("Auto-embed failed for batch, saving without vectors.", e); 
+          // Log specific error for debugging
+          showStatus(`Embedding failed for some documents: ${e instanceof Error ? e.message : String(e)}. Saving without vectors.`, 'error');
+        }
       }
     }
     await bulkAddDocuments(batch);
@@ -260,17 +264,21 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
     }
   };
 
-  const handleSaveToLibrary = async () => { if (docs.length === 0) return showStatus("No active memory to bundle.", 'error'); if (!packName.trim()) return showStatus("Pack Name required.", 'error'); try { 
-    const header = NumMarkX_GenerateHeader(currentAgentId, agentHandle, packName); 
-    header.name = packName; 
-    const pack: LorePack = { id: header.id, header: header, sacred_archive: docs }; 
-    await saveLorePack(pack); 
-    setPackName(''); 
-    showStatus(`Saved "${packName}" to Library (${docs.length} nodes).`, 'success'); 
-    fetchSavedPacks(); 
-  } catch(e: any) { 
-    showStatus(`Save Failed: ${e.message}`, 'error'); 
-  } };
+  const handleSaveToLibrary = async () => { 
+    if (docs.length === 0) return showStatus("No active memory to bundle.", 'error'); 
+    if (!packName.trim()) return showStatus("Pack Name required.", 'error'); 
+    try { 
+      const header = NumMarkX_GenerateHeader(currentAgentId, agentHandle, packName); 
+      header.name = packName; 
+      const pack: LorePack = { id: header.id, header: header, sacred_archive: docs }; 
+      await saveLorePack(pack); 
+      setPackName(''); 
+      showStatus(`Saved "${packName}" to Library (${docs.length} nodes).`, 'success'); 
+      fetchSavedPacks(); 
+    } catch(e: any) { 
+      showStatus(`Save Failed: ${e.message}`, 'error'); 
+    } 
+  };
   
   const handleImportToLibrary = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -281,30 +289,38 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
     console.log(`handleImportToLibrary: Selected file: ${file.name}`);
 
     setIsProcessing(true);
-    setStatusMsg({ text: "Streaming to Library...", type: 'info' });
+    setStatusMsg({ text: `Streaming "${file.name}" to Library...`, type: 'info' });
     await new Promise(resolve => setTimeout(resolve, 150)); // Small delay for UI update
+    
     try {
       const accumulatedDocs: KnowledgeDoc[] = [];
-      let header: LorePackHeader = NumMarkX_GenerateHeader(currentAgentId, agentHandle, "Imported Pack");
+      let header: LorePackHeader | undefined;
       let count = 0;
+      
+      console.log(`handleImportToLibrary: Starting streamLorePack for ${file.name}`);
       for await (const item of IngestionService.streamLorePack(file)) {
         const obj = item as any;
-        if (obj.schema === 'MYTHOS.LOREPACK.v1' || (obj.agentId && obj.handle && obj.version)) {
+        
+        if (obj && (obj.schema === 'MYTHOS.LOREPACK.v1' || (obj.agentId && obj.handle && obj.version))) {
+          // This is a header object
+          console.log("handleImportToLibrary: Detected LorePack Header:", obj);
           header = {
             schema: 'MYTHOS.LOREPACK.v1',
             id: obj.id || crypto.randomUUID(),
-            agentId: currentAgentId,
-            handle: agentHandle,
+            agentId: obj.agentId || currentAgentId, // Use existing agentId or current one
+            handle: obj.handle || agentHandle,      // Use existing handle or current one
             version: obj.version || 1,
             timestamp: obj.timestamp || Date.now(),
             description: obj.description,
             name: obj.name || file.name.replace('.json', '')
           };
         } else {
+          // This is a document node
           const doc = IngestionService.normalizeNode(obj, currentAgentId, count);
           doc.sourceFile = file.name;
           accumulatedDocs.push(doc);
           count++;
+          // console.log(`handleImportToLibrary: Normalized document ${count}: ${doc.title}`); // Verbose logging
         }
       }
 
@@ -312,8 +328,10 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
           throw new Error("LorePack file is empty or contains no valid document nodes.");
       }
 
-      const pack: LorePack = { id: header.id, header: header, sacred_archive: accumulatedDocs };
-      if (!pack.header.name) pack.header.name = file.name.replace('.json', '');
+      const finalHeader = header || NumMarkX_GenerateHeader(currentAgentId, agentHandle, file.name.replace('.json', ''));
+      if (!finalHeader.name) finalHeader.name = file.name.replace('.json', '');
+
+      const pack: LorePack = { id: finalHeader.id, header: finalHeader, sacred_archive: accumulatedDocs };
       await saveLorePack(pack);
       await fetchSavedPacks();
       showStatus(`Imported "${pack.header.name}" to Library (${count} nodes).`, 'success', true);
@@ -327,7 +345,45 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
     }
   };
 
-  const handleMountPack = async (pack: LorePack) => { const count = pack.sacred_archive.length; if (!window.confirm(`MOUNT CARTRIDGE "${pack.header.name}"?\n\nThis will UNMOUNT (delete) current active memory for ${currentAgentId} and load this LorePack (${count} nodes).`)) return; setIsProcessing(true); setStatusMsg({ text: "Unmounting previous memory...", type: 'info' }); try { await deleteDocumentsByAgentId(currentAgentId); setStatusMsg({ text: `Mounting "${pack.header.name}"...`, type: 'info' }); const newDocs = pack.sacred_archive.map(d => ({ ...d, id: NumMarkX_GenerateID('LORE'), agentId: currentAgentId, timestamp: Date.now(), sourceFile: pack.header.name })); const apiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY; const ai = apiKey ? new GoogleGenAI({ apiKey }) : null; const BATCH_SIZE = 50; for (let i = 0; i < newDocs.length; i += BATCH_SIZE) { const batch = newDocs.slice(i, i + BATCH_SIZE); await processBatch(batch, ai); } showStatus(`Successfully Mounted "${pack.header.name}" (${newDocs.length} nodes). Active memory replaced.`, 'success', true); setActiveTab('local'); await fetchDocs(); onUpdate(); } catch (e: any) { console.error(e); showStatus(`Mount Failed: ${e.message}`, 'error', true); } finally { setIsProcessing(false); } };
+  const handleMountPack = async (pack: LorePack) => { 
+    const count = pack.sacred_archive.length; 
+    if (!window.confirm(`MOUNT CARTRIDGE "${pack.header.name}"?\n\nThis will UNMOUNT (delete) current active memory for ${currentAgentId} and load this LorePack (${count} nodes).`)) return; 
+    
+    setIsProcessing(true); 
+    setStatusMsg({ text: "Unmounting previous memory...", type: 'info' }); 
+    
+    try { 
+      await deleteDocumentsByAgentId(currentAgentId); 
+      setStatusMsg({ text: `Mounting "${pack.header.name}"...`, type: 'info' }); 
+      
+      const newDocs = pack.sacred_archive.map(d => ({ 
+        ...d, 
+        id: NumMarkX_GenerateID('LORE'), // Ensure new unique ID
+        agentId: currentAgentId, 
+        timestamp: Date.now(), 
+        sourceFile: pack.header.name 
+      })); 
+      
+      const apiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY; 
+      const ai = apiKey ? new GoogleGenAI({ apiKey }) : null; 
+      const BATCH_SIZE = 50; 
+      
+      for (let i = 0; i < newDocs.length; i += BATCH_SIZE) { 
+        const batch = newDocs.slice(i, i + BATCH_SIZE); 
+        await processBatch(batch, ai); 
+      } 
+      
+      showStatus(`Successfully Mounted "${pack.header.name}" (${newDocs.length} nodes). Active memory replaced.`, 'success', true); 
+      setActiveTab('local'); 
+      await fetchDocs(); 
+      onUpdate(); 
+    } catch (e: any) { 
+      console.error("handleMountPack: Error during mount", e); 
+      showStatus(`Mount Failed: ${e.message}`, 'error', true); 
+    } finally { 
+      setIsProcessing(false); 
+    } 
+  };
   
   const handleDeletePack = async (id: string) => {
     const packToDelete = savedPacks.find(p => p.id === id);
@@ -451,7 +507,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                           let count = 0;
                           for await (const loreNode of IngestionService.streamLorePack(file)) {
                               const obj = loreNode as any;
-                              if (!obj.schema && !obj.agentId) {
+                              if (!obj.schema && !obj.agentId) { // Heuristic to detect doc vs header
                                   const doc = IngestionService.normalizeNode(obj, currentAgentId, count++);
                                   doc.id = NumMarkX_GenerateID('INGEST');
                                   doc.tags = ['AUTO_INGEST', 'JSON_IMPORT'];
@@ -470,8 +526,9 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                               setIngestionStats(prev => ({ ...prev, totalChunks: prev.totalChunks + batch.length }));
                           }
                           processedCount = count;
-                      } catch (e) {
-                          console.warn("JSON Fallback", e);
+                      } catch (e: any) {
+                          console.warn("JSON Fallback processing failed, attempting plain text ingestion.", e);
+                          // Fallback to plain text ingestion if JSON stream fails
                           const text = await file.text();
                           processedCount = await IngestionService.ingestText(text, file.name, currentAgentId, apiKey, (c, t) => {
                               setIngestionQueue(prev => prev.map((qItem: IngestionQueueItem) => qItem.name === file.name ? { ...qItem, progress: c, total: t } : qItem));
@@ -517,7 +574,6 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
       }
       console.log(`handleSelectLorePack: Selected file: ${file.name}`);
 
-      // IMMEDIATE CONFIRMATION to avoid race conditions
       const shouldProceed = window.confirm(`Importing "${file.name}".\n\nDo you want to REPLACE the current active memory for ${agentHandle} with this pack?\n\n(Cancel to abort)`);
       
       if (!shouldProceed) {
@@ -530,27 +586,33 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
       setIsStreamingImport(true);
       setStreamedDocsCount(0);
       setLastStreamedNodes([]);
-      setStatusMsg({ text: "Reading LorePack...", type: 'info' });
+      setStatusMsg({ text: `Reading LorePack: "${file.name}"...`, type: 'info' });
       console.log("handleSelectLorePack: Starting LorePack stream processing.");
       
-      // Delay slightly to allow UI to update
       await new Promise(resolve => setTimeout(resolve, 150));
       
       try {
-          // 1. Read all docs into memory first to validate file.
           const newDocs: KnowledgeDoc[] = [];
           let count = 0;
+          let headerFound = false;
+
+          setStatusMsg({ text: `Validating LorePack structure for "${file.name}"...`, type: 'info' });
+
           for await (const item of IngestionService.streamLorePack(file)) {
               const obj = item as any;
-              if (obj.schema === 'MYTHOS.LOREPACK.v1' || (obj.agentId && obj.handle && obj.version)) {
-                  console.log("handleSelectLorePack: Found LorePack Header:", obj);
+              
+              if (obj && (obj.schema === 'MYTHOS.LOREPACK.v1' || (obj.agentId && obj.handle && obj.version))) {
+                  // This is a header object, log it but don't add to docs
+                  console.log("handleSelectLorePack: Detected LorePack Header:", obj);
+                  headerFound = true;
               } else {
+                  // This is a document node
                   const doc = IngestionService.normalizeNode(obj, currentAgentId, count);
-                  doc.id = NumMarkX_GenerateID('LORE'); // Force a new, unique ID.
+                  doc.id = NumMarkX_GenerateID('LORE');
                   doc.sourceFile = file.name;
                   newDocs.push(doc);
                   count++;
-                  setStreamedDocsCount(count); // Update UI as we read
+                  setStreamedDocsCount(count);
                   setLastStreamedNodes(prev => [doc.title, ...prev].slice(0, 3));
               }
           }
@@ -560,14 +622,12 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
           }
           console.log(`handleSelectLorePack: Finished reading ${newDocs.length} documents from LorePack.`);
 
-          // 2. NOW delete the old memory.
-          setStatusMsg({ text: `Deleting ${docs.length} old documents...`, type: 'info' });
+          setStatusMsg({ text: `Deleting ${docs.length} old documents for ${agentHandle}...`, type: 'info' });
           await deleteDocumentsByAgentId(currentAgentId);
           console.log(`handleSelectLorePack: Deleted existing documents for ${currentAgentId}.`);
 
 
-          // 3. Process new docs in batches.
-          setStatusMsg({ text: `Importing ${newDocs.length} new documents...`, type: 'info' });
+          setStatusMsg({ text: `Importing ${newDocs.length} new documents from "${file.name}"...`, type: 'info' });
           const BATCH_SIZE = 50;
           const apiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY;
           const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
@@ -579,13 +639,13 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
           
           await fetchDocs();
           onUpdate();
-          showStatus(`Pack Mounted. ${count} nodes loaded.`, 'success', true);
+          showStatus(`LorePack "${file.name}" Mounted. ${count} nodes loaded.`, 'success', true);
           console.log(`handleSelectLorePack: Successfully imported and mounted ${count} new nodes.`);
 
       } catch (err: any) {
           console.error("handleSelectLorePack: Error during import process", err);
-          showStatus(`Import Failed: ${err.message}`, 'error', true);
-          alert(`Import Error: ${err.message}`);
+          showStatus(`LorePack Import Failed: ${err.message}`, 'error', true);
+          alert(`Import Error: ${err.message}`); // Provide an alert for critical errors
       } finally {
           setIsProcessing(false);
           setIsStreamingImport(false);
@@ -619,8 +679,43 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
     }
   };
 
-  const handleCloudUpload = async (e: React.ChangeEvent<HTMLInputElement>) => { const files = e.target.files; if (!files || files.length === 0) return; setIsProcessing(true); setStatusMsg({ text: "Uploading to Google Cloud...", type: 'info' }); try { for (let i = 0; i < files.length; i++) { await uploadCloudFile(files[i]); } await fetchCloudFiles(); showStatus("Files uploaded to Cloud.", 'success'); onUpdate(); } catch (err: any) { console.error(err); showStatus(`Cloud Upload Failed: ${err.message}`, 'error', true); } finally { setIsProcessing(false); if (cloudFileInputRef.current) cloudFileInputRef.current.value = ''; } };
-  const handleDeleteCloudFile = async (name: string) => { if (!window.confirm("Delete this file from Google Cloud?")) return; setIsProcessing(true); try { await deleteCloudFile(name); await fetchCloudFiles(); onUpdate(); showStatus("File deleted.", 'success'); } catch (err: any) { showStatus(`Failed to delete file: ${err.message}`, 'error', true); } finally { setIsProcessing(false); } };
+  const handleCloudUpload = async (e: React.ChangeEvent<HTMLInputElement>) => { 
+    const files = e.target.files; 
+    if (!files || files.length === 0) return; 
+    setIsProcessing(true); 
+    setStatusMsg({ text: "Uploading to Google Cloud...", type: 'info' }); 
+    try { 
+      for (let i = 0; i < files.length; i++) { 
+        await uploadCloudFile(files[i]); 
+      } 
+      await fetchCloudFiles(); 
+      showStatus("Files uploaded to Cloud.", 'success'); 
+      onUpdate(); 
+    } catch (err: any) { 
+      console.error("Cloud Upload Failed:", err); 
+      showStatus(`Cloud Upload Failed: ${err.message || 'Unknown error.'}`, 'error', true); 
+    } finally { 
+      setIsProcessing(false); 
+      if (cloudFileInputRef.current) cloudFileInputRef.current.value = ''; 
+    } 
+  };
+
+  const handleDeleteCloudFile = async (name: string) => { 
+    if (!window.confirm("Delete this file from Google Cloud?")) return; 
+    setIsProcessing(true); 
+    setStatusMsg({ text: `Deleting "${name}" from Cloud...`, type: 'info' });
+    try { 
+      await deleteCloudFile(name); 
+      await fetchCloudFiles(); 
+      onUpdate(); 
+      showStatus(`File "${name}" deleted from Cloud.`, 'success'); 
+    } catch (err: any) { 
+      console.error("Failed to delete cloud file:", name, err);
+      showStatus(`Failed to delete file "${name}": ${err.message || 'Unknown API error.'}`, 'error', true); 
+    } finally { 
+      setIsProcessing(false); 
+    } 
+  };
 
   const filteredGroupedDocs = groupedDocs.filter(group => 
     group.sourceFile.toLowerCase().includes(filterQuery.toLowerCase())
@@ -875,7 +970,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                     </div>
                     {savedPacks.length === 0 ? <div className="empty-state" style={{ padding: '2rem' }}>NO SAVED PACKS</div> : savedPacks.map(pack => (
                         <div key={pack.id} className="section-panel" style={{ padding: '0.75rem' }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
                                 <div>
                                     <div style={{ fontWeight: 'bold', color: '#facc15' }}>{pack.header.name || pack.header.handle}</div>
                                     <div style={{ fontSize: '0.65rem', color: '#666' }}>{new Date(pack.header.timestamp).toLocaleString()} • {pack.sacred_archive.length} Docs</div>
@@ -894,6 +989,9 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
                 <>
                     <div className="flex-col">
                         <span className="section-header-title" style={{ color: '#a78bfa' }}>UPLOAD TO GOOGLE CLOUD</span>
+                        <p style={{ fontSize: '0.75rem', color: '#888', marginBottom: '0.5rem' }}>
+                            Files uploaded here are stored in your Google Cloud project for Gemini's 2M context window. They persist across sessions and are separate from local Active Memory.
+                        </p>
                         <label className="btn-file-input purple" style={{ borderColor: '#a78bfa', color: '#a78bfa', background: 'rgba(167, 139, 250, 0.05)' }}
                             onClick={() => triggerInput(cloudFileInputRef)} // Use the ref for the cloud input
                         >

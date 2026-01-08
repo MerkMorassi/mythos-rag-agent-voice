@@ -1,4 +1,3 @@
-
 import { GoogleGenAI } from "@google/genai";
 import { CloudFile } from "../types";
 
@@ -52,9 +51,21 @@ export const listCloudFiles = async (): Promise<CloudFile[]> => {
 
 export const deleteCloudFile = async (fileName: string): Promise<void> => {
   const apiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY;
-  if (!apiKey) return;
+  if (!apiKey) {
+    console.error("[deleteCloudFile] API Key missing. Cannot delete file:", fileName);
+    throw new Error("API Key missing.");
+  }
+  
+  console.log(`[deleteCloudFile] Attempting to delete file: "${fileName}"`);
   const ai = new GoogleGenAI({ apiKey });
-  await ai.files.delete({ name: fileName });
+  
+  try {
+    await ai.files.delete({ name: fileName });
+    console.log(`[deleteCloudFile] Successfully deleted file: "${fileName}"`);
+  } catch (e: any) {
+    console.error(`[deleteCloudFile] API error deleting "${fileName}":`, e);
+    throw new Error(`Cloud API returned an error: ${e.message || 'Unknown error'}.`);
+  }
 };
 
 export const getFile = async (name: string): Promise<CloudFile> => {

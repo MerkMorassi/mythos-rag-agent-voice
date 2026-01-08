@@ -12,7 +12,7 @@ import {
 } from './types';
 import Visualizer from './components/Visualizer';
 import ChatHistoryManager from './components/ChatHistoryManager';
-import { KnowledgeManager } from './components/KnowledgeManager';
+import { KnowledgeManager } from './components/KnowledgeManager'; // Changed to named import
 import SettingsManager from './components/SettingsManager';
 import { MultiAgentConsole } from './components/MultiAgentConsole';
 import { VoiceCommandList } from './components/VoiceCommandList';
