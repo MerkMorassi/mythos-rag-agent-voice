@@ -124,7 +124,7 @@ export class IngestionService {
      */
     // FIX: Changed `file: Blob` to `file: File` as `file.name` is used.
     static async *streamLorePack(file: File): AsyncGenerator<any, void, unknown> {
-        console.log(`[IngestionService] Starting stream for file: ${file.name}, type: ${file.type}`);
+        console.log(`[IngestionService] Starting stream for file: ${file.name}, type: ${file.type}, size: ${file.size} bytes`);
         try {
             const text = await file.text();
             
@@ -136,25 +136,27 @@ export class IngestionService {
             let data;
             try {
                 data = JSON.parse(text);
-                console.log(`[IngestionService] JSON parsing successful. Detected data type: ${typeof data}, isArray: ${Array.isArray(data)}`);
+                console.log(`[IngestionService] JSON parsing successful. Detected top-level data type: ${typeof data}, isArray: ${Array.isArray(data)}`);
             } catch (e: any) {
                 console.error("[IngestionService] JSON parsing failed:", e.message);
                 throw new Error("Invalid JSON format. Ensure the file is a valid JSON array or a single JSON object.");
             }
 
             if (Array.isArray(data)) {
+                console.log("[IngestionService] Streaming from JSON array.");
                 for (const item of data) {
                     yield item;
                 }
             } else if (typeof data === 'object' && data !== null) {
                 if ((data as LorePack).header && (data as LorePack).sacred_archive) {
-                    console.log("[IngestionService] Detected LorePack schema (header + sacred_archive).");
+                    console.log("[IngestionService] Detected LorePack schema (header + sacred_archive). Yielding header first.");
                     yield (data as LorePack).header;
+                    console.log(`[IngestionService] Streaming ${ (data as LorePack).sacred_archive.length} documents from sacred_archive.`);
                     for (const doc of (data as LorePack).sacred_archive) {
                         yield doc;
                     }
                 } else {
-                    console.log("[IngestionService] Detected single JSON object (non-LorePack schema).");
+                    console.log("[IngestionService] Detected single JSON object (non-LorePack schema). Yielding as a single document.");
                     yield data;
                 }
             } else {

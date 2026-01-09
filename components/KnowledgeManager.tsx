@@ -293,6 +293,10 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
     await new Promise(resolve => setTimeout(resolve, 150)); // Small delay for UI update
     
     try {
+      if (!file.name.toLowerCase().endsWith('.json')) {
+          throw new Error("Only .json LorePack files can be imported to the Library.");
+      }
+
       const accumulatedDocs: KnowledgeDoc[] = [];
       let header: LorePackHeader | undefined;
       let count = 0;
@@ -339,6 +343,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
     } catch (e: any) {
       console.error("handleImportToLibrary: Error during import", e);
       showStatus(`Library Import Failed: ${e.message}`, 'error', true);
+      alert(`Library Import Failed: ${e.message}`); // CRITICAL ALERT
     } finally {
       setIsProcessing(false);
       if (libraryImportRef.current) libraryImportRef.current.value = '';
@@ -379,7 +384,8 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
       onUpdate(); 
     } catch (e: any) { 
       console.error("handleMountPack: Error during mount", e); 
-      showStatus(`Mount Failed: ${e.message}`, 'error', true); 
+      showStatus(`Mount Failed: ${e.message}`, 'error', true);
+      alert(`Mount Failed: ${e.message}`); // CRITICAL ALERT
     } finally { 
       setIsProcessing(false); 
     } 
@@ -592,6 +598,10 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
       await new Promise(resolve => setTimeout(resolve, 150));
       
       try {
+          if (!file.name.toLowerCase().endsWith('.json')) {
+              throw new Error("Only .json LorePack files can be imported into Active Memory.");
+          }
+
           const newDocs: KnowledgeDoc[] = [];
           let count = 0;
           let headerFound = false;
@@ -645,7 +655,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
       } catch (err: any) {
           console.error("handleSelectLorePack: Error during import process", err);
           showStatus(`LorePack Import Failed: ${err.message}`, 'error', true);
-          alert(`Import Error: ${err.message}`); // Provide an alert for critical errors
+          alert(`LorePack Import Failed: ${err.message}`); // Provide an alert for critical errors
       } finally {
           setIsProcessing(false);
           setIsStreamingImport(false);
@@ -711,7 +721,9 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
       showStatus(`File "${name}" deleted from Cloud.`, 'success'); 
     } catch (err: any) { 
       console.error("Failed to delete cloud file:", name, err);
+      // Ensure specific error message is passed to showStatus
       showStatus(`Failed to delete file "${name}": ${err.message || 'Unknown API error.'}`, 'error', true); 
+      alert(`Failed to delete file "${name}": ${err.message || 'Unknown API error.'}`); // CRITICAL ALERT
     } finally { 
       setIsProcessing(false); 
     } 
