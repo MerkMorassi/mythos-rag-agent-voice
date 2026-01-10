@@ -60,7 +60,8 @@ export const IngestionService = {
         const fileName = `MYTHOS.LORE.${agentHandle.toUpperCase()} ${dateStr}.jsonl`;
 
         // 1. Streaming Export (Chromium Native File System Access API)
-        if ((window as any).showSaveFilePicker) {
+        // Check for API existence more robustly
+        if ('showSaveFilePicker' in window) {
             try {
                 const handle = await (window as any).showSaveFilePicker({
                     suggestedName: fileName,
@@ -72,12 +73,14 @@ export const IngestionService = {
                 }
                 await writable.close();
                 console.log("LorePack Streaming Export Complete.");
-                return;
+                return; // <--- CRITICAL FIX: Stop execution here on success
             } catch (e) {
                 if ((e as Error).name === 'AbortError') {
                     console.log("File save picker was cancelled.");
+                    return; // <--- CRITICAL FIX: Stop execution if user cancels
                 } else {
                     console.warn("Streaming export failed, falling back to Blob method.", e);
+                    // Fall through to Blob method only on actual error
                 }
             }
         }
@@ -104,7 +107,11 @@ export const IngestionService = {
     async importLorePack(file: File, targetAgentHandle: string): Promise<number> {
         const text = await file.text();
         const lines = text.split('\n').filter(l => l.trim());
-        const batch: VectorRecord[] = [];
+        
+        // FIX: Batch Processing to prevent IndexedDB Transaction Size Limit errors
+        const BATCH_SIZE = 500;
+        let batch: VectorRecord[] = [];
+        let totalProcessed = 0;
         let index = 0;
         
         for (const line of lines) {
@@ -112,15 +119,24 @@ export const IngestionService = {
                 const record = JSON.parse(line);
                 const normalizedRecord = this.normalizeNode(record, targetAgentHandle, index++);
                 batch.push(normalizedRecord);
+
+                if (batch.length >= BATCH_SIZE) {
+                    await bulkPutVectors(batch);
+                    totalProcessed += batch.length;
+                    batch = []; // Clear batch
+                }
             } catch (e) { 
                 console.warn("Skipping corrupt or invalid line in LorePack:", line, e);
             }
         }
         
+        // Flush remaining items
         if (batch.length > 0) {
             await bulkPutVectors(batch);
+            totalProcessed += batch.length;
         }
-        return batch.length;
+        
+        return totalProcessed;
     },
 
     async *streamLorePack(file: File): AsyncGenerator<any, void, unknown> {
@@ -166,8 +182,8 @@ export const IngestionService = {
                 if (lastNewline > startIndex && lastNewline > endIndex - 200) {
                     endIndex = lastNewline;
                 } else {
-                     const lastSpace = cleanText.lastIndexOf(' ', endIndex);
-                     if (lastSpace > startIndex) endIndex = lastSpace;
+                      const lastSpace = cleanText.lastIndexOf(' ', endIndex);
+                      if (lastSpace > startIndex) endIndex = lastSpace;
                 }
             }
             
