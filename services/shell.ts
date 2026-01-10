@@ -1,7 +1,9 @@
 
+
 import { VirtualFs, VFile } from "./virtualFs";
 import { AGENTS } from "../agents";
-import { getAgentConfig, saveAgentConfig, getAllDocuments, executeSql, updateDocumentPermissions, deleteDocument } from "./db";
+// FIX: Replaced deprecated document functions with vector equivalents.
+import { getAgentConfig, saveAgentConfig, getAllVectors, executeSql, updateDocumentPermissions, deleteVector } from "./db";
 import { AccessControl } from "./accessControl";
 
 export interface ShellResult {
@@ -142,12 +144,14 @@ sudo [cmd]      Execute as root
                     const resolved = this.resolvePath(target);
                     if (!resolved.startsWith('/lore')) return { output: `rm: cannot remove '${target}': Read-only file system (Agents are protected)` };
 
-                    const docs = await getAllDocuments();
+                    const docs = await getAllVectors();
                     const fileName = resolved.split('/').pop();
-                    const doc = docs.find(d => (d.title || d.id).replace(/[^a-zA-Z0-9.-]/g, '_').toLowerCase().substring(0, 40) === fileName);
+                    // FIX: Changed property from title to source to match VectorRecord
+                    const doc = docs.find(d => (d.source || d.id).replace(/[^a-zA-Z0-9.-]/g, '_').toLowerCase().substring(0, 40) === fileName);
 
                     if (doc) {
-                        await deleteDocument(doc.id);
+                        // FIX: Replaced deleteDocument with deleteVector
+                        await deleteVector(doc.id);
                         return { output: `removed '${target}'` };
                     }
                     return { output: `rm: cannot remove '${target}': No such file` };
@@ -186,7 +190,7 @@ sudo [cmd]      Execute as root
                             }
                         }
                         if (resolved === '/lore' || resolved === '/') {
-                            const docs = await getAllDocuments();
+                            const docs = await getAllVectors();
                             for (const d of docs) {
                                 await updateDocumentPermissions(d.id, mode);
                                 count++;
@@ -207,8 +211,9 @@ sudo [cmd]      Execute as root
                         }
                         if (resolved.startsWith('/lore')) {
                             const fileName = resolved.split('/').pop()!;
-                            const docs = await getAllDocuments();
-                            const doc = docs.find(d => (d.title || d.id).replace(/[^a-zA-Z0-9.-]/g, '_').toLowerCase().substring(0, 40) === fileName);
+                            const docs = await getAllVectors();
+                            // FIX: Changed property from title to source to match VectorRecord
+                            const doc = docs.find(d => (d.source || d.id).replace(/[^a-zA-Z0-9.-]/g, '_').toLowerCase().substring(0, 40) === fileName);
                             if (doc) {
                                 await updateDocumentPermissions(doc.id, mode);
                                 return { output: `mode of '${fileName}' changed to ${mode}` };

@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { GoogleGenAI } from '@google/genai';
-import { LogMessage, ChatSession, KnowledgeDoc } from '../types';
-import { saveChatSession, getAllChatSessions, deleteChatSession, addDocument } from '../services/db';
+import { LogMessage, ChatSession, VectorRecord } from '../types';
+import { saveChatSession, getAllChatSessions, deleteChatSession, putVector } from '../services/db';
 import { IngestionService } from '../services/ingestion';
-import { NumMarkX_GenerateHeader, NumMarkX_GenerateID, NumMarkX_GenerateSigil } from '../patterns/NumMarkX';
+import { NumMarkX_GenerateHeader, NumMarkX_GenerateID } from '../patterns/NumMarkX';
+import { GeminiProvider } from '../services/llmProviders/geminiProvider';
 
 interface ChatHistoryManagerProps {
   currentLogs: LogMessage[];
@@ -111,31 +112,35 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
   }
 
   const handleExportJson = (session: ChatSession) => {
-      // CONVERT CHAT SESSION TO LOREPACK v1
+      // NOTE: This exports in the old .json format, not .jsonl
       const header = NumMarkX_GenerateHeader(currentAgentId, "Exported Chat", session.title);
       
-      const docs: KnowledgeDoc[] = session.logs.map((l, i) => {
+      const docs: VectorRecord[] = session.logs.map((l, i) => {
           const content = `[${new Date(l.timestamp).toLocaleTimeString()}] ${l.type.toUpperCase()}: ${l.text}`;
           return {
               id: l.id,
-              agentId: currentAgentId,
-              title: `Chat Log ${i}: ${session.title}`,
-              content: content,
+              agent: currentAgentId,
+              text: content,
               timestamp: l.timestamp,
-              numMarkId: NumMarkX_GenerateSigil(content) // Correct Sigil for Teleportation
+              source: `Chat Log: ${session.title}`,
+              vector: [] // No vector for raw export
           };
       });
 
-      // Now returns a Blob directly
-      const blob = IngestionService.exportLorePack(header, docs);
+      // Old IngestionService had a JSON blob export, which is now gone. Re-implementing a simple version here.
+      const fullPack = {
+          header: header,
+          sacred_archive: docs
+      };
+      const str = JSON.stringify(fullPack, null, 2);
+      const blob = new Blob([str], { type: 'application/json' });
       
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = IngestionService.buildCanonicalFilename(currentAgentId);
+      link.download = `MYTHOS.LORE.${currentAgentId}.CHAT.${Date.now()}.json`;
       link.click();
       
-      // CRITICAL FIX: Delay revocation for large files
       setTimeout(() => URL.revokeObjectURL(url), 2000);
   };
 
@@ -152,7 +157,6 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
       showStatus("Ingesting... Please wait.", 'info');
       
       try {
-          // 1. Format the Transcript
           const header = `TRANSCRIPT RECORD: ${session.title}\nID: ${session.id}\nDATE: ${new Date(session.timestamp).toLocaleString()}\n\n`;
           const body = session.logs.map(l => {
               const speaker = l.type === 'user' ? 'USER' : 'AGENT';
@@ -161,64 +165,24 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
           
           const fullText = header + body;
           
-          // 2. Chunking Logic (Replicated simple chunker)
-          const CHUNK_SIZE = 1500;
-          const chunks: string[] = [];
-          const cleanText = fullText.replace(/\r\n/g, '\n');
+          const chunks = IngestionService.chunkText(fullText);
+          const provider = new GeminiProvider(apiKey);
           
-          let startIndex = 0;
-          while (startIndex < cleanText.length) {
-              let endIndex = startIndex + CHUNK_SIZE;
-              if (endIndex >= cleanText.length) {
-                  endIndex = cleanText.length;
-              } else {
-                  const lastNewline = cleanText.lastIndexOf('\n', endIndex);
-                  if (lastNewline > startIndex && lastNewline > endIndex - 200) {
-                      endIndex = lastNewline;
-                  } else {
-                       const lastSpace = cleanText.lastIndexOf(' ', endIndex);
-                       if (lastSpace > startIndex) endIndex = lastSpace;
-                  }
-              }
-              chunks.push(cleanText.substring(startIndex, endIndex).trim());
-              startIndex = endIndex;
-          }
-
-          // 3. Generate Embeddings and Save
-          const ai = new GoogleGenAI({ apiKey });
-          
-          // Process in batches
-          const BATCH_SIZE = 10; // Reduced from 50 to 10
-          for(let i=0; i<chunks.length; i+=BATCH_SIZE) {
-               const batch = chunks.slice(i, i+BATCH_SIZE);
-               const batchResult = await ai.models.embedContent({
-                    model: 'text-embedding-004',
-                    contents: batch.map(c => ({ parts: [{ text: c }] })),
-                    config: {
-                        taskType: 'RETRIEVAL_DOCUMENT',
-                        title: session.title
-                    }
-                });
-
-                const embeddings = batchResult.embeddings;
-                
-                for(let k=0; k<batch.length; k++) {
-                     const chunkContent = batch[k];
-                     await addDocument({
-                        id: NumMarkX_GenerateID('LORE'),
-                        agentId: currentAgentId,
-                        title: `${session.title} (Part ${i + k + 1})`,
-                        content: chunkContent,
-                        embedding: embeddings?.[k]?.values,
-                        timestamp: Date.now(),
-                        numMarkId: NumMarkX_GenerateSigil(chunkContent),
-                        sourceFile: `Session - ${session.title}`
-                    });
-                }
+          for (const chunk of chunks) {
+              const vec = await provider.embed(chunk);
+              const record: VectorRecord = {
+                  id: NumMarkX_GenerateID('LORE'),
+                  agent: currentAgentId,
+                  text: chunk,
+                  vector: vec,
+                  timestamp: Date.now(),
+                  source: `Session - ${session.title}`
+              };
+              await putVector(record);
           }
           
           onUpdateKnowledge(); // Trigger visual update in main app
-          showStatus(`Successfully ingested into ${currentAgentId}'s knowledge base.`, 'success');
+          showStatus(`Successfully ingested ${chunks.length} nodes into ${currentAgentId}'s knowledge base.`, 'success');
 
       } catch(e) {
           console.error("Ingestion failed", e);
@@ -314,9 +278,9 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
                         <button 
                             onClick={() => handleExportJson(session)}
                             className="btn btn-secondary btn-xs"
-                            title="Download LorePack JSON"
+                            title="Download Legacy LorePack (.json)"
                         >
-                            EXPORT LP
+                            EXPORT JSON
                         </button>
                         <button 
                             onClick={() => handleIngestToLore(session)}

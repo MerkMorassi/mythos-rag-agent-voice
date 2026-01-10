@@ -1,62 +1,56 @@
-
-
-/**
- * MYTHOS GATING LAYER
- * The "Sacred Contraction": Determines when to open the context floodgates.
- * Ported from retrieval-gate.js
- */
-
-export interface GateResult {
-    shouldRetrieve: boolean;
-    reason: string;
-    strategy: 'TELEPORT' | 'RCI' | 'GRAPH_LOCAL' | 'GRAPH_GLOBAL' | 'NONE'; 
-}
+import { getAllVectors } from './db';
+import { VectorRecord } from '../types';
 
 export const RetrievalGate = {
-    evaluate(query: string, agentId: string): GateResult {
-        const q = query.trim().toLowerCase();
-        const wordCount = q.split(/\s+/).length;
+  
+  // FIX: Added evaluate method to decide if retrieval is necessary.
+  evaluate(queryText: string, agentHandle: string): { shouldRetrieve: boolean } {
+    // Simple heuristic: always retrieve if the query is more than a few words long,
+    // or if it doesn't look like a simple greeting.
+    const words = queryText.trim().toLowerCase().split(/\s+/);
+    if (words.length > 3) return { shouldRetrieve: true };
+    const greetings = ['hi', 'hello', 'hey', 'yo'];
+    if (words.length === 1 && greetings.includes(words[0])) return { shouldRetrieve: false };
+    return { shouldRetrieve: true }; // Default to retrieve
+  },
 
-        // 1. IDENTITY GATE (Short greetings/phatic)
-        if (wordCount < 3 && !q.includes('?')) {
-             const commands = ['log', 'status', 'report', 'explain', 'search', 'find'];
-             if (commands.some(w => q.includes(w))) {
-                 return { shouldRetrieve: true, strategy: 'RCI', reason: 'Command Keyword Detected' };
-             }
-             return { shouldRetrieve: false, strategy: 'NONE', reason: 'Phatic/Conversational' };
-        }
-
-        // 2. EXPLICIT RECALL (Triggers)
-        const recallTriggers = [
-            'remember', 'recall', 'what did', 'who is', 'define', 
-            'report', 'status', 'tell me about', 'history', 'context', 
-            'earlier', 'myth', 'search', 'lookup'
-        ];
-        
-        // 3. GRAPH INTENT (Deep Connections)
-        // Questions that imply relationships or specific entity connections benefit from Graph Search
-        const graphTriggers = ['how is', 'connected', 'related', 'relationship', 'link', 'between'];
-        
-        if (graphTriggers.some(t => q.includes(t))) {
-            return { shouldRetrieve: true, strategy: 'GRAPH_LOCAL', reason: 'Graph Relation Query' };
-        }
-        
-        if (recallTriggers.some(t => q.includes(t))) {
-            // Default to Graph Local for better context if available
-            return { shouldRetrieve: true, strategy: 'GRAPH_LOCAL', reason: 'Explicit Intent' };
-        }
-
-        // 4. PERSONA GATE
-        if (['CLIO', 'ARCHIVAX', 'POLYHYMNIA', 'MERKOS'].includes(agentId)) {
-            return { shouldRetrieve: true, strategy: 'GRAPH_LOCAL', reason: 'Role Mandate: Historian/Memory' };
-        }
-
-        // 5. COMPLEXITY HEURISTIC
-        if (wordCount > 8) {
-            return { shouldRetrieve: true, strategy: 'RCI', reason: 'Complexity Heuristic' };
-        }
-
-        // Default Contraction
-        return { shouldRetrieve: false, strategy: 'NONE', reason: 'Default Contraction' };
+  cosineSimilarity(a: number[], b: number[]): number {
+    if (!a || !b || a.length !== b.length) return 0;
+    let dot = 0, nA = 0, nB = 0;
+    for (let i = 0; i < a.length; i++) {
+      dot += a[i] * b[i];
+      nA += a[i] * a[i];
+      nB += b[i] * b[i];
     }
+    return dot / (Math.sqrt(nA) * Math.sqrt(nB)) || 0;
+  },
+
+  async query(queryVector: number[], queryText: string, topK: number = 8): Promise<VectorRecord[]> {
+    const allVectors = await getAllVectors();
+    if (allVectors.length === 0) return [];
+    
+    // 1. Source Awareness (Meta-Cognitive)
+    // Checks if the user asked for a specific file by name
+    const distinctSources = [...new Set(allVectors.map(v => v.source))];
+    const targetSource = distinctSources.find(s => queryText.toLowerCase().includes(s.toLowerCase()));
+    
+    if (targetSource) {
+      console.log(`[Retrieval] Source Lock Engaged: ${targetSource}`);
+      // Return the full context of that file, sorted by timestamp
+      return allVectors
+        .filter(v => v.source === targetSource)
+        .sort((a,b) => a.timestamp - b.timestamp);
+    }
+
+    // 2. Semantic Search (Elara Logic)
+    const scored = allVectors.map(v => ({
+      ...v,
+      score: this.cosineSimilarity(queryVector, v.vector)
+    }));
+
+    // Sort descending by score
+    return scored
+      .sort((a, b) => b.score - a.score)
+      .slice(0, topK);
+  }
 };

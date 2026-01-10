@@ -1,233 +1,156 @@
-import { KnowledgeDoc, LorePack, LorePackHeader } from '../types';
-import { NumMarkX_GenerateHeader, NumMarkX_GenerateID, NumMarkX_GenerateSigil } from '../patterns/NumMarkX';
-import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
-import { addDocument, getDocumentsByAgentId, bulkAddDocuments } from "./db";
+import { VectorRecord } from '../types';
+import { NumMarkX_GenerateID } from '../patterns/NumMarkX';
+import { GeminiProvider } from './llmProviders/geminiProvider'; // Using the new provider for embedding
+import { bulkPutVectors, getAllVectors, putVector } from "./db";
 
-export interface IngestionResult {
-    success: boolean;
-    header: LorePackHeader;
-    docs: KnowledgeDoc[];
-    error?: string;
-    stats: {
-        total: number;
-        withVectors: number;
-        avgSize: number;
-        existingSigils: number;
-    };
-}
-
-// Helper: Retry with Exponential Backoff
-async function retryWithBackoff<T>(operation: () => Promise<T>, retries = 3, baseDelay = 1000): Promise<T> {
-    try {
-        return await operation();
-    } catch (error: any) {
-        if (retries > 0 && (
-            error.message?.includes('unavailable') || 
-            error.message?.includes('503') || 
-            error.message?.includes('429') ||
-            error.status === 503
-        )) {
-            const delay = baseDelay * (Math.random() + 1); // Add jitter
-            console.warn(`[Retry] Operation failed (${error.message}). Retrying in ${Math.round(delay)}ms...`);
-            await new Promise(resolve => setTimeout(resolve, delay));
-            return retryWithBackoff(operation, retries - 1, baseDelay * 2);
-        }
-        throw error;
-    }
-}
-
-export class IngestionService {
+export const IngestionService = {
 
     /**
-     * CANONICAL FILENAME GENERATOR
-     * Enforces the "MYTHOS.LORE.[SOVEREIGN].LOREPACK.[DATE]" standard.
+     * Ingests a block of text, chunks it, gets embeddings, and saves to the DB.
+     * Adapted from the old IngestionService class.
      */
-    static buildCanonicalFilename(agentId: string): string {
-        // Strip "agent-" prefix and Uppercase
-        const cleanId = agentId.replace(/^agent-/i, '').toUpperCase();
-        const date = new Date().toISOString().slice(0, 10);
-        return `MYTHOS.LORE.${cleanId}.LOREPACK.${date}.json`;
-    }
-
-    static async ingestText(text: string, filename: string, agentId: string, apiKey: string, onProgress?: (processed: number, total: number) => void): Promise<number> {
-        // Yield to let UI render initial "Processing" state
-        await new Promise(r => setTimeout(r, 10));
+    async ingestText(
+        text: string, 
+        source: string, 
+        agentHandle: string, 
+        apiKey: string, 
+        onProgress?: (processed: number, total: number) => void
+    ): Promise<number> {
+        await new Promise(r => setTimeout(r, 10)); // Yield for UI
 
         const chunks = this.chunkText(text);
         if (chunks.length === 0) return 0;
 
-        // REPORT INITIAL TOTAL IMMEDIATELY so UI bar appears
         if (onProgress) onProgress(0, chunks.length);
 
-        const ai = new GoogleGenAI({ apiKey });
-        const BATCH_SIZE = 100; // Max batch size for embedContent API
+        const provider = new GeminiProvider(apiKey);
         let savedCount = 0;
 
-        // Process batches
-        for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
-            const batchChunks = chunks.slice(i, i + BATCH_SIZE);
+        for (const chunk of chunks) {
             try {
-                // 1. Get Embeddings for Batch
-                const batchResult = await retryWithBackoff(() => ai.models.embedContent({
-                    model: 'text-embedding-004',
-                    contents: batchChunks.map(c => ({ parts: [{ text: c }] })),
-                    config: { taskType: 'RETRIEVAL_DOCUMENT', title: filename }
-                }));
-                
-                const embeddings = (batchResult as any).embeddings;
-
-                // 2. Prepare docs for batch saving
-                const docsToSave: KnowledgeDoc[] = batchChunks.map((chunk, k) => ({
+                const vector = await provider.embed(chunk);
+                const record: VectorRecord = {
                     id: NumMarkX_GenerateID('INGEST'),
-                    agentId: agentId,
-                    title: `${filename} (Part ${i + k + 1})`,
-                    content: chunk,
-                    embedding: embeddings?.[k]?.values,
+                    agent: agentHandle,
+                    text: chunk,
+                    vector,
+                    source,
                     timestamp: Date.now(),
-                    tags: ['AUTO_INGEST', 'CHAT_UPLOAD'],
-                    numMarkId: NumMarkX_GenerateSigil(chunk),
-                    sourceFile: filename
-                }));
-                
-                // 3. Save all docs in the batch at once
-                await bulkAddDocuments(docsToSave);
-
-                savedCount += batchChunks.length;
+                };
+                await putVector(record);
+                savedCount++;
                 if (onProgress) onProgress(savedCount, chunks.length);
-                
             } catch (e) {
-                console.warn(`[Ingestion] Embedding failed for batch in ${filename}:`, e);
-                
-                // Fallback: Save batch without vectors if API fails
-                const docsToSave: KnowledgeDoc[] = batchChunks.map((chunk, k) => ({
-                    id: NumMarkX_GenerateID('INGEST'),
-                    agentId: agentId,
-                    title: `${filename} (Part ${i + k + 1})`,
-                    content: chunk,
-                    timestamp: Date.now(),
-                    tags: ['AUTO_INGEST', 'CHAT_UPLOAD', 'NO_VECTOR'],
-                    numMarkId: NumMarkX_GenerateSigil(chunk),
-                    sourceFile: filename
-                }));
-                await bulkAddDocuments(docsToSave);
-
-                savedCount += batchChunks.length;
-                if (onProgress) onProgress(savedCount, chunks.length);
+                console.error(`[Ingestion] Embedding failed for chunk in ${source}:`, e);
+                // Optionally save without vector on failure
             }
         }
         return savedCount;
-    }
+    },
 
     /**
-     * Robust Stream Parser
-     * Replaced custom byte-stream parser with JSON.parse for reliability.
+     * THE LOREPACK FORGE EXPORT
+     * Exports all vectors to a .jsonl file, streaming directly to disk.
      */
-    // FIX: Changed `file: Blob` to `file: File` as `file.name` is used.
-    static async *streamLorePack(file: File): AsyncGenerator<any, void, unknown> {
-        console.log(`[IngestionService] Starting stream for file: ${file.name}, type: ${file.type}, size: ${file.size} bytes`);
-        try {
-            const text = await file.text();
-            
-            if (!text.trim()) {
-                console.warn("[IngestionService] LorePack file is empty.");
-                return;
-            }
+    async exportLorePack(agentHandle: string) {
+        const vectors = await getAllVectors();
+        if (vectors.length === 0) throw new Error("Database Empty");
 
-            let data;
+        const dateStr = new Date().toISOString().slice(0, 10);
+        const fileName = `MYTHOS.LORE.${agentHandle.toUpperCase()} ${dateStr}.jsonl`;
+
+        // 1. Streaming Export (Chromium Native File System Access API)
+        if ((window as any).showSaveFilePicker) {
             try {
-                data = JSON.parse(text);
-                console.log(`[IngestionService] JSON parsing successful. Detected top-level data type: ${typeof data}, isArray: ${Array.isArray(data)}`);
-            } catch (e: any) {
-                console.error("[IngestionService] JSON parsing failed:", e.message);
-                throw new Error("Invalid JSON format. Ensure the file is a valid JSON array or a single JSON object.");
-            }
-
-            if (Array.isArray(data)) {
-                console.log("[IngestionService] Streaming from JSON array.");
-                for (const item of data) {
-                    yield item;
+                const handle = await (window as any).showSaveFilePicker({
+                    suggestedName: fileName,
+                    types: [{ description: 'LorePack', accept: { 'application/jsonl': ['.jsonl'] } }]
+                });
+                const writable = await handle.createWritable();
+                for (const v of vectors) {
+                    await writable.write(JSON.stringify(v) + "\n");
                 }
-            } else if (typeof data === 'object' && data !== null) {
-                if ((data as LorePack).header && (data as LorePack).sacred_archive) {
-                    console.log("[IngestionService] Detected LorePack schema (header + sacred_archive). Yielding header first.");
-                    yield (data as LorePack).header;
-                    console.log(`[IngestionService] Streaming ${ (data as LorePack).sacred_archive.length} documents from sacred_archive.`);
-                    for (const doc of (data as LorePack).sacred_archive) {
-                        yield doc;
-                    }
+                await writable.close();
+                console.log("LorePack Streaming Export Complete.");
+                return;
+            } catch (e) {
+                if ((e as Error).name === 'AbortError') {
+                    console.log("File save picker was cancelled.");
                 } else {
-                    console.log("[IngestionService] Detected single JSON object (non-LorePack schema). Yielding as a single document.");
-                    yield data;
+                    console.warn("Streaming export failed, falling back to Blob method.", e);
                 }
-            } else {
-                console.error(`[IngestionService] Unexpected top-level data format: ${typeof data}. Expected array or object.`);
-                throw new Error("Unsupported file content structure. Expected a JSON array of documents or a LorePack object.");
             }
-
-        } catch (err: any) {
-            console.error("[IngestionService] LorePack Stream Error:", err);
-            throw new Error(`Failed to parse file: ${err.message}`);
         }
-    }
+
+        // 2. Blob Fallback (Legacy/Firefox)
+        console.log("Using Blob fallback for export.");
+        const content = vectors.map((v: any) => JSON.stringify(v)).join('\n');
+        const blob = new Blob([content], { type: "application/jsonl" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    },
 
     /**
-     * Normalizes a raw object from a JSON import into a valid KnowledgeDoc.
-     * Ensures `content` and `title` always resolve to non-empty strings.
+     * THE LOREPACK IMPORT
+     * Imports a .jsonl file, parsing each line and bulk-inserting into the database.
+     * This version is robust and uses normalizeNode to handle schema variations.
      */
-    static normalizeNode(obj: any, agentId: string, index: number): KnowledgeDoc {
-        let content = '';
-        if (typeof obj === 'string') {
-            content = obj;
-        } else if (typeof obj === 'object' && obj !== null) {
-            content = obj.content || obj.text || obj.body || JSON.stringify(obj);
-        } else {
-            content = String(obj); // Convert any primitive to string
+    async importLorePack(file: File, targetAgentHandle: string): Promise<number> {
+        const text = await file.text();
+        const lines = text.split('\n').filter(l => l.trim());
+        const batch: VectorRecord[] = [];
+        let index = 0;
+        
+        for (const line of lines) {
+            try {
+                const record = JSON.parse(line);
+                const normalizedRecord = this.normalizeNode(record, targetAgentHandle, index++);
+                batch.push(normalizedRecord);
+            } catch (e) { 
+                console.warn("Skipping corrupt or invalid line in LorePack:", line, e);
+            }
         }
         
-        if (!content.trim()) {
-            content = `[Empty Content for Node ${index + 1}]`;
-            console.warn(`[IngestionService] Node ${index + 1} has empty content. Using fallback: "${content}"`);
+        if (batch.length > 0) {
+            await bulkPutVectors(batch);
         }
+        return batch.length;
+    },
 
-        let title = '';
-        if (typeof obj === 'object' && obj !== null) {
-            title = obj.title || obj.name || (content.split('\n')[0] || `Imported Document ${index + 1}`).substring(0, 100);
-        } else {
-            title = (content.split('\n')[0] || `Imported Document ${index + 1}`).substring(0, 100);
+    async *streamLorePack(file: File): AsyncGenerator<any, void, unknown> {
+        const text = await file.text();
+        const lines = text.split('\n').filter(l => l.trim());
+        for (const line of lines) {
+            try {
+                const record = JSON.parse(line);
+                yield record;
+            } catch (e) {
+                console.warn("Skipping corrupt line in LorePack:", line, e);
+            }
         }
+    },
 
-        if (!title.trim()) {
-            title = `Untitled Document ${index + 1}`;
-            console.warn(`[IngestionService] Node ${index + 1} has empty title. Using fallback: "${title}"`);
-        }
-
+    normalizeNode(obj: any, targetAgentHandle: string, index: number): VectorRecord {
         return {
-            id: obj.id || crypto.randomUUID(),
-            agentId: agentId,
-            title: title,
-            content: content,
+            id: obj.id || NumMarkX_GenerateID(`IMPORT_${index}`),
+            text: obj.text || '',
+            vector: obj.vector || [],
+            source: obj.source || 'Imported File',
+            agent: targetAgentHandle, // This is the critical override.
             timestamp: obj.timestamp || Date.now(),
-            embedding: obj.embedding,
-            numMarkId: obj.numMarkId
+            permissions: obj.permissions
         };
-    }
-    
-    /**
-     * EXPORT LOREPACK
-     * Packages documents and a header into a Blob.
-     */
-    static exportLorePack(header: LorePackHeader, docs: KnowledgeDoc[]): Blob {
-        const fullPack = {
-            header: header,
-            sacred_archive: docs
-        };
-        const str = JSON.stringify(fullPack, null, 2);
-        return new Blob([str], { type: 'application/json' });
-    }
+    },
+
 
     // --- PRIVATE HELPERS ---
-
-    private static chunkText(text: string): string[] {
+    chunkText(text: string): string[] {
         const CHUNK_SIZE = 1500;
         const chunks: string[] = [];
         const cleanText = text.replace(/\r\n/g, '\n');
@@ -239,7 +162,6 @@ export class IngestionService {
             if (endIndex >= cleanText.length) {
                 endIndex = cleanText.length;
             } else {
-                // Try to find a natural break (newline or sentence end)
                 const lastNewline = cleanText.lastIndexOf('\n', endIndex);
                 if (lastNewline > startIndex && lastNewline > endIndex - 200) {
                     endIndex = lastNewline;
@@ -255,4 +177,4 @@ export class IngestionService {
         }
         return chunks;
     }
-}
+};

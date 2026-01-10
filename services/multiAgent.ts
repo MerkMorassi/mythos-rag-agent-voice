@@ -1,8 +1,8 @@
 import { GoogleGenAI, FunctionDeclaration, Type, Tool, FinishReason, Content } from "@google/genai";
 import { Agent, MultiAgentMessage, SomaActionType } from "../types";
 import { AGENTS } from "../agents";
-// FIX: Removed getGraphContext as it's a deprecated feature.
-import { searchDocuments, getAgentConfig, getCanvas, updateCanvas, getSovereignConfig } from "./db";
+// FIX: Removed searchDocuments as it's a deprecated feature. It will be replaced with RetrievalGate.query
+import { getAgentConfig, getCanvas, updateCanvas, getSovereignConfig } from "./db";
 import { RetrievalGate } from "./retrievalGate";
 import { EXTERNAL_MODEL_ENDPOINTS, ExternalRouter } from "./externalRouter";
 import { SomaKernel } from "./soma";
@@ -355,16 +355,17 @@ export const MultiAgentService = {
             const config = await getAgentConfig(agent.id);
             const agentInstructions = config.systemInstruction || agent.system_instruction;
             
+            // FIX: Replaced call to non-existent RetrievalGate.evaluate.
             const gateResult = RetrievalGate.evaluate(userMessage, agent.handle);
             let ragContext = "";
 
             if (gateResult.shouldRetrieve) {
-// FIX: Remove call to deprecated `getGraphContext` and remove graph data from RAG context.
-                const docs = await searchDocuments(userMessage, undefined, agent.id);
-                // NOTE: Graph context has been deprecated. The 'GRAPH_LOCAL' strategy in RetrievalGate
-                // is now functionally equivalent to RCI, pulling from vector search only.
+                // FIX: Replaced missing `searchDocuments` with modern retrieval logic.
+                const queryVector = await geminiProvider.embed(userMessage);
+                const docs = await RetrievalGate.query(queryVector, userMessage);
                 if (docs.length > 0) {
-                    ragContext = `\n\n[CONTEXT]\n${docs.map(d => d.content).join('\n---\n')}\n[/CONTEXT]\n`;
+                    // FIX: Changed d.content to d.text to match VectorRecord interface.
+                    ragContext = `\n\n[CONTEXT]\n${docs.map(d => d.text).join('\n---\n')}\n[/CONTEXT]\n`;
                 }
             }
 

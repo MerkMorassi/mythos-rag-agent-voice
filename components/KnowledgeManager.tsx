@@ -1,20 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { GoogleGenAI } from '@google/genai';
-import { KnowledgeDoc, CloudFile, LorePack, LorePackHeader } from '../types';
+import { VectorRecord, LorePack, LorePackHeader } from '../types';
 import { 
-  getDocumentsByAgentId, 
-  deleteDocument, 
-  bulkAddDocuments, 
-  deleteDocumentsByAgentId,
+  getVectorsByAgent,
+  deleteVectorsByAgent,
   saveLorePack,
   getLorePacksByAgentId,
   deleteLorePack,
-  bulkDeleteDocuments
+  bulkDeleteVectors,
+  bulkPutVectors
 } from '../services/db';
-import { uploadCloudFile, listCloudFiles, deleteCloudFile } from '../services/googleFiles';
 import { IngestionService } from '../services/ingestion';
-import { NumMarkX_GenerateSigil, NumMarkX_GenerateHeader, NumMarkX_GenerateID } from '../patterns/NumMarkX';
 import { AGENTS } from '../agents';
+import { NumMarkX_GenerateHeader, NumMarkX_GenerateID } from '../patterns/NumMarkX';
 
 interface KnowledgeManagerProps {
   onUpdate: () => void;
@@ -26,1018 +23,430 @@ interface KnowledgeManagerProps {
 
 const ITEMS_PER_PAGE = 5;
 
-// --- ICONS ---
-const FileIcon = ({ typeStr }: { typeStr: string }) => {
-  const t = (typeStr || '').toLowerCase();
-  const style = { width: '20px', height: '20px', strokeWidth: 1.5, flexShrink: 0 };
-  
-  if (t.includes('image') || t.endsWith('.png') || t.endsWith('.jpg') || t.endsWith('.jpeg') || t.endsWith('.webp')) {
-    return (
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#c084fc" strokeLinecap="round" strokeLinejoin="round" style={style}>
-        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-        <circle cx="8.5" cy="8.5" r="1.5"></circle>
-        <polyline points="21 15 16 10 5 21"></polyline>
-      </svg>
-    );
-  }
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" strokeLinecap="round" strokeLinejoin="round" style={style}>
-      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-      <polyline points="14 2 14 8 20 8"></polyline>
-      <line x1="16" y1="13" x2="8" y2="13"></line>
-      <line x1="16" y1="17" x2="8" y2="17"></line>
-      <line x1="10" y1="9" x2="8" y2="9"></line>
-    </svg>
-  );
-};
-
 interface IngestionQueueItem {
     id: string;
-    file?: File;
-    name: string;
+    file: File;
     status: 'PENDING' | 'PROCESSING' | 'DONE' | 'ERROR';
     progress: number;
     total: number;
     errorMsg?: string;
 }
 
-interface GroupedDoc {
-    sourceFile: string;
+interface GroupedVector {
+    source: string;
     count: number;
-    firstDoc: KnowledgeDoc;
+    ids: string[];
+    firstVec: VectorRecord;
 }
 
 export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ 
     onUpdate, 
     currentAgentId,
     isOpen,
-    onOpen,
     onClose
 }) => {
-  const [activeTab, setActiveTab] = useState<'local' | 'library' | 'cloud'>('local');
+  const [activeTab, setActiveTab] = useState<'local' | 'library'>('local');
   
-  // Local DB State
-  const [docs, setDocs] = useState<KnowledgeDoc[]>([]);
-  const [groupedDocs, setGroupedDocs] = useState<GroupedDoc[]>([]);
+  const [vectors, setVectors] = useState<VectorRecord[]>([]);
+  const [groupedVectors, setGroupedVectors] = useState<GroupedVector[]>([]);
   const [filterQuery, setFilterQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   
-  // Library State
   const [savedPacks, setSavedPacks] = useState<LorePack[]>([]);
   const [packName, setPackName] = useState('');
 
-  // Ingestion Queue State
   const [ingestionQueue, setIngestionQueue] = useState<IngestionQueueItem[]>([]);
   const [isQueueProcessing, setIsQueueProcessing] = useState(false);
-  const [ingestionStats, setIngestionStats] = useState({
-      elapsed: 0,
-      threads: 0,
-      totalChunks: 0,
-      totalVectors: 0,
-      speed: 0
-  });
-  const statsTimerRef = useRef<number | null>(null);
-  
-  // Streaming Import State
-  const [isStreamingImport, setIsStreamingImport] = useState(false);
-  const [streamedDocsCount, setStreamedDocsCount] = useState(0);
-  const [lastStreamedNodes, setLastStreamedNodes] = useState<string[]>([]);
+  const [isLoading, setIsLoading] = useState(false); // For single operations like import/purge
 
-  // Cloud Files State
-  const [cloudFiles, setCloudFiles] = useState<CloudFile[]>([]);
-  const [isProcessing, setIsProcessing] = useState(false);
   const [statusMsg, setStatusMsg] = useState<{ text: string, type: 'success' | 'error' | 'info', persistent?: boolean } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
-  // Hidden File Inputs - IMPORTANT: These must be outside conditional rendering
-  // to ensure they are always in the DOM and their onChange events fire reliably.
-  const fileInputRef = useRef<HTMLInputElement>(null); // For general ingestion
-  const cloudFileInputRef = useRef<HTMLInputElement>(null); // For Cloud uploads
-  const importInputRef = useRef<HTMLInputElement>(null); // For "IMPORT LP" in Active Memory tab
-  const libraryImportRef = useRef<HTMLInputElement>(null); // For "IMPORT PACK" in Lore Library tab
-
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const importInputRef = useRef<HTMLInputElement>(null);
 
   const agentHandle = AGENTS.find(a => a.id === currentAgentId)?.handle || currentAgentId;
 
-  const fetchDocs = async () => {
+  const fetchVectors = async () => {
     try {
-      const data = await getDocumentsByAgentId(currentAgentId);
-      setDocs(data);
+      setIsLoading(true);
+      const data = await getVectorsByAgent(agentHandle);
+      setVectors(data);
     } catch (e: any) {
-      console.error("Failed to fetch docs", e);
       showStatus(`Failed to fetch documents: ${e.message}`, 'error', true);
+    } finally {
+      setIsLoading(false);
     }
   };
 
   const fetchSavedPacks = async () => {
-      const packs = await getLorePacksByAgentId(currentAgentId);
-      setSavedPacks(packs);
-  };
-
-  const fetchCloudFiles = async () => {
-    try {
-      setIsProcessing(true);
-      const files = await listCloudFiles();
-      setCloudFiles(files);
-    } catch (e: any) {
-      console.error("Failed to fetch cloud files", e);
-      showStatus(`Cloud List Error: ${e.message}`, 'error', true);
-    } finally {
-      setIsProcessing(false);
-    }
+      setIsLoading(true);
+      try {
+        const packs = await getLorePacksByAgentId(currentAgentId);
+        setSavedPacks(packs);
+      } finally {
+        setIsLoading(false);
+      }
   };
 
   useEffect(() => {
     if (isOpen) {
-      if (activeTab === 'local') fetchDocs();
+      if (activeTab === 'local') fetchVectors();
       if (activeTab === 'library') fetchSavedPacks();
-      if (activeTab === 'cloud') fetchCloudFiles();
       setStatusMsg(null);
     }
   }, [isOpen, currentAgentId, activeTab]);
 
   useEffect(() => {
-    const groups: { [key: string]: { count: number; docs: KnowledgeDoc[] } } = {};
+    const groups: { [key: string]: { count: number; ids: string[]; vecs: VectorRecord[] } } = {};
     
-    docs.forEach(doc => {
-        const groupKey = doc.sourceFile || doc.title.replace(/\s*\((Part \d+)\)$/, '').trim();
-        
-        if (!groups[groupKey]) {
-            groups[groupKey] = { count: 0, docs: [] };
-        }
+    vectors.forEach(vec => {
+        const groupKey = vec.source || 'Unknown Source';
+        if (!groups[groupKey]) groups[groupKey] = { count: 0, ids: [], vecs: [] };
         groups[groupKey].count++;
-        groups[groupKey].docs.push(doc);
+        groups[groupKey].ids.push(vec.id);
+        groups[groupKey].vecs.push(vec);
     });
 
-    const groupedArray = Object.entries(groups).map(([sourceFile, data]) => ({
-        sourceFile,
+    const groupedArray = Object.entries(groups).map(([source, data]) => ({
+        source,
         count: data.count,
-        firstDoc: data.docs[0],
-    })).sort((a,b) => b.firstDoc.timestamp - a.firstDoc.timestamp);
+        ids: data.ids,
+        firstVec: data.vecs[0],
+    })).sort((a,b) => b.firstVec.timestamp - a.firstVec.timestamp);
     
-    setGroupedDocs(groupedArray);
+    setGroupedVectors(groupedArray);
     setCurrentPage(1);
-  }, [docs, filterQuery]);
+  }, [vectors]);
 
-
-  // Stats Timer
+  // Process Ingestion Queue
   useEffect(() => {
-      if (isQueueProcessing) {
-          const startTime = Date.now();
-          statsTimerRef.current = window.setInterval(() => {
-              setIngestionStats(prev => ({
-                  ...prev,
-                  elapsed: Math.floor((Date.now() - startTime) / 1000)
-              }));
-          }, 1000);
-      } else {
-          if (statsTimerRef.current) clearInterval(statsTimerRef.current);
-          setIngestionStats(prev => ({ ...prev, elapsed: 0 })); // Reset or keep? Let's reset on stop
+    const processNext = async () => {
+      if (isQueueProcessing) return;
+      const next = ingestionQueue.find(item => item.status === 'PENDING');
+      if (!next) return;
+
+      setIsQueueProcessing(true);
+      setIngestionQueue(prev => prev.map(i => i.id === next.id ? { ...i, status: 'PROCESSING' } : i));
+
+      try {
+        const apiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY;
+        if (!apiKey) throw new Error("API Key not found.");
+
+        const text = await next.file.text();
+        const savedCount = await IngestionService.ingestText(text, next.file.name, agentHandle, apiKey, (p, t) => {
+             setIngestionQueue(prev => prev.map(i => i.id === next.id ? { ...i, progress: p, total: t } : i));
+        });
+
+        setIngestionQueue(prev => prev.map(i => i.id === next.id ? { ...i, status: 'DONE' } : i));
+        await fetchVectors();
+        onUpdate();
+      } catch (e: any) {
+        setIngestionQueue(prev => prev.map(i => i.id === next.id ? { ...i, status: 'ERROR', errorMsg: e.message } : i));
+      } finally {
+        setIsQueueProcessing(false);
       }
-      return () => { if (statsTimerRef.current) clearInterval(statsTimerRef.current); };
-  }, [isQueueProcessing]);
+    };
+    processNext();
+  }, [ingestionQueue, isQueueProcessing]);
 
   const showStatus = (text: string, type: 'success' | 'error' | 'info', persistent = false) => {
       setStatusMsg({ text, type, persistent });
-      if (!persistent) {
-          setTimeout(() => setStatusMsg(null), 3000);
-      }
+      if (!persistent) setTimeout(() => setStatusMsg(null), 3000);
   };
-
-  const onInputClick = (e: React.MouseEvent<HTMLInputElement>) => { (e.target as HTMLInputElement).value = ''; };
   
-  // Manually trigger the hidden inputs after clearing their value
-  // This ensures the onChange event fires even if the user selects the same file again
   const triggerInput = (ref: React.RefObject<HTMLInputElement>) => {
       if (ref.current) {
           ref.current.value = '';
           ref.current.click();
       }
   };
-
-  const processBatch = async (batch: KnowledgeDoc[], ai: GoogleGenAI | null) => {
-    if (ai) {
-      const docsNeedingEmbed = batch.filter(d => !d.embedding);
-      if (docsNeedingEmbed.length > 0) {
-        try {
-          const batchResult = await ai.models.embedContent({ model: 'text-embedding-004', contents: docsNeedingEmbed.map(d => ({ parts: [{ text: d.content }] })), config: { taskType: 'RETRIEVAL_DOCUMENT' } });
-          batchResult.embeddings?.forEach((e, idx) => { docsNeedingEmbed[idx].embedding = e.values; });
-        } catch (e) { 
-          console.warn("Auto-embed failed for batch, saving without vectors.", e); 
-          // Log specific error for debugging
-          showStatus(`Embedding failed for some documents: ${e instanceof Error ? e.message : String(e)}. Saving without vectors.`, 'error');
-        }
-      }
-    }
-    await bulkAddDocuments(batch);
+  
+  const handleFileIngest = (files: FileList | null) => {
+      if (!files) return;
+      const newItems: IngestionQueueItem[] = Array.from(files).map(file => ({
+          id: crypto.randomUUID(),
+          file,
+          status: 'PENDING',
+          progress: 0,
+          total: 0
+      }));
+      setIngestionQueue(prev => [...prev, ...newItems]);
   };
   
-  const handleExportLorePack = async () => {
-    if (docs.length === 0) {
-        showStatus("No documents to export.", 'error');
-        return;
-    }
-    try {
-        const exportDocs = docs.map(d => ({
-            ...d,
-            embedding: d.embedding ? Array.from(d.embedding) : undefined,
-            numMarkId: d.numMarkId || NumMarkX_GenerateSigil(d.content)
-        }));
-
-        const header = NumMarkX_GenerateHeader(currentAgentId, agentHandle, "Exported via Knowledge Manager");
-        const blob = IngestionService.exportLorePack(header, exportDocs);
-        const filename = IngestionService.buildCanonicalFilename(currentAgentId);
-
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        setTimeout(() => URL.revokeObjectURL(url), 5000);
-
-        showStatus(`Exported ${exportDocs.length} nodes to ${filename}`, 'success');
-    } catch (e: any) {
-        console.error("Export failed", e);
-        showStatus(`Export Failed: ${e.message}`, 'error');
-    }
-  };
-
-  const handleSaveToLibrary = async () => { 
-    if (docs.length === 0) return showStatus("No active memory to bundle.", 'error'); 
-    if (!packName.trim()) return showStatus("Pack Name required.", 'error'); 
-    try { 
-      const header = NumMarkX_GenerateHeader(currentAgentId, agentHandle, packName); 
-      header.name = packName; 
-      const pack: LorePack = { id: header.id, header: header, sacred_archive: docs }; 
-      await saveLorePack(pack); 
-      setPackName(''); 
-      showStatus(`Saved "${packName}" to Library (${docs.length} nodes).`, 'success'); 
-      fetchSavedPacks(); 
-    } catch(e: any) { 
-      showStatus(`Save Failed: ${e.message}`, 'error'); 
-    } 
-  };
-  
-  const handleImportToLibrary = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) {
-      console.log("handleImportToLibrary: No file selected.");
-      return;
-    }
-    console.log(`handleImportToLibrary: Selected file: ${file.name}`);
-
-    setIsProcessing(true);
-    setStatusMsg({ text: `Streaming "${file.name}" to Library...`, type: 'info' });
-    await new Promise(resolve => setTimeout(resolve, 150)); // Small delay for UI update
-    
-    try {
-      if (!file.name.toLowerCase().endsWith('.json')) {
-          throw new Error("Only .json LorePack files can be imported to the Library.");
-      }
-
-      const accumulatedDocs: KnowledgeDoc[] = [];
-      let header: LorePackHeader | undefined;
-      let count = 0;
-      
-      console.log(`handleImportToLibrary: Starting streamLorePack for ${file.name}`);
-      for await (const item of IngestionService.streamLorePack(file)) {
-        const obj = item as any;
-        
-        if (obj && (obj.schema === 'MYTHOS.LOREPACK.v1' || (obj.agentId && obj.handle && obj.version))) {
-          // This is a header object
-          console.log("handleImportToLibrary: Detected LorePack Header:", obj);
-          header = {
-            schema: 'MYTHOS.LOREPACK.v1',
-            id: obj.id || crypto.randomUUID(),
-            agentId: obj.agentId || currentAgentId, // Use existing agentId or current one
-            handle: obj.handle || agentHandle,      // Use existing handle or current one
-            version: obj.version || 1,
-            timestamp: obj.timestamp || Date.now(),
-            description: obj.description,
-            name: obj.name || file.name.replace('.json', '')
-          };
-        } else {
-          // This is a document node
-          const doc = IngestionService.normalizeNode(obj, currentAgentId, count);
-          doc.sourceFile = file.name;
-          accumulatedDocs.push(doc);
-          count++;
-          // console.log(`handleImportToLibrary: Normalized document ${count}: ${doc.title}`); // Verbose logging
-        }
-      }
-
-      if (count === 0) {
-          throw new Error("LorePack file is empty or contains no valid document nodes.");
-      }
-
-      const finalHeader = header || NumMarkX_GenerateHeader(currentAgentId, agentHandle, file.name.replace('.json', ''));
-      if (!finalHeader.name) finalHeader.name = file.name.replace('.json', '');
-
-      const pack: LorePack = { id: finalHeader.id, header: finalHeader, sacred_archive: accumulatedDocs };
-      await saveLorePack(pack);
-      await fetchSavedPacks();
-      showStatus(`Imported "${pack.header.name}" to Library (${count} nodes).`, 'success', true);
-      console.log(`handleImportToLibrary: Successfully imported ${count} nodes to Library.`);
-    } catch (e: any) {
-      console.error("handleImportToLibrary: Error during import", e);
-      showStatus(`Library Import Failed: ${e.message}`, 'error', true);
-      alert(`Library Import Failed: ${e.message}`); // CRITICAL ALERT
-    } finally {
-      setIsProcessing(false);
-      if (libraryImportRef.current) libraryImportRef.current.value = '';
-    }
-  };
-
-  const handleMountPack = async (pack: LorePack) => { 
-    const count = pack.sacred_archive.length; 
-    if (!window.confirm(`MOUNT CARTRIDGE "${pack.header.name}"?\n\nThis will UNMOUNT (delete) current active memory for ${currentAgentId} and load this LorePack (${count} nodes).`)) return; 
-    
-    setIsProcessing(true); 
-    setStatusMsg({ text: "Unmounting previous memory...", type: 'info' }); 
-    
-    try { 
-      await deleteDocumentsByAgentId(currentAgentId); 
-      setStatusMsg({ text: `Mounting "${pack.header.name}"...`, type: 'info' }); 
-      
-      const newDocs = pack.sacred_archive.map(d => ({ 
-        ...d, 
-        id: NumMarkX_GenerateID('LORE'), // Ensure new unique ID
-        agentId: currentAgentId, 
-        timestamp: Date.now(), 
-        sourceFile: pack.header.name 
-      })); 
-      
-      const apiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY; 
-      const ai = apiKey ? new GoogleGenAI({ apiKey }) : null; 
-      const BATCH_SIZE = 50; 
-      
-      for (let i = 0; i < newDocs.length; i += BATCH_SIZE) { 
-        const batch = newDocs.slice(i, i + BATCH_SIZE); 
-        await processBatch(batch, ai); 
-      } 
-      
-      showStatus(`Successfully Mounted "${pack.header.name}" (${newDocs.length} nodes). Active memory replaced.`, 'success', true); 
-      setActiveTab('local'); 
-      await fetchDocs(); 
-      onUpdate(); 
-    } catch (e: any) { 
-      console.error("handleMountPack: Error during mount", e); 
-      showStatus(`Mount Failed: ${e.message}`, 'error', true);
-      alert(`Mount Failed: ${e.message}`); // CRITICAL ALERT
-    } finally { 
-      setIsProcessing(false); 
-    } 
-  };
-  
-  const handleDeletePack = async (id: string) => {
-    const packToDelete = savedPacks.find(p => p.id === id);
-    if (!packToDelete) return;
-
-    const isMounted = docs.some(d => 
-        d.sourceFile === packToDelete.header.name || 
-        d.sourceFile === `${packToDelete.header.name}.json`
-    );
-
-    let confirmMsg = "Delete this saved LorePack permanently?";
-    if (isMounted) {
-        confirmMsg = `WARNING: This LorePack is currently MOUNTED in Active Memory.\n\nDeleting it will also WIPE the Active Memory for ${agentHandle} to ensure consistency.\n\nContinue?`;
-    }
-
-    if (!window.confirm(confirmMsg)) return;
-
-    try {
-        await deleteLorePack(id);
-        
-        if (isMounted) {
-            await deleteDocumentsByAgentId(currentAgentId);
-            await fetchDocs();
-            onUpdate();
-            showStatus("LorePack deleted & Active Memory wiped.", 'success', true);
-        } else {
-            showStatus("LorePack deleted.", 'success');
-        }
-        await fetchSavedPacks();
-    } catch (e: any) {
-        showStatus("Delete failed.", 'error');
-    }
-  };
-  
-  // --- INGESTION QUEUE LOGIC ---
-
-  const addFilesToQueue = (filesList: FileList | null) => {
-      if (!filesList || filesList.length === 0) return;
-      
-      const newItems: IngestionQueueItem[] = [];
-      const skipped: string[] = [];
-
-      Array.from(filesList).forEach(file => {
-          if (ingestionQueue.some(item => item.name === file.name)) {
-              skipped.push(file.name);
-              return;
-          }
-          
-          newItems.push({
-              id: crypto.randomUUID(),
-              file: file,
-              name: file.name,
-              status: 'PENDING',
-              progress: 0,
-              total: 0
-          });
-      });
-
-      if (newItems.length > 0) {
-          setIngestionQueue(prev => [...prev, ...newItems]);
-      }
-      
-      if (skipped.length > 0) {
-          showStatus(`Skipped ${skipped.length} duplicates.`, 'info');
-      }
-  };
-
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-      addFilesToQueue(e.target.files);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-  };
-
   const handleDrop = (e: React.DragEvent) => {
       e.preventDefault();
       e.stopPropagation();
       setIsDragging(false);
-      addFilesToQueue(e.dataTransfer.files);
+      handleFileIngest(e.dataTransfer.files);
   };
 
-  const removeQueueItem = (id: string) => {
-      setIngestionQueue(prev => prev.filter(item => item.id !== id));
-  };
-
-  const startIngestion = async () => {
-      const apiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY;
-      if (!apiKey) {
-          showStatus("API Key Missing. Configure in Settings.", 'error', true);
-          return;
-      }
-
-      const pendingItems = ingestionQueue.filter(i => i.status === 'PENDING' && i.file);
-      if (pendingItems.length === 0) {
-          showStatus("No pending files to ingest.", 'info');
-          return;
-      }
-
-      const filesToProcess = pendingItems.map(i => i.file!);
-      await processQueue(apiKey, filesToProcess);
-  };
-
-  const processQueue = async (apiKey: string, files: File[]) => {
-      setIsQueueProcessing(true);
-      setIngestionStats(prev => ({ ...prev, threads: 3 })); 
-
-      const poolLimit = 3;
-      const executing: Promise<void>[] = [];
-      const promises: Promise<void>[] = [];
-
-      for (const file of files) {
-          const p = (async () => {
-              setIngestionQueue(prev => prev.map((qItem: IngestionQueueItem) => qItem.name === file.name ? { ...qItem, status: 'PROCESSING' } : qItem));
-              
-              await new Promise(r => setTimeout(r, 10));
-
-              try {
-                  let processedCount = 0;
-                  if (file.name.toLowerCase().endsWith('.json')) {
-                      try {
-                          const batch: KnowledgeDoc[] = [];
-                          const BATCH_SIZE = 20;
-                          let count = 0;
-                          for await (const loreNode of IngestionService.streamLorePack(file)) {
-                              const obj = loreNode as any;
-                              if (!obj.schema && !obj.agentId) { // Heuristic to detect doc vs header
-                                  const doc = IngestionService.normalizeNode(obj, currentAgentId, count++);
-                                  doc.id = NumMarkX_GenerateID('INGEST');
-                                  doc.tags = ['AUTO_INGEST', 'JSON_IMPORT'];
-                                  doc.sourceFile = file.name;
-                                  batch.push(doc);
-                                  if (batch.length >= BATCH_SIZE) {
-                                      await bulkAddDocuments(batch);
-                                      setIngestionStats(prev => ({ ...prev, totalChunks: prev.totalChunks + batch.length, speed: Math.round((prev.totalChunks + batch.length) / (Math.max(1, prev.elapsed))) }));
-                                      setIngestionQueue(prev => prev.map((qItem: IngestionQueueItem) => qItem.name === file.name ? { ...qItem, progress: count, total: count + 50 } : qItem ));
-                                      batch.length = 0; 
-                                  }
-                              }
-                          }
-                          if (batch.length > 0) {
-                              await bulkAddDocuments(batch);
-                              setIngestionStats(prev => ({ ...prev, totalChunks: prev.totalChunks + batch.length }));
-                          }
-                          processedCount = count;
-                      } catch (e: any) {
-                          console.warn("JSON Fallback processing failed, attempting plain text ingestion.", e);
-                          // Fallback to plain text ingestion if JSON stream fails
-                          const text = await file.text();
-                          processedCount = await IngestionService.ingestText(text, file.name, currentAgentId, apiKey, (c, t) => {
-                              setIngestionQueue(prev => prev.map((qItem: IngestionQueueItem) => qItem.name === file.name ? { ...qItem, progress: c, total: t } : qItem));
-                          });
-                      }
-                  } else {
-                      const text = await file.text();
-                      processedCount = await IngestionService.ingestText(text, file.name, currentAgentId, apiKey, (c, t) => {
-                          setIngestionQueue(prev => prev.map((qItem: IngestionQueueItem) => qItem.name === file.name ? { ...qItem, progress: c, total: t } : qItem));
-                          setIngestionStats(prev => ({ ...prev, totalChunks: prev.totalChunks + 1, speed: Math.round((prev.totalChunks + 1) / (Math.max(1, prev.elapsed))) }));
-                      });
-                  }
-                  
-                  setIngestionQueue(prev => prev.map((qItem: IngestionQueueItem) => qItem.name === file.name ? { ...qItem, status: 'DONE', progress: processedCount, total: processedCount } : qItem));
-
-              } catch (err: any) {
-                  console.error("Upload failed", file.name, err);
-                  setIngestionQueue(prev => prev.map((qItem: IngestionQueueItem) => qItem.name === file.name ? { ...qItem, status: 'ERROR', errorMsg: err.message } : qItem));
-              }
-          })();
-
-          promises.push(p);
-          const e = p.then(() => { executing.splice(executing.indexOf(e), 1); });
-          executing.push(e as any);
-          if (executing.length >= poolLimit) {
-              await Promise.race(executing);
-          }
-      }
-      
-      await Promise.all(promises);
-
-      await fetchDocs();
-      onUpdate();
-      setIsQueueProcessing(false);
-      setIngestionStats(prev => ({ ...prev, threads: 0 }));
-  };
-
-  const handleSelectLorePack = async (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (!file) {
-          console.log("handleSelectLorePack: No file selected.");
-          return;
-      }
-      console.log(`handleSelectLorePack: Selected file: ${file.name}`);
-
-      const shouldProceed = window.confirm(`Importing "${file.name}".\n\nDo you want to REPLACE the current active memory for ${agentHandle} with this pack?\n\n(Cancel to abort)`);
-      
-      if (!shouldProceed) {
-          console.log("handleSelectLorePack: User cancelled import.");
-          if(importInputRef.current) importInputRef.current.value = '';
-          return;
-      }
-
-      setIsProcessing(true);
-      setIsStreamingImport(true);
-      setStreamedDocsCount(0);
-      setLastStreamedNodes([]);
-      setStatusMsg({ text: `Reading LorePack: "${file.name}"...`, type: 'info' });
-      console.log("handleSelectLorePack: Starting LorePack stream processing.");
-      
-      await new Promise(resolve => setTimeout(resolve, 150));
-      
-      try {
-          if (!file.name.toLowerCase().endsWith('.json')) {
-              throw new Error("Only .json LorePack files can be imported into Active Memory.");
-          }
-
-          const newDocs: KnowledgeDoc[] = [];
-          let count = 0;
-          let headerFound = false;
-
-          setStatusMsg({ text: `Validating LorePack structure for "${file.name}"...`, type: 'info' });
-
-          for await (const item of IngestionService.streamLorePack(file)) {
-              const obj = item as any;
-              
-              if (obj && (obj.schema === 'MYTHOS.LOREPACK.v1' || (obj.agentId && obj.handle && obj.version))) {
-                  // This is a header object, log it but don't add to docs
-                  console.log("handleSelectLorePack: Detected LorePack Header:", obj);
-                  headerFound = true;
-              } else {
-                  // This is a document node
-                  const doc = IngestionService.normalizeNode(obj, currentAgentId, count);
-                  doc.id = NumMarkX_GenerateID('LORE');
-                  doc.sourceFile = file.name;
-                  newDocs.push(doc);
-                  count++;
-                  setStreamedDocsCount(count);
-                  setLastStreamedNodes(prev => [doc.title, ...prev].slice(0, 3));
-              }
-          }
-
-          if (newDocs.length === 0) {
-              throw new Error("LorePack file is empty or contains no valid document nodes.");
-          }
-          console.log(`handleSelectLorePack: Finished reading ${newDocs.length} documents from LorePack.`);
-
-          setStatusMsg({ text: `Deleting ${docs.length} old documents for ${agentHandle}...`, type: 'info' });
-          await deleteDocumentsByAgentId(currentAgentId);
-          console.log(`handleSelectLorePack: Deleted existing documents for ${currentAgentId}.`);
-
-
-          setStatusMsg({ text: `Importing ${newDocs.length} new documents from "${file.name}"...`, type: 'info' });
-          const BATCH_SIZE = 50;
-          const apiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY;
-          const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
-          
-          for (let i = 0; i < newDocs.length; i += BATCH_SIZE) {
-              const batch = newDocs.slice(i, i + BATCH_SIZE);
-              await processBatch(batch, ai);
-          }
-          
-          await fetchDocs();
-          onUpdate();
-          showStatus(`LorePack "${file.name}" Mounted. ${count} nodes loaded.`, 'success', true);
-          console.log(`handleSelectLorePack: Successfully imported and mounted ${count} new nodes.`);
-
-      } catch (err: any) {
-          console.error("handleSelectLorePack: Error during import process", err);
-          showStatus(`LorePack Import Failed: ${err.message}`, 'error', true);
-          alert(`LorePack Import Failed: ${err.message}`); // Provide an alert for critical errors
-      } finally {
-          setIsProcessing(false);
-          setIsStreamingImport(false);
-          setLastStreamedNodes([]);
-          if(importInputRef.current) importInputRef.current.value = '';
-      }
-  };
-
-  const handlePurgeAll = async () => { if (!window.confirm(`WARNING: DELETE ALL DOCUMENTS for ${agentHandle}?`)) return; setIsProcessing(true); try { await deleteDocumentsByAgentId(currentAgentId); setDocs([]); await fetchDocs(); onUpdate(); showStatus("Database purged.", 'success'); } catch (e: any) { console.error(e); showStatus(`Failed to purge database: ${e.message}`, 'error'); } finally { setIsProcessing(false); } };
-  
-  const handleDeleteGroup = async (sourceFile: string) => {
-    if (!window.confirm(`Delete all nodes from "${sourceFile}"?`)) return;
-
-    const docsToDelete = docs.filter(doc => {
-        const groupKey = doc.sourceFile || doc.title.replace(/\s*\((Part \d+)\)$/, '').trim();
-        return groupKey === sourceFile;
-    });
-    
-    setIsProcessing(true);
+  const handleExportLorePack = async () => {
     try {
-        const idsToDelete = docsToDelete.map(d => d.id);
-        await bulkDeleteDocuments(idsToDelete);
-        
-        await fetchDocs();
-        onUpdate();
-        showStatus(`Deleted ${docsToDelete.length} nodes for ${sourceFile}.`, 'success');
+      await IngestionService.exportLorePack(agentHandle);
+      showStatus('LorePack export started.', 'success');
     } catch (e: any) {
-        showStatus(`Failed to delete nodes: ${e.message}`, 'error');
+      showStatus(`Export Failed: ${e.message}`, 'error');
+    }
+  };
+  
+  const handleImportLorePack = async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+
+      const shouldProceed = window.confirm(`Importing "${file.name}". This will ADD records to the current memory for ${agentHandle}. Records with duplicate IDs will be overwritten. Continue?`);
+      if (!shouldProceed) return;
+
+      setIsLoading(true);
+      showStatus(`Merging "${file.name}"...`, 'info', true);
+      try {
+          const count = await IngestionService.importLorePack(file, agentHandle);
+          await fetchVectors();
+          onUpdate();
+          showStatus(`Merge complete. ${count} records added/updated.`, 'success');
+      } catch (err: any) {
+          showStatus(`Import Failed: ${err.message}`, 'error', true);
+      } finally {
+          setIsLoading(false);
+          if (importInputRef.current) importInputRef.current.value = '';
+      }
+  };
+
+  const handlePurgeAll = async () => {
+    if (!window.confirm(`WARNING: DELETE ALL vectors for ${agentHandle}?`)) return;
+    setIsLoading(true);
+    try {
+        await deleteVectorsByAgent(agentHandle);
+        await fetchVectors();
+        onUpdate();
+        showStatus("Database purged.", 'success');
+    } catch (e: any) {
+        showStatus(`Failed to purge: ${e.message}`, 'error');
     } finally {
-        setIsProcessing(false);
+        setIsLoading(false);
     }
   };
 
-  const handleCloudUpload = async (e: React.ChangeEvent<HTMLInputElement>) => { 
-    const files = e.target.files; 
-    if (!files || files.length === 0) return; 
-    setIsProcessing(true); 
-    setStatusMsg({ text: "Uploading to Google Cloud...", type: 'info' }); 
-    try { 
-      for (let i = 0; i < files.length; i++) { 
-        await uploadCloudFile(files[i]); 
-      } 
-      await fetchCloudFiles(); 
-      showStatus("Files uploaded to Cloud.", 'success'); 
-      onUpdate(); 
-    } catch (err: any) { 
-      console.error("Cloud Upload Failed:", err); 
-      showStatus(`Cloud Upload Failed: ${err.message || 'Unknown error.'}`, 'error', true); 
-    } finally { 
-      setIsProcessing(false); 
-      if (cloudFileInputRef.current) cloudFileInputRef.current.value = ''; 
-    } 
+  const handleDeleteSource = async (ids: string[], sourceName: string) => {
+      if (!window.confirm(`Delete all ${ids.length} vectors from source "${sourceName}"?`)) return;
+      setIsLoading(true);
+      try {
+          await bulkDeleteVectors(ids);
+          await fetchVectors();
+          onUpdate();
+          showStatus(`Deleted source: ${sourceName}`, 'success');
+      } catch (e: any) {
+          showStatus(`Failed to delete: ${e.message}`, 'error');
+      } finally {
+          setIsLoading(false);
+      }
   };
 
-  const handleDeleteCloudFile = async (name: string) => { 
-    if (!window.confirm("Delete this file from Google Cloud?")) return; 
-    setIsProcessing(true); 
-    setStatusMsg({ text: `Deleting "${name}" from Cloud...`, type: 'info' });
-    try { 
-      await deleteCloudFile(name); 
-      await fetchCloudFiles(); 
-      onUpdate(); 
-      showStatus(`File "${name}" deleted from Cloud.`, 'success'); 
-    } catch (err: any) { 
-      console.error("Failed to delete cloud file:", name, err);
-      // Ensure specific error message is passed to showStatus
-      showStatus(`Failed to delete file "${name}": ${err.message || 'Unknown API error.'}`, 'error', true); 
-      alert(`Failed to delete file "${name}": ${err.message || 'Unknown API error.'}`); // CRITICAL ALERT
-    } finally { 
-      setIsProcessing(false); 
-    } 
+  const handleSaveToLibrary = async () => {
+      if (!packName.trim()) { alert("Please enter a name for this LorePack."); return; }
+      if (vectors.length === 0) { alert("Cannot save an empty memory set."); return; }
+      
+      const header = NumMarkX_GenerateHeader(currentAgentId, agentHandle, `Saved snapshot of ${agentHandle}'s memory.`);
+      const pack: LorePack = {
+          id: crypto.randomUUID(),
+          header: { ...header, name: packName.trim() },
+          sacred_archive: vectors
+      };
+
+      setIsLoading(true);
+      try {
+          await saveLorePack(pack);
+          setPackName('');
+          await fetchSavedPacks();
+          showStatus(`Saved "${pack.header.name}" to library.`, 'success');
+      } catch (e: any) {
+          showStatus(`Failed to save: ${e.message}`, 'error');
+      } finally {
+          setIsLoading(false);
+      }
+  };
+  
+  const handleLoadFromLibrary = async (pack: LorePack) => {
+      if (!window.confirm(`RESTORE from "${pack.header.name}"? This will REPLACE all current active memory for ${agentHandle}.`)) return;
+      
+      setIsLoading(true);
+      try {
+          await deleteVectorsByAgent(agentHandle);
+          await bulkPutVectors(pack.sacred_archive);
+          await fetchVectors(); // To update the local memory view if user switches back
+          onUpdate();
+          showStatus(`Restored memory from "${pack.header.name}".`, 'success');
+      } catch (e: any) {
+          showStatus(`Failed to restore: ${e.message}`, 'error');
+      } finally {
+          setIsLoading(false);
+      }
+  };
+  
+  const handleDeleteFromLibrary = async (id: string) => {
+      if (!window.confirm("Delete this saved LorePack from the library?")) return;
+      setIsLoading(true);
+      try {
+          await deleteLorePack(id);
+          await fetchSavedPacks();
+      } catch (e: any) {
+          showStatus(`Failed to delete: ${e.message}`, 'error');
+      } finally {
+        setIsLoading(false);
+      }
   };
 
-  const filteredGroupedDocs = groupedDocs.filter(group => 
-    group.sourceFile.toLowerCase().includes(filterQuery.toLowerCase())
+  const filteredGroupedVectors = groupedVectors.filter(group => 
+    group.source.toLowerCase().includes(filterQuery.toLowerCase())
   );
-  const totalPages = Math.ceil(filteredGroupedDocs.length / ITEMS_PER_PAGE);
-  const paginatedGroupedDocs = filteredGroupedDocs.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
-
-  const formatTime = (sec: number) => {
-      const m = Math.floor(sec / 60).toString().padStart(2, '0');
-      const s = (sec % 60).toString().padStart(2, '0');
-      return `${m}:${s}`;
-  };
+  const totalPages = Math.ceil(filteredGroupedVectors.length / ITEMS_PER_PAGE);
+  const paginatedGroupedVectors = filteredGroupedVectors.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
 
   if (!isOpen) return null;
 
+  const TabButton: React.FC<{tabId: string, children: React.ReactNode}> = ({tabId, children}) => (
+      <button 
+          onClick={() => setActiveTab(tabId as any)}
+          style={{
+              background: 'none',
+              border: 'none',
+              borderBottom: activeTab === tabId ? '2px solid #4ade80' : '2px solid transparent',
+              color: activeTab === tabId ? '#4ade80' : '#888',
+              padding: '0.75rem 1rem',
+              cursor: 'pointer',
+              fontWeight: 'bold',
+              fontSize: '0.8rem'
+          }}
+      >{children}</button>
+  );
+
   return (
     <div className="modal-overlay">
-      {/* HIDDEN FILE INPUTS - ALWAYS IN DOM FOR RELIABILITY */}
-      <input 
-          type="file" 
-          accept=".txt,.md,.json" 
-          onChange={handleFileUpload} 
-          onClick={onInputClick}
-          ref={fileInputRef}
-          className="hidden" 
-          multiple
-      />
-      <input 
-          type="file" 
-          accept=".json" 
-          onChange={handleSelectLorePack} 
-          ref={importInputRef} 
-          className="hidden" 
-      />
-      <input 
-          type="file" 
-          accept=".json" 
-          onChange={handleImportToLibrary} 
-          onClick={onInputClick} 
-          ref={libraryImportRef} 
-          className="hidden" 
-      />
-      <input 
-          type="file" 
-          onChange={handleCloudUpload} 
-          onClick={onInputClick} 
-          ref={cloudFileInputRef} 
-          className="hidden" 
-          multiple 
-      />
+      <input type="file" accept=".jsonl" onChange={handleImportLorePack} ref={importInputRef} className="hidden" />
+      <input type="file" multiple ref={fileInputRef} className="hidden" onChange={(e) => handleFileIngest(e.target.files)} />
 
-      <div className="modal-content animate-slide-in-right">
-        
+      <div className="modal-content animate-slide-in-right large">
         <div className="modal-header-area">
-          <div className="flex-group">
-             <span className="modal-section-title" style={{ color: '#4ade80' }}>KNOWLEDGE MANAGER</span>
-          </div>
-          <button onClick={onClose} className="close-btn" title="Close Manager">
+          <span className="modal-section-title" style={{ color: '#4ade80' }}>KNOWLEDGE MANAGER: {agentHandle.toUpperCase()}</span>
+          <button onClick={onClose} className="close-btn" title="Close">
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         </div>
+        
+        <div style={{ padding: '0 1rem', borderBottom: '1px solid #333', flexShrink: 0, display: 'flex' }}>
+            <TabButton tabId="local">LOCAL MEMORY ({vectors.length})</TabButton>
+            <TabButton tabId="library">LOREPACK LIBRARY ({savedPacks.length})</TabButton>
+        </div>
 
-        <>
-            <div style={{ display: 'flex', borderBottom: '1px solid #333', padding: '0 1rem', background: '#0a0a0a' }}>
-                <button onClick={() => setActiveTab('local')} style={{ padding: '0.75rem 1rem', background: 'none', border: 'none', borderBottom: activeTab === 'local' ? '2px solid #4ade80' : 'none', color: activeTab === 'local' ? '#eee' : '#666', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.75rem', flex: 1 }}>ACTIVE MEMORY</button>
-                <button onClick={() => setActiveTab('library')} style={{ padding: '0.75rem 1rem', background: 'none', border: 'none', borderBottom: activeTab === 'library' ? '2px solid #facc15' : 'none', color: activeTab === 'library' ? '#eee' : '#666', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.75rem', flex: 1 }}>LORE LIBRARY</button>
-                <button onClick={() => setActiveTab('cloud')} style={{ padding: '0.75rem 1rem', background: 'none', border: 'none', borderBottom: activeTab === 'cloud' ? '2px solid #a78bfa' : 'none', color: activeTab === 'cloud' ? '#eee' : '#666', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.75rem', flex: 1 }}>CLOUD CONTEXT</button>
-            </div>
+        <div className="modal-body-area">
+          {statusMsg && <div className={`status-banner status-${statusMsg.type}`}>{statusMsg.text}</div>}
 
-            <div className="modal-body-area">
-            
-            {statusMsg && (
-                <div className={`status-banner status-${statusMsg.type}`} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ flex: 1, textAlign: 'center' }}>{statusMsg.text}</span>
-                    {statusMsg.persistent && (
-                        <button 
-                            onClick={() => setStatusMsg(null)} 
-                            style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', fontWeight: 'bold', fontSize: '1.2rem' }}
-                        >
-                            ×
-                        </button>
-                    )}
-                </div>
-            )}
-            
-            {isStreamingImport && (
-                <div className="section-panel" style={{ marginBottom: '1rem', padding: '1rem', textAlign: 'center', borderColor: '#4ade80' }}>
-                    <div style={{ color: '#4ade80', fontWeight: 'bold', marginBottom: '0.5rem' }}>STREAMING IMPORT...</div>
-                    <div style={{ fontSize: '0.8rem', color: '#ccc' }}>Processed {streamedDocsCount} nodes</div>
-                    {lastStreamedNodes.length > 0 && (
-                        <div style={{ fontSize: '0.7rem', color: '#666', marginTop: '0.5rem', textAlign: 'left', paddingLeft: '1rem', borderTop: '1px dashed #333', paddingTop: '0.5rem' }}>
-                            {lastStreamedNodes.map((title, i) => <div key={i} style={{ opacity: 1 - i * 0.25, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{title}</div>)}
+          {activeTab === 'local' && (
+              <>
+                  <div className="flex-col">
+                      <label 
+                          className={`btn-file-input ${isDragging ? 'active-green' : ''}`}
+                          onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                          onDragLeave={(e) => { e.preventDefault(); setIsDragging(false); }}
+                          onDrop={handleDrop}
+                          title="Click or Drag files to ingest"
+                      >
+                         DROP FILES TO INGEST (.txt, .md, etc)
+                      </label>
+                      
+                      {ingestionQueue.length > 0 && (
+                          <div className="queue-panel">
+                              {ingestionQueue.map(item => (
+                                  <div key={item.id} className="queue-item">
+                                      <span style={{flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{item.file.name}</span>
+                                      {item.status === 'PROCESSING' && item.total > 0 && <span style={{fontSize:'0.7rem', color:'#888'}}>{item.progress}/{item.total}</span>}
+                                      <span className={`queue-status ${item.status}`}>{item.status}</span>
+                                  </div>
+                              ))}
+                          </div>
+                      )}
+                  </div>
+                  <div className="flex-col">
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div className="flex-group">
+                            <span className="section-header-title">STORED VECTORS</span>
+                            {isLoading && <div className="spinner" style={{width:'1rem', height:'1rem'}}></div>}
                         </div>
-                    )}
-                    <div className="spinner" style={{ margin: '1rem auto' }}></div>
-                </div>
-            )}
-
-            {activeTab === 'local' && (
-                <>
-                    <div className="flex-col">
-                        <span className="section-header-title" style={{color: '#4ade80'}}>INGEST ({agentHandle})</span>
-                        <label 
-                            className={`btn-file-input ${isDragging ? 'active-green' : ''}`} 
-                            title="Upload text or code files for RAG"
-                            style={{ borderColor: isDragging ? '#4ade80' : '#333' }}
-                            onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
-                            onDragLeave={(e) => { e.preventDefault(); setIsDragging(false); }}
-                            onDrop={handleDrop}
-                            onClick={() => triggerInput(fileInputRef)} // Use the ref for the file input
-                        >
-                        {/* Hidden input moved to top-level */}
-                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem' }}>
-                            <span style={{ fontSize: '0.8rem', fontWeight: 'bold', color: isDragging ? '#4ade80' : '#a3a3a3' }}>
-                            {isQueueProcessing ? 'PROCESSING BATCH...' : (isDragging ? 'RELEASE TO QUEUE' : 'DROP FILES TO STAGE')}
-                            </span>
-                            <span style={{ fontSize: '0.7rem', color: '#666' }}>Smart Recursive Chunking</span>
+                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                          <button onClick={handleExportLorePack} disabled={isLoading} className="btn btn-accent btn-xs" title="Export as .jsonl">EXPORT LP</button>
+                          <button onClick={() => triggerInput(importInputRef)} disabled={isLoading} className="btn btn-accent btn-xs" title="Import a .jsonl LorePack (Additive Merge)">IMPORT LP</button>
+                          <button onClick={handlePurgeAll} disabled={isLoading} className="btn btn-danger btn-xs">PURGE ALL</button>
                         </div>
-                        </label>
-                    </div>
-
-                    {ingestionQueue.length > 0 && (
-                        <div className="flex-col">
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <span className="section-header-title">{isQueueProcessing ? 'INGESTION QUEUE' : 'STAGED FILES'} ({ingestionQueue.length})</span>
-                                {!isQueueProcessing && ingestionQueue.some(i => i.status === 'PENDING') && (
-                                    <button 
-                                        onClick={startIngestion} 
-                                        className="btn btn-xs btn-primary"
-                                        style={{ borderColor: '#4ade80', color: '#4ade80' }}
-                                    >
-                                        START INGESTION ▶
-                                    </button>
-                                )}
-                            </div>
-                            <div className="queue-panel">
-                                {ingestionQueue.map(item => (
-                                    <div key={item.id} className="queue-item">
-                                        <div style={{ flex: 1, marginRight: '10px' }}>
-                                            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                                                <span style={{color:'#eee'}}>{item.name}</span>
-                                                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                                                    <span className={`queue-status ${item.status}`}>{item.status}</span>
-                                                    {item.status === 'PENDING' && !isQueueProcessing && (
-                                                        <button 
-                                                            onClick={() => removeQueueItem(item.id)}
-                                                            style={{ color: '#f87171', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 'bold' }}
-                                                            title="Remove from queue"
-                                                        >
-                                                            ×
-                                                        </button>
-                                                    )}
-                                                </div>
-                                            </div>
-                                            {item.status === 'PROCESSING' && (
-                                                <div className="progress-bar-container">
-                                                    <div className="progress-bar-fill" style={{ width: `${item.total > 0 ? (item.progress / item.total) * 100 : 0}%` }}></div>
-                                                </div>
-                                            )}
-                                            {item.status === 'ERROR' && (
-                                                <div style={{color: '#f87171', fontSize: '0.65rem', marginTop: '2px'}}>{item.errorMsg}</div>
-                                            )}
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-
-                    {isQueueProcessing && (
-                        <div className="stats-dashboard">
-                            <div className="stat-item"><span className="stat-label">ELAPSED</span><span className="stat-value active">{formatTime(ingestionStats.elapsed)}</span></div>
-                            <div className="stat-item"><span className="stat-label">THREADS</span><span className="stat-value">{ingestionStats.threads}</span></div>
-                            <div className="stat-item"><span className="stat-label">CHUNKS</span><span className="stat-value">{ingestionStats.totalChunks}</span></div>
-                            <div className="stat-item"><span className="stat-label">VECTORS</span><span className="stat-value">{ingestionStats.totalVectors}</span></div>
-                            <div className="stat-item"><span className="stat-label">SPEED</span><span className="stat-value">{ingestionStats.speed}/s</span></div>
-                        </div>
-                    )}
-
-                    <div className="section-panel" style={{ padding: '0.75rem', borderColor: '#facc15', borderStyle: 'dashed' }}>
-                        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                            <input 
-                                className="form-input" 
-                                placeholder="Bundle Name (e.g. Project Apollo)" 
-                                value={packName}
-                                onChange={e => setPackName(e.target.value)}
-                                style={{ fontSize: '0.8rem' }}
-                            />
-                            <button onClick={handleSaveToLibrary} className="btn btn-secondary" style={{ color: '#facc15', borderColor: '#facc15' }} title="Bundle current active memory into a reusable LorePack">SAVE TO LIB</button>
-                        </div>
-                    </div>
-
-                    <div className="flex-col">
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
-                            <span className="section-header-title">STORED ({docs.length})</span>
-                            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                                <button onClick={handleExportLorePack} className="btn btn-accent" style={{ fontSize: '0.65rem' }}>EXPORT LP</button>
-                                {/* REFACTORED IMPORT BUTTON FOR RELIABILITY */}
-                                <button 
-                                    onClick={() => triggerInput(importInputRef)} 
-                                    className="btn btn-accent" 
-                                    style={{ fontSize: '0.65rem' }}
-                                    title="Import a .json LorePack file"
-                                >
-                                    IMPORT LP
-                                </button>
-                                {/* Hidden input moved to top-level */}
-                                <button onClick={handlePurgeAll} className="btn btn-danger" style={{ fontSize: '0.65rem' }}>PURGE ALL</button>
-                            </div>
-                        </div>
-                        <input type="text" placeholder="Filter documents..." value={filterQuery} onChange={(e) => setFilterQuery(e.target.value)} className="form-input" />
-                        
-                        <div className="flex-col" style={{ gap: '0.5rem' }}>
-                            {paginatedGroupedDocs.map(group => (
-                                <div key={group.firstDoc.id} className="section-panel" style={{ padding: '0.75rem' }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', overflow: 'hidden' }}>
-                                            <FileIcon typeStr={group.sourceFile} />
-                                            <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                                                <span style={{ fontWeight: 'bold', fontSize: '0.75rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: '#eee' }}>{group.sourceFile}</span>
-                                                <span style={{ fontSize: '0.7rem', color: '#4ade80' }}>{group.count} nodes stored</span>
-                                            </div>
-                                        </div>
-                                        <button onClick={() => handleDeleteGroup(group.sourceFile)} style={{ background: 'none', border: 'none', color: '#666', marginLeft: '0.5rem', cursor: 'pointer', fontSize: '1.2rem' }}>×</button>
-                                    </div>
-                                    <p style={{ color: '#888', fontSize: '0.7rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginTop: '0.25rem', paddingLeft: 'calc(20px + 0.75rem)' }}>{group.firstDoc.content}</p>
-                                </div>
-                            ))}
-                        </div>
-                        
-                        {totalPages > 1 && (
-                            <div style={{ display: 'flex', justifyContent: 'center', gap: '0.5rem', marginTop: '0.5rem' }}>
-                                <button onClick={() => setCurrentPage(p => Math.max(1, p-1))} className="btn btn-secondary" disabled={currentPage === 1}>&lt;</button>
-                                <span style={{ fontSize: '0.75rem', alignSelf: 'center', color: '#666' }}>PAGE {currentPage} / {totalPages}</span>
-                                <button onClick={() => setCurrentPage(p => Math.min(totalPages, p+1))} className="btn btn-secondary" disabled={currentPage === totalPages}>&gt;</button>
-                            </div>
-                        )}
-                    </div>
-                </>
-            )}
-
-            {activeTab === 'library' && (
-                <div className="flex-col">
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span className="section-header-title" style={{color: '#facc15'}}>LORE LIBRARY ({savedPacks.length})</span>
-                        <label className="btn btn-accent btn-xs" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}
-                            onClick={() => triggerInput(libraryImportRef)} // Use the ref for the library input
-                        >
-                            IMPORT PACK
-                            {/* Hidden input moved to top-level */}
-                        </label>
-                    </div>
-                    {savedPacks.length === 0 ? <div className="empty-state" style={{ padding: '2rem' }}>NO SAVED PACKS</div> : savedPacks.map(pack => (
-                        <div key={pack.id} className="section-panel" style={{ padding: '0.75rem' }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-                                <div>
-                                    <div style={{ fontWeight: 'bold', color: '#facc15' }}>{pack.header.name || pack.header.handle}</div>
-                                    <div style={{ fontSize: '0.65rem', color: '#666' }}>{new Date(pack.header.timestamp).toLocaleString()} • {pack.sacred_archive.length} Docs</div>
-                                </div>
-                                <button onClick={() => handleDeletePack(pack.id)} style={{ color: '#f87171', background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem' }}>×</button>
-                            </div>
-                            <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
-                                <button onClick={() => handleMountPack(pack)} className="btn btn-secondary btn-xs" style={{ flex: 1, borderColor: '#facc15', color: '#facc15', fontWeight: 'bold' }}>MOUNT CARTRIDGE</button>
-                            </div>
-                        </div>
-                    ))}
-                </div>
-            )}
-
-            {activeTab === 'cloud' && (
-                <>
-                    <div className="flex-col">
-                        <span className="section-header-title" style={{ color: '#a78bfa' }}>UPLOAD TO GOOGLE CLOUD</span>
-                        <p style={{ fontSize: '0.75rem', color: '#888', marginBottom: '0.5rem' }}>
-                            Files uploaded here are stored in your Google Cloud project for Gemini's 2M context window. They persist across sessions and are separate from local Active Memory.
-                        </p>
-                        <label className="btn-file-input purple" style={{ borderColor: '#a78bfa', color: '#a78bfa', background: 'rgba(167, 139, 250, 0.05)' }}
-                            onClick={() => triggerInput(cloudFileInputRef)} // Use the ref for the cloud input
-                        >
-                            {/* Hidden input moved to top-level */}
-                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem' }}>
-                                <span style={{ fontSize: '0.8rem', fontWeight: 'bold' }}>{isProcessing ? 'UPLOADING...' : 'DROP LARGE FILES'}</span>
-                                <span style={{ fontSize: '0.7rem', color: '#a78bfa' }}>Supports 2M+ Context Window</span>
-                            </div>
-                        </label>
-                    </div>
-                    <div className="flex-col">
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <span className="section-header-title">CLOUD FILES ({cloudFiles.length})</span>
-                            <button onClick={fetchCloudFiles} className="btn btn-secondary" style={{ fontSize: '0.65rem', padding: '0 0.5rem' }} disabled={isProcessing}>REFRESH</button>
-                        </div>
-                        {cloudFiles.length === 0 ? <div className="section-panel" style={{ textAlign: 'center', padding: '2rem' }}><p style={{ color: '#666', fontSize: '0.75rem' }}>NO CLOUD FILES FOUND</p></div> : cloudFiles.map(file => (
-                            <div key={file.name} className="section-panel" style={{ padding: '0.75rem', borderColor: file.state === 'ACTIVE' ? '#a78bfa' : '#333' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flex: 1 }}>
-                                        <FileIcon typeStr={file.mimeType} />
-                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                                            <span style={{ fontWeight: 'bold', fontSize: '0.75rem', color: '#eee' }}>{file.displayName}</span>
-                                            <span style={{ fontSize: '0.65rem', color: '#666', fontFamily: 'monospace' }}>{(parseInt(file.sizeBytes) / 1024 / 1024).toFixed(2)} MB • {file.state}</span>
-                                        </div>
-                                    </div>
-                                    <button onClick={() => handleDeleteCloudFile(file.name)} style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', marginLeft: '0.5rem', fontSize: '1.2rem' }}>×</button>
-                                </div>
-                            </div>
+                      </div>
+                      <input type="text" placeholder="Filter by source..." value={filterQuery} onChange={(e) => setFilterQuery(e.target.value)} className="form-input" />
+                      
+                      {paginatedGroupedVectors.length === 0 && !isLoading && <div className="empty-state">NO VECTORS FOUND</div>}
+                      
+                      <div className="flex-col" style={{ gap: '0.5rem' }}>
+                        {paginatedGroupedVectors.map(group => (
+                          <div key={group.firstVec.id} className="section-panel" style={{ padding: '0.75rem' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                  <span style={{ fontWeight: 'bold', fontSize: '0.75rem', color: '#eee', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{group.source}</span>
+                                  <div className="flex-group">
+                                    <span style={{ fontSize: '0.7rem', color: '#4ade80' }}>{group.count} nodes</span>
+                                    <button onClick={() => handleDeleteSource(group.ids, group.source)} disabled={isLoading} className="btn-ghost" style={{color:'#f87171', fontSize:'1rem'}} title="Delete all nodes from this source">×</button>
+                                  </div>
+                              </div>
+                          </div>
                         ))}
-                    </div>
-                </>
-            )}
-            </div>
-        </>
+                      </div>
+                      
+                      {totalPages > 1 && (
+                        <div style={{ display: 'flex', justifyContent: 'center', gap: '0.5rem', alignItems: 'center', marginTop: '1rem' }}>
+                          <button onClick={() => setCurrentPage(p => Math.max(1, p-1))} disabled={currentPage === 1 || isLoading} className="btn btn-xs btn-secondary">&lt;</button>
+                          <span style={{fontSize: '0.7rem', color:'#666'}}>{currentPage} / {totalPages}</span>
+                          <button onClick={() => setCurrentPage(p => Math.min(totalPages, p+1))} disabled={currentPage === totalPages || isLoading} className="btn btn-xs btn-secondary">&gt;</button>
+                        </div>
+                      )}
+                  </div>
+              </>
+          )}
+
+          {activeTab === 'library' && (
+              <>
+                  <div className="flex-col section-panel" style={{borderColor: '#a78bfa'}}>
+                      <span className="section-header-title" style={{color: '#a78bfa'}}>SAVE TO LIBRARY</span>
+                      <p style={{fontSize:'0.75rem', color:'#888', margin: 0}}>Save the current state of {agentHandle}'s local memory as a portable, named LorePack.</p>
+                      <div style={{ display: 'flex', gap: '0.5rem' }}>
+                          <input 
+                              type="text"
+                              placeholder="Name for this LorePack..."
+                              value={packName}
+                              onChange={e => setPackName(e.target.value)}
+                              className="form-input"
+                              style={{flex: 1}}
+                              disabled={isLoading}
+                          />
+                          <button onClick={handleSaveToLibrary} className="btn btn-accent" disabled={isLoading}>SAVE</button>
+                      </div>
+                  </div>
+                  <div className="flex-col">
+                      <span className="section-header-title">SAVED LOREPACKS</span>
+                      {isLoading && <div className="spinner"></div>}
+                      {!isLoading && savedPacks.length === 0 && <div className="empty-state">NO SAVED PACKS</div>}
+                      <div className="flex-col" style={{ gap: '0.5rem' }}>
+                          {savedPacks.map(pack => (
+                              <div key={pack.id} className="section-panel" style={{ opacity: isLoading ? 0.5 : 1 }}>
+                                  <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem'}}>
+                                      <span style={{fontWeight:'bold', color:'#eee'}}>{pack.header.name}</span>
+                                      <span style={{fontSize:'0.7rem', color:'#666'}}>{pack.sacred_archive.length} nodes</span>
+                                  </div>
+                                  <div style={{display: 'flex', gap: '0.5rem'}}>
+                                      <button onClick={() => handleLoadFromLibrary(pack)} className="btn btn-secondary btn-sm" style={{flex:1}} disabled={isLoading}>LOAD (REPLACE)</button>
+                                      <button onClick={() => handleDeleteFromLibrary(pack.id)} className="btn btn-danger btn-sm" disabled={isLoading}>DELETE</button>
+                                  </div>
+                              </div>
+                          ))}
+                      </div>
+                  </div>
+              </>
+          )}
+        </div>
       </div>
     </div>
   );

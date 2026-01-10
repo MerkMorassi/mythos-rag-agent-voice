@@ -30,13 +30,13 @@ import {
   getGeneralInstructions,
   saveGeneralInstructions,
   saveMediaAsset,
-  searchDocuments,
   ensureVectorIndex,
   getCanvas,
   updateCanvas,
   searchMediaAssets,
   getMediaAsset
 } from './services/db';
+import { RetrievalGate } from './services/retrievalGate';
 import { IngestionService } from './services/ingestion';
 import { NumMarkX_GenerateID } from './patterns/NumMarkX';
 import { useGeminiLive } from './hooks/useGeminiLive';
@@ -45,6 +45,7 @@ import { ExternalRouter } from './services/externalRouter';
 import { readCanvasTool, updateCanvasTool, MultiAgentService } from './services/multiAgent';
 import { PythonSandbox } from './services/pythonSandbox';
 import { AccessControl } from './services/accessControl';
+import { GeminiProvider } from './services/llmProviders/geminiProvider';
 
 type ViewMode = 'ORCHESTRATOR' | 'COUNCIL';
 type ModelMode = 'STD' | 'DEEP' | 'EXT' | 'IMG';
@@ -309,11 +310,10 @@ const App: React.FC = () => {
               const query = (fc.args as any).query;
               setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', text: `[RAG] Searching: "${query}"`, timestamp: Date.now() }]);
               try {
-                  const embedAi = new GoogleGenAI({ apiKey });
-                  const embedRes = await embedAi.models.embedContent({ model: 'text-embedding-004', contents: [{ parts: [{ text: query }] }] });
-                  const vec = embedRes.embeddings?.[0]?.values;
-                  const vectorDocs = await searchDocuments(query, vec, currentAgentId);
-                  const combined = `DOCS:\n${vectorDocs.map(d => `- ${d.content.substring(0,400)}...`).join('\n')}`;
+                  const provider = new GeminiProvider(apiKey);
+                  const vec = await provider.embed(query);
+                  const vectorDocs = await RetrievalGate.query(vec, query);
+                  const combined = `DOCS:\n${vectorDocs.map(d => `- ${d.text.substring(0,400)}...`).join('\n')}`;
                   responses.push({ id: fc.id, name: fc.name, response: { result: combined } });
               } catch(e: any) {
                   responses.push({ id: fc.id, name: fc.name, response: { result: `Error: ${e.message}` } });
@@ -732,18 +732,14 @@ const App: React.FC = () => {
               if (type === 'image') {
                   // Send Image to Live Session
                   sendRealtimeInput({ media: { mimeType: file.type, data } });
-                  // NEW: Trigger explicit acknowledgement request via Text Turn
-                  // This ensures the model knows an upload happened even if audio stream is active
                   setTimeout(() => {
                       sendText(`[SYSTEM NOTICE: User uploaded image "${file.name}". Please acknowledge receipt visually or verbally.]`);
                   }, 200); 
               } else if (type === 'text') {
-                  // Ingest Text
-                  IngestionService.ingestText(data, file.name, currentAgentId, apiKey);
-                  // Text input implicitly forces acknowledgement due to turn completion
+                  const agentHandle = AGENTS.find(a => a.id === currentAgentId)?.handle || 'system';
+                  IngestionService.ingestText(data, file.name, agentHandle, apiKey);
                   sendText(`[USER UPLOADED FILE: ${file.name}]\n${data.substring(0, 5000)}...`);
               } else if (type === 'video' || type === 'audio') {
-                  // For large media, we notify the model via text that it exists
                   sendText(`[System Notification] User uploaded a ${type} file: "${file.name}". It is stored in the Media Library. Please acknowledge receipt.`);
               }
           }

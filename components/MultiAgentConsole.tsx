@@ -1,14 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { MultiAgentMessage, LogMessage, KnowledgeDoc, ChatSession } from '../types';
+// FIX: Replaced non-existent KnowledgeDoc with VectorRecord.
+import { MultiAgentMessage, LogMessage, VectorRecord, ChatSession } from '../types';
 import { MultiAgentService, AgentAttachment } from '../services/multiAgent';
 import { AGENTS } from '../agents';
 import { 
     getGeneralInstructions, 
-    getDocumentCountByAgentId, 
+    // FIX: Renamed function to match db service.
+    getVectorCountByAgent, 
     saveActiveChat, 
     loadActiveChat,
     getLorePacksByAgentId,
-    bulkAddDocuments,
+    // FIX: Renamed function to match db service.
+    bulkPutVectors,
     saveChatSession
 } from '../services/db';
 import { RoomFocusService } from '../services/roomFocus';
@@ -71,7 +74,8 @@ export const MultiAgentConsole: React.FC<MultiAgentConsoleProps> = ({ onExit }) 
                 setInitializingAgents(prev => new Set(prev).add(agent.id));
                 await new Promise(r => setTimeout(r, 50));
                 
-                const count = await getDocumentCountByAgentId(agent.id);
+                // FIX: Used correct function name and passed agent.handle instead of agent.id
+                const count = await getVectorCountByAgent(agent.handle);
                 counts[agent.id] = count;
                 
                 if (count > 0) {
@@ -241,7 +245,8 @@ export const MultiAgentConsole: React.FC<MultiAgentConsoleProps> = ({ onExit }) 
                 timestamp: Date.now()
             }));
             
-            await bulkAddDocuments(docs);
+            // FIX: Replaced non-existent bulkAddDocuments with bulkPutVectors
+            await bulkPutVectors(docs);
             return true;
         }
         return false;
@@ -268,7 +273,8 @@ export const MultiAgentConsole: React.FC<MultiAgentConsoleProps> = ({ onExit }) 
             const restored = await attemptRestoreLore(id);
             if (restored) {
                 // Update Counts and Activate
-                const newCount = await getDocumentCountByAgentId(id);
+                const agent = AGENTS.find(a => a.id === id)!;
+                const newCount = await getVectorCountByAgent(agent.handle);
                 setAgentCounts(prev => ({ ...prev, [id]: newCount }));
                 setActiveAgents(prev => new Set(prev).add(id));
                 addMessage('SYSTEM', 'SYSTEM', `Restored knowledge for ${id}.`, 'system');
@@ -299,7 +305,7 @@ export const MultiAgentConsole: React.FC<MultiAgentConsoleProps> = ({ onExit }) 
                 setLoadingAgents(prev => new Set(prev).add(agent.id));
                 const restored = await attemptRestoreLore(agent.id);
                 if (restored) {
-                    const newCount = await getDocumentCountByAgentId(agent.id);
+                    const newCount = await getVectorCountByAgent(agent.handle);
                     setAgentCounts(prev => ({ ...prev, [agent.id]: newCount }));
                     setActiveAgents(prev => new Set(prev).add(agent.id));
                 } else {
@@ -335,11 +341,13 @@ export const MultiAgentConsole: React.FC<MultiAgentConsoleProps> = ({ onExit }) 
 
         try {
             // Stream ingestion with Validation
-            let batch: KnowledgeDoc[] = [];
+            // FIX: Replaced non-existent KnowledgeDoc with VectorRecord.
+            let batch: VectorRecord[] = [];
             const BATCH_SIZE = 100;
             let count = 0;
             let headerChecked = false;
 
+            // FIX: Used newly added streamLorePack method.
             for await (const obj of IngestionService.streamLorePack(file)) {
                 
                 // HEADER VALIDATION
@@ -378,20 +386,22 @@ export const MultiAgentConsole: React.FC<MultiAgentConsoleProps> = ({ onExit }) 
                 }
 
                 // Force assignment to targetId to be safe, but we validated above.
+                // FIX: Used newly added normalizeNode method.
                 const doc = IngestionService.normalizeNode(obj, targetId, count);
                 batch.push(doc);
                 count++;
 
                 if (batch.length >= BATCH_SIZE) {
-                    await bulkAddDocuments(batch);
+                    await bulkPutVectors(batch);
                     batch = [];
                 }
             }
             
-            if (batch.length > 0) await bulkAddDocuments(batch);
+            if (batch.length > 0) await bulkPutVectors(batch);
 
             // Refresh Count
-            const newCount = await getDocumentCountByAgentId(targetId);
+            const agent = AGENTS.find(a => a.id === targetId)!;
+            const newCount = await getVectorCountByAgent(agent.handle);
             setAgentCounts(prev => ({ ...prev, [targetId]: newCount }));
             if (newCount > 0) setActiveAgents(prev => new Set(prev).add(targetId));
             
@@ -592,7 +602,7 @@ ${focus.rules.map(r => "- " + r).join('\n')}
                         {/* Hidden Input for Specific Uploads */}
                         <input 
                             type="file" 
-                            accept=".json" 
+                            accept=".json,.jsonl" 
                             className="hidden" 
                             onChange={handleExternalLoreLoad} 
                             ref={loreUploadRef}

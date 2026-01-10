@@ -1,6 +1,8 @@
 
+
 import { AGENTS } from "../agents";
-import { getAgentConfig, getAllDocuments } from "./db";
+// FIX: Replaced non-existent getAllDocuments with getAllVectors.
+import { getAgentConfig, getAllVectors } from "./db";
 import { AccessControl } from "./accessControl";
 
 export interface VFile {
@@ -45,10 +47,12 @@ export const VirtualFs = {
         }
 
         if (p === '/lore') {
-            const docs = await getAllDocuments();
+            // FIX: Replaced getAllDocuments with getAllVectors
+            const docs = await getAllVectors();
             return docs.map(d => {
                 // Ensure name is filesystem safe
-                const safeName = (d.title || d.id).replace(/[^a-zA-Z0-9.-]/g, '_').toLowerCase().substring(0, 40);
+                // FIX: Changed d.title to d.source
+                const safeName = (d.source || d.id).replace(/[^a-zA-Z0-9.-]/g, '_').toLowerCase().substring(0, 40);
                 const perm = d.permissions || '644';
                 const chmodStr = this.octalToSymbolic(perm, false);
                 return {
@@ -56,8 +60,10 @@ export const VirtualFs = {
                     name: safeName,
                     type: 'file',
                     permissions: `-${chmodStr}`,
-                    owner: (d.agentId || 'unknown').toLowerCase(),
-                    size: d.content.length
+                    // FIX: Changed d.agentId to d.agent
+                    owner: (d.agent || 'unknown').toLowerCase(),
+                    // FIX: Changed d.content to d.text
+                    size: d.text.length
                 };
             });
         }
@@ -89,12 +95,15 @@ export const VirtualFs = {
         }
 
         if (dir === 'lore' && file) {
-            const docs = await getAllDocuments();
+            // FIX: Replaced getAllDocuments with getAllVectors
+            const docs = await getAllVectors();
             const doc = docs.find(d => 
-                (d.title || d.id).replace(/[^a-zA-Z0-9.-]/g, '_').toLowerCase().substring(0, 40) === file
+                // FIX: Changed d.title to d.source
+                (d.source || d.id).replace(/[^a-zA-Z0-9.-]/g, '_').toLowerCase().substring(0, 40) === file
             );
             
-            if (doc) return doc.content;
+            // FIX: Changed doc.content to doc.text
+            if (doc) return doc.text;
             return null;
         }
 

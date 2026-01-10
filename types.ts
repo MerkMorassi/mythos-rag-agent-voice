@@ -1,18 +1,18 @@
 
 
-export interface KnowledgeDoc {
+// The standard LorePack vector definition.
+export interface VectorRecord {
   id: string;
-  agentId?: string; // Links document to a specific agent
-  title: string;
-  content: string;
-  sourceFile?: string; // The original filename of the ingested document
-  embedding?: number[];
+  text: string;
+  vector: number[];
+  source: string;
+  agent: string; // The "handle" or author
   timestamp: number;
-  // Optional NumMark metadata
-  numMarkId?: string;
-  tags?: string[];
-  permissions?: string; // UNIX-style "644", "777"
+  // FIX: Added optional permissions for virtual filesystem 'chmod' command.
+  permissions?: string; 
 }
+export type LorePackExport = VectorRecord[];
+
 
 export enum ConnectionState {
   DISCONNECTED = 'DISCONNECTED',
@@ -197,7 +197,7 @@ export interface LorePackHeader {
 export interface LorePack {
   id: string; // DB Key
   header: LorePackHeader;
-  sacred_archive: KnowledgeDoc[];
+  sacred_archive: VectorRecord[];
 }
 
 // --- MEDIA ASSET ---

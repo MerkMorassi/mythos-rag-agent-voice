@@ -1,5 +1,5 @@
 import { 
-    KnowledgeDoc, 
+    VectorRecord,
     ChatSession, 
     LogMessage, 
     AgentConfig, 
@@ -10,7 +10,6 @@ import {
     SovereignConfig,
     DEFAULT_MODEL_CONFIG,
     DEFAULT_SOVEREIGN_CONFIG,
-// FIX: Import GraphNode and GraphEdge types for re-added graph functions.
     GraphNode,
     GraphEdge
 } from '../types';
@@ -24,10 +23,10 @@ export interface SavedPrompt {
 }
 
 const DB_NAME = 'MythOS_DB';
-const DB_VERSION = 7; // Incremented version to remove graph stores
+const DB_VERSION = 8; // Incremented version to migrate to vectors store
 
 // Stores
-export const DOC_STORE = 'documents';
+export const VECTORS_STORE = 'vectors';
 export const CHAT_SESSION_STORE = 'chat_sessions';
 export const ACTIVE_CHAT_STORE = 'active_chats';
 export const AGENT_CONFIG_STORE = 'agent_configs';
@@ -38,44 +37,10 @@ export const PROMPT_STORE = 'saved_prompts';
 export const CANON_STORE = 'canon_blocks';
 export const HOLODECK_STORE = 'holodck';
 export const LLM_USAGE_LOG_STORE = 'llm_usage_logs';
-// FIX: Re-add graph store constants for GraphVisualizer compatibility.
 export const GRAPH_NODE_STORE = 'graph_nodes';
 export const GRAPH_EDGE_STORE = 'graph_edges';
 
 let dbInstance: IDBDatabase | null = null;
-
-// --- MEMORY OPTIMIZATION: LRU VECTOR CACHE ---
-class VectorLRUCache {
-    private cache: Map<string, number[]>;
-    private limit: number;
-
-    constructor(limit: number) {
-        this.cache = new Map();
-        this.limit = limit;
-    }
-
-    get(id: string): number[] | undefined {
-        if (!this.cache.has(id)) return undefined;
-        // Refresh item (move to end)
-        const val = this.cache.get(id)!;
-        this.cache.delete(id);
-        this.cache.set(id, val);
-        return val;
-    }
-
-    put(id: string, vector: number[]) {
-        if (this.cache.has(id)) {
-            this.cache.delete(id);
-        } else if (this.cache.size >= this.limit) {
-            // Evict oldest (first)
-            this.cache.delete(this.cache.keys().next().value);
-        }
-        this.cache.set(id, vector);
-    }
-}
-
-// Keep ~5000 vectors in memory (approx 15-20MB for 768-dim float arrays)
-const vectorCache = new VectorLRUCache(5000);
 
 export const initDB = (): Promise<IDBDatabase> => {
     if (dbInstance) return Promise.resolve(dbInstance);
@@ -96,38 +61,31 @@ export const initDB = (): Promise<IDBDatabase> => {
         request.onupgradeneeded = (event) => {
             const db = (event.target as IDBOpenDBRequest).result;
             
-            const createStore = (name: string, keyPath: string | { autoIncrement: boolean } = 'id', indices: string[] = []) => {
+            const createStore = (name: string, keyPath: string | { autoIncrement: boolean } = 'id', indices: {name: string, unique: boolean}[]) => {
                 if (!db.objectStoreNames.contains(name)) {
                     const store = db.createObjectStore(name, typeof keyPath === 'string' ? { keyPath } : keyPath);
-                    indices.forEach(idx => store.createIndex(idx, idx, { unique: false }));
+                    indices.forEach(idx => store.createIndex(idx.name, idx.name, { unique: idx.unique }));
                 }
             };
-
-            createStore(DOC_STORE, 'id', ['agentId']);
-            createStore(CHAT_SESSION_STORE, 'id');
-            createStore(ACTIVE_CHAT_STORE, 'id');
-            createStore(AGENT_CONFIG_STORE, 'agentId');
-            createStore(SETTINGS_STORE, 'id');
-            createStore(MEDIA_STORE, 'id', ['agentId']);
-            createStore(LORE_PACK_STORE, 'id'); 
-            createStore(PROMPT_STORE, 'id', ['agentId']);
-            createStore(CANON_STORE, 'id');
-            createStore(HOLODECK_STORE, 'id');
-            createStore(LLM_USAGE_LOG_STORE, { autoIncrement: true });
-            // FIX: Re-add graph stores for GraphVisualizer compatibility.
-            createStore(GRAPH_NODE_STORE, 'id', ['agentId']);
-            createStore(GRAPH_EDGE_STORE, { autoIncrement: true });
-
-            // FIX: Remove deletion of graph stores to restore functionality for the visualizer.
-            // This code was part of a previous refactor but breaks the GraphVisualizer component.
-            /*
-            if (db.objectStoreNames.contains('graph_nodes')) {
-                db.deleteObjectStore('graph_nodes');
+            
+            // Migration: remove old 'documents' store if it exists
+            if (db.objectStoreNames.contains('documents')) {
+                db.deleteObjectStore('documents');
             }
-            if (db.objectStoreNames.contains('graph_edges')) {
-                db.deleteObjectStore('graph_edges');
-            }
-            */
+
+            createStore(VECTORS_STORE, 'id', [{name: 'agent', unique: false}]);
+            createStore(CHAT_SESSION_STORE, 'id', []);
+            createStore(ACTIVE_CHAT_STORE, 'id', []);
+            createStore(AGENT_CONFIG_STORE, 'agentId', []);
+            createStore(SETTINGS_STORE, 'id', []);
+            createStore(MEDIA_STORE, 'id', [{name: 'agentId', unique: false}]);
+            createStore(LORE_PACK_STORE, 'id', []); 
+            createStore(PROMPT_STORE, 'id', [{name: 'agentId', unique: false}]);
+            createStore(CANON_STORE, 'id', []);
+            createStore(HOLODECK_STORE, 'id', []);
+            createStore(LLM_USAGE_LOG_STORE, { autoIncrement: true }, []);
+            createStore(GRAPH_NODE_STORE, 'id', [{name: 'agentId', unique: false}]);
+            createStore(GRAPH_EDGE_STORE, { autoIncrement: true }, []);
         };
     });
 };
@@ -174,163 +132,73 @@ const deleteItem = async (storeName: string, id: string): Promise<void> => {
     });
 };
 
-// --- DOCUMENTS (KNOWLEDGE BASE) ---
+// --- VECTORS (KNOWLEDGE BASE) ---
 
-export const addDocument = (doc: KnowledgeDoc) => putItem(DOC_STORE, doc);
-export const deleteDocument = (id: string) => deleteItem(DOC_STORE, id);
-export const getDocumentsByAgentId = (agentId: string) => getByIndex<KnowledgeDoc>(DOC_STORE, 'agentId', agentId);
-export const getAllDocuments = () => getAll<KnowledgeDoc>(DOC_STORE);
+export const putVector = (vec: VectorRecord) => putItem(VECTORS_STORE, vec);
+export const deleteVector = (id: string) => deleteItem(VECTORS_STORE, id);
+export const getVectorsByAgent = (agentHandle: string) => getByIndex<VectorRecord>(VECTORS_STORE, 'agent', agentHandle);
+export const getAllVectors = () => getAll<VectorRecord>(VECTORS_STORE);
 
-export const bulkAddDocuments = async (docs: KnowledgeDoc[]) => {
+export const bulkPutVectors = async (vectors: VectorRecord[]) => {
     const db = await initDB();
     return new Promise<void>((resolve, reject) => {
-        const tx = db.transaction([DOC_STORE], 'readwrite');
-        const store = tx.objectStore(DOC_STORE);
-        docs.forEach(doc => store.put(doc));
+        const tx = db.transaction([VECTORS_STORE], 'readwrite');
+        const store = tx.objectStore(VECTORS_STORE);
+        vectors.forEach(vec => store.put(vec));
         tx.oncomplete = () => resolve();
         tx.onerror = () => reject(tx.error);
     });
 };
 
-export const deleteDocumentsByAgentId = async (agentId: string) => {
-    const docs = await getDocumentsByAgentId(agentId);
+export const deleteVectorsByAgent = async (agentHandle: string) => {
+    const vectors = await getVectorsByAgent(agentHandle);
     const db = await initDB();
-    const tx = db.transaction([DOC_STORE], 'readwrite');
-    const store = tx.objectStore(DOC_STORE);
-    docs.forEach(d => store.delete(d.id));
+    const tx = db.transaction([VECTORS_STORE], 'readwrite');
+    const store = tx.objectStore(VECTORS_STORE);
+    vectors.forEach(v => store.delete(v.id));
     return new Promise<void>((resolve) => {
         tx.oncomplete = () => resolve();
     });
 };
 
-export const bulkDeleteDocuments = async (ids: string[]) => {
+export const bulkDeleteVectors = async (ids: string[]) => {
     const db = await initDB();
     return new Promise<void>((resolve, reject) => {
-        const tx = db.transaction([DOC_STORE], 'readwrite');
-        const store = tx.objectStore(DOC_STORE);
+        const tx = db.transaction([VECTORS_STORE], 'readwrite');
+        const store = tx.objectStore(VECTORS_STORE);
         ids.forEach(id => store.delete(id));
         tx.oncomplete = () => resolve();
         tx.onerror = () => reject(tx.error);
     });
 };
 
-export const getDocumentCountByAgentId = async (agentId: string): Promise<number> => {
-    const docs = await getDocumentsByAgentId(agentId);
-    return docs.length;
+export const getVectorCountByAgent = async (agentHandle: string): Promise<number> => {
+    const vectors = await getVectorsByAgent(agentHandle);
+    return vectors.length;
 };
 
-export const updateDocumentPermissions = async (id: string, permissions: string) => {
+// This is required for ensureVectorIndex call in App.tsx
+export const ensureVectorIndex = async () => { /* No-op for IndexedDB */ };
+
+// FIX: Added function to update permissions on a vector record for the 'chmod' command.
+export const updateDocumentPermissions = async (id: string, permissions: string): Promise<void> => {
     const db = await initDB();
-    return new Promise<void>((resolve, reject) => {
-        const tx = db.transaction([DOC_STORE], 'readwrite');
-        const store = tx.objectStore(DOC_STORE);
+    const tx = db.transaction([VECTORS_STORE], 'readwrite');
+    const store = tx.objectStore(VECTORS_STORE);
+    const item = await new Promise<VectorRecord>((res, rej) => {
         const req = store.get(id);
-        req.onsuccess = () => {
-            const doc = req.result as KnowledgeDoc;
-            if (doc) {
-                doc.permissions = permissions;
-                store.put(doc);
-                resolve();
-            } else {
-                reject("Document not found");
-            }
-        };
-        req.onerror = () => reject(req.error);
+        req.onsuccess = (e: any) => res(e.target.result);
+        req.onerror = () => rej(req.error);
     });
+    if (item) {
+        store.put({ ...item, permissions });
+    }
 };
 
 // --- GRAPH (DEPRECATED - VISUALIZER ONLY) ---
-// These functions are re-added to support the GraphVisualizer component,
-// but the graph data is no longer actively used by the core agent logic.
 export const getGraphNodesByAgent = (agentId: string) => getByIndex<GraphNode>(GRAPH_NODE_STORE, 'agentId', agentId);
 export const getGraphEdges = () => getAll<GraphEdge>(GRAPH_EDGE_STORE);
 
-
-// --- VECTOR SEARCH ---
-
-function cosineSimilarity(vecA: number[], vecB: number[]): number {
-    let dot = 0;
-    let normA = 0;
-    let normB = 0;
-    for (let i = 0; i < vecA.length; i++) {
-        dot += vecA[i] * vecB[i];
-        normA += vecA[i] * vecA[i];
-        normB += vecB[i] * vecB[i];
-    }
-    return dot / (Math.sqrt(normA) * Math.sqrt(normB));
-}
-
-export const ensureVectorIndex = async () => { /* No-op for IndexedDB */ };
-
-/**
- * Streaming Search with LRU Cache to prevent OOM
- */
-export const searchDocuments = async (query: string, embedding?: number[], agentId?: string): Promise<KnowledgeDoc[]> => {
-    const db = await initDB();
-    const transaction = db.transaction([DOC_STORE], 'readonly');
-    const store = transaction.objectStore(DOC_STORE);
-    
-    // We maintain a limited buffer of top candidates to avoid array bloat
-    let candidates: { doc: KnowledgeDoc, score: number }[] = [];
-    const MAX_BUFFER_SIZE = 200; // Trim when we exceed this
-    const TARGET_SIZE = 100;
-
-    return new Promise((resolve, reject) => {
-        const request = agentId 
-            ? store.index('agentId').openCursor(IDBKeyRange.only(agentId)) 
-            : store.openCursor();
-
-        request.onsuccess = (event) => {
-            const cursor = (event.target as IDBRequest).result as IDBCursorWithValue;
-            
-            if (cursor) {
-                const doc = cursor.value as KnowledgeDoc;
-                
-                // 1. Text Match Score (Keyword Boost)
-                let score = 0;
-                if (doc.content.toLowerCase().includes(query.toLowerCase())) {
-                    score += 0.15;
-                }
-                
-                // 2. Vector Match Score (Cosine Similarity)
-                if (embedding) {
-                    // Check LRU Cache first
-                    let vec = vectorCache.get(doc.id);
-                    
-                    if (!vec && doc.embedding) {
-                        vec = doc.embedding;
-                        // Cache for next time
-                        vectorCache.put(doc.id, vec);
-                    }
-                    
-                    if (vec) {
-                        const sim = cosineSimilarity(embedding, vec);
-                        score += sim;
-                    }
-                }
-                
-                // 3. Selection Threshold
-                if (score > 0.01) { 
-                    candidates.push({ doc, score });
-                    
-                    // Memory Safety: Periodic Truncation
-                    if (candidates.length > MAX_BUFFER_SIZE) {
-                        candidates.sort((a, b) => b.score - a.score);
-                        candidates = candidates.slice(0, TARGET_SIZE);
-                    }
-                }
-
-                cursor.continue(); // Stream next
-            } else {
-                // DONE
-                candidates.sort((a, b) => b.score - a.score);
-                resolve(candidates.slice(0, 10).map(r => r.doc));
-            }
-        };
-        
-        request.onerror = () => reject(request.error);
-    });
-};
 
 // --- CHAT HISTORY ---
 
@@ -482,20 +350,14 @@ export const executeSql = async (query: string): Promise<string> => {
             const table = parts[fromIndex + 1];
             
             let data: any[] = [];
-            if (table === 'documents') data = await getAllDocuments();
+            if (table === 'vectors') data = await getAllVectors();
             else if (table === 'agents') data = await getAll(AGENT_CONFIG_STORE);
-            else if (table === 'lore') data = await getAllDocuments();
             else return `Error: Table '${table}' not found`;
             
             return JSON.stringify(data.slice(0, 50), null, 2); 
         } 
         else if (q.startsWith('delete from')) {
-             const parts = q.split(' ');
-             const table = parts[2];
-             if (table === 'documents') {
-                 return "Error: DELETE requires specific implementation safety in shell";
-             }
-             return `Error: Table '${table}' not found or locked`;
+             return "Error: DELETE requires specific implementation safety in shell";
         }
         return "Error: Command not supported";
     } catch(e: any) {
