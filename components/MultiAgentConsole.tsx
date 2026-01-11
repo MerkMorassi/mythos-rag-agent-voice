@@ -23,7 +23,6 @@ interface MultiAgentConsoleProps {
 }
 
 const CONFERENCE_ID = 'CONFERENCE_MAIN';
-const ARCHIVAX_ID = 'ARCHIVAX';
 
 // Agents for conference - All active agents
 const CONFERENCE_AGENTS = AGENTS;
@@ -113,9 +112,9 @@ export const MultiAgentConsole: React.FC<MultiAgentConsoleProps> = ({ onExit }) 
                 } else {
                     const focus = RoomFocusService.getActive();
                     if (onlineCount === 0) {
-                        addMessage('SYSTEM', 'WARNING', 'No agents have LorePacks loaded. Click agents to restore from library.', 'system');
+                        addMessage('SYSTEM', 'SYSTEM', 'WARNING: No agents have LorePacks loaded. Click agents to restore from library.', 'system');
                     } else {
-                        addMessage('SYSTEM', 'ARCHIVAX', `Link Established. Focus: ${focus.title.toUpperCase()}. ${onlineCount} Agents Online.`, 'system');
+                        addMessage('SYSTEM', 'SYSTEM', `Link Established. Focus: ${focus.title.toUpperCase()}. ${onlineCount} Agents Online.`, 'system');
                     }
                 }
             } catch (e) {
@@ -139,7 +138,6 @@ export const MultiAgentConsole: React.FC<MultiAgentConsoleProps> = ({ onExit }) 
                 timestamp: m.timestamp
             }));
             saveActiveChat(CONFERENCE_ID, logsToSave).catch(console.error);
-            saveActiveChat(ARCHIVAX_ID, logsToSave).catch(console.error);
         }
         endRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages]);
@@ -197,8 +195,7 @@ export const MultiAgentConsole: React.FC<MultiAgentConsoleProps> = ({ onExit }) 
         if(!window.confirm("Clear current session history? This cannot be undone.")) return;
         setMessages([]);
         await saveActiveChat(CONFERENCE_ID, []);
-        await saveActiveChat(ARCHIVAX_ID, []);
-        addMessage('SYSTEM', 'ARCHIVAX', 'Chat Cleared. New session started.', 'system');
+        addMessage('SYSTEM', 'SYSTEM', 'Chat Cleared. New session started.', 'system');
     };
 
     // --- PERSISTENCE ---
@@ -223,7 +220,7 @@ export const MultiAgentConsole: React.FC<MultiAgentConsoleProps> = ({ onExit }) 
             };
 
             await saveChatSession(session);
-            addMessage('SYSTEM', 'ARCHIVAX', `SESSION ARCHIVED: "${title}"`, 'system');
+            addMessage('SYSTEM', 'SYSTEM', `SESSION ARCHIVED: "${title}"`, 'system');
         } catch (e) {
             console.error("Failed to save session", e);
             addMessage('SYSTEM', 'ERROR', `Failed to archive session.`, 'system');

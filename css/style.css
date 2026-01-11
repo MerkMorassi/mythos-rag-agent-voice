@@ -254,7 +254,7 @@ html, body {
     border: 1px solid #333;
     max-height: 200px;
     overflow-y: auto;
-    margin-bottom: 1rem;
+    margin-top: 1rem;
 }
 
 .queue-item {
@@ -267,7 +267,7 @@ html, body {
 }
 .queue-item:last-child { border-bottom: none; }
 
-.queue-status { font-weight: bold; font-size: 0.65rem; padding: 2px 4px; border-radius: 2px; }
+.queue-status { font-weight: bold; font-size: 0.65rem; padding: 2px 4px; border-radius: 2px; flex-shrink: 0; margin-left: 0.5rem; }
 .queue-status.PENDING { color: #888; background: #222; }
 .queue-status.PROCESSING { color: #facc15; background: rgba(250, 204, 21, 0.1); }
 .queue-status.DONE { color: #4ade80; background: rgba(74, 222, 128, 0.1); }
@@ -277,17 +277,29 @@ html, body {
     animation: shake 0.5s cubic-bezier(.36,.07,.19,.97) both;
 }
 
+.progress-bar-container {
+    width: 100%;
+    height: 4px;
+    background: #222;
+    border-radius: 2px;
+    margin-top: 4px;
+    position: relative;
+    overflow: hidden;
+}
+
+.progress-bar-fill {
+    height: 100%;
+    background: var(--color-accent);
+    transition: width 0.3s;
+    border-radius: 2px;
+}
+
 @keyframes shake {
   10%, 90% { transform: translate3d(-1px, 0, 0); }
   20%, 80% { transform: translate3d(2px, 0, 0); }
   30%, 50%, 70% { transform: translate3d(-4px, 0, 0); }
   40%, 60% { transform: translate3d(4px, 0, 0); }
 }
-
-.progress-bar-container { width: 100%; height: 4px; background: #222; margin-top: 4px; position: relative; }
-.progress-bar-fill { height: 100%; background: #4ade80; transition: width 0.3s; }
-
-/* Rest of styles remain largely similar */
 
 .logo-text {
     font-weight: 900;
@@ -337,6 +349,9 @@ html, body {
 .status-banner.status-success { background: rgba(74, 222, 128, 0.1); color: #4ade80; border: 1px solid #4ade80; }
 .status-banner.status-error { background: rgba(248, 113, 113, 0.1); color: #f87171; border: 1px solid #f87171; }
 .status-banner.status-info { background: rgba(56, 189, 248, 0.1); color: #38bdf8; border: 1px solid #38bdf8; }
+.status-banner.persistent { display: flex; justify-content: space-between; align-items: center; }
+.status-banner-close { background: none; border: none; color: inherit; font-size: 1.2rem; cursor: pointer; opacity: 0.7; }
+.status-banner-close:hover { opacity: 1; }
 
 .tray-controls { display: flex; justify-content: space-between; align-items: center; }
 .input-bar { display: flex; gap: 0.5rem; height: auto; align-items: center; }
@@ -403,6 +418,11 @@ html, body {
     box-sizing: border-box;
 }
 .btn-file-input:hover:not(:disabled) { border-color: #4ade80; color: #eee; background: #111; }
+.btn-file-input.active-green {
+    border-color: var(--color-accent);
+    background-color: rgba(74, 222, 128, 0.1);
+    box-shadow: 0 0 15px rgba(74, 222, 128, 0.3);
+}
 .btn-file-input.purple:hover:not(:disabled) { border-color: #a78bfa; }
 
 .panel-overlay { position: absolute; z-index: 5; pointer-events: none; padding: 0.5rem; }

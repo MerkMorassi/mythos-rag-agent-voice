@@ -426,13 +426,16 @@ export const MultiAgentService = {
                     break;
                 }
                 
-                const fcPart = { toolCalls: response.functionCalls };
-                contents.push({ role: 'model', parts: [fcPart] });
+                // FIX: Corrected Part structure for functionCall in model turn
+                const fcParts = response.functionCalls.map((fc: any) => ({ functionCall: fc }));
+                contents.push({ role: 'model', parts: fcParts });
                 
                 const toolResponses = await this.handleToolCalls(response.functionCalls, agent, history, depth, onDelegate);
+                // FIX: Corrected Part structure for functionResponse in user turn
+                const responseParts = toolResponses.map((tr: any) => ({ functionResponse: tr }));
                 contents.push({
                     role: 'user',
-                    parts: [{ toolResponses: { responses: toolResponses } }]
+                    parts: responseParts
                 });
             }
 

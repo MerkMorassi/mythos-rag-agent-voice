@@ -249,6 +249,19 @@ export function useGeminiLive({
         }
     }, []);
 
+    const stopPlayback = useCallback(() => {
+        sourcesRef.current.forEach(s => {
+            try {
+                s.stop();
+            } catch (e) {
+                // Ignore errors if source is already stopped
+            }
+        });
+        sourcesRef.current.clear();
+        nextStartTimeRef.current = 0;
+        callbackRef.current.onLog({ id: crypto.randomUUID(), type: 'system', text: '[Playback Interrupted by User Action]', timestamp: Date.now() });
+    }, []);
+
     return {
         connect,
         disconnect,
@@ -256,6 +269,7 @@ export function useGeminiLive({
         analyser: analyserRef.current,
         sendText,
         sendRealtimeInput,
+        stopPlayback,
         isMicOn,
         setIsMicOn,
         isThinking // Exposed for UI visualization
