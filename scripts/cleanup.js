@@ -14,10 +14,13 @@ const DIRECTORY_SCHEMA = {
         'GraphVisualizer.tsx',
         'Holodeck.tsx',
         'KnowledgeManager.tsx',
+        'LorepackHarness.tsx',
         'McpManager.tsx',
         'MediaPlayer.tsx',
+        'MediaGallery.tsx',
         'MultiAgentConsole.tsx',
         'ProductionBoard.tsx',
+        'PromptManager.tsx',
         'RoomFocusConfig.tsx',
         'SettingsManager.tsx',
         'Terminal.tsx',
@@ -43,6 +46,7 @@ const DIRECTORY_SCHEMA = {
         'googleFiles.ts',
         'ingestion.ts',
         'llmUsageLogger.ts',
+        'lorepack.ts',
         'mcpClient.ts',
         'modelGate.ts',
         'multiAgent.ts',
@@ -58,7 +62,9 @@ const DIRECTORY_SCHEMA = {
     'services/llmProviders': [
         'dolphinProvider.ts',
         'geminiProvider.ts',
-        'ILLMProvider.ts'
+        'ILLMProvider.ts',
+        'openLMProvider.ts',
+        'openRouterProvider.ts'
     ]
 };
 

@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { getAllMediaAssets, saveMediaAsset, deleteMediaAsset, updateMediaAsset } from '../services/db';
 import { MediaAsset } from '../types';
@@ -17,6 +16,7 @@ export const MediaGallery: React.FC<MediaGalleryProps> = ({ isOpen, onOpen, onCl
     const [filteredAssets, setFilteredAssets] = useState<MediaAsset[]>([]);
     const [isLoading, setIsLoading] = useState(false);
     const [selectedAgentId, setSelectedAgentId] = useState<string>(currentAgentId || 'ALL');
+    const [iconSize, setIconSize] = useState<'small' | 'medium' | 'large'>('medium');
 
     // Lightbox & Upload State
     const [viewingAsset, setViewingAsset] = useState<MediaAsset | null>(null);
@@ -77,7 +77,7 @@ export const MediaGallery: React.FC<MediaGalleryProps> = ({ isOpen, onOpen, onCl
         setIsLoading(true);
         try {
             const dbAssets = await getAllMediaAssets();
-            setAssets(dbAssets);
+            setAssets(dbAssets.sort((a,b) => b.timestamp - a.timestamp));
         } catch (e) {
             console.error("Failed to load media", e);
         } finally {
@@ -218,17 +218,31 @@ export const MediaGallery: React.FC<MediaGalleryProps> = ({ isOpen, onOpen, onCl
         if (idx === -1) return;
         
         if (idx < filteredAssets.length - 1) {
-            setViewingAsset(filteredAssets[idx + 1]);
+            openAsset(filteredAssets[idx + 1]);
         } else if (loop) {
-            setViewingAsset(filteredAssets[0]);
+            openAsset(filteredAssets[0]);
         }
     };
 
     const handlePrev = () => {
         const idx = getCurrentIndex();
         if (idx > 0) {
-            setViewingAsset(filteredAssets[idx - 1]);
+            openAsset(filteredAssets[idx - 1]);
         }
+    };
+    
+    const handleToggleIconSize = () => {
+        setIconSize(current => {
+            if (current === 'small') return 'medium';
+            if (current === 'medium') return 'large';
+            return 'small';
+        });
+    };
+
+    const gridColumnSize = {
+        small: 'minmax(120px, 1fr)',
+        medium: 'minmax(180px, 1fr)',
+        large: 'minmax(250px, 1fr)'
     };
 
     const renderThumbnail = (asset: MediaAsset) => {
@@ -487,6 +501,9 @@ export const MediaGallery: React.FC<MediaGalleryProps> = ({ isOpen, onOpen, onCl
                             ))}
                         </select>
                         <button onClick={refresh} className="btn btn-secondary btn-sm" title="Reload Asset List">REFRESH</button>
+                        <button onClick={handleToggleIconSize} className="btn btn-secondary btn-sm" title="Toggle Thumbnail Size">
+                            SIZE: {iconSize.toUpperCase()}
+                        </button>
                     </div>
 
                     {isLoading && <div className="empty-state">LOADING...</div>}
@@ -495,7 +512,7 @@ export const MediaGallery: React.FC<MediaGalleryProps> = ({ isOpen, onOpen, onCl
                         <div className="empty-state">NO ASSETS FOUND.</div>
                     )}
 
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '1rem' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: `repeat(auto-fill, ${gridColumnSize[iconSize]})`, gap: '1rem' }}>
                         {filteredAssets.map(asset => (
                             <div 
                                 key={asset.id} 
