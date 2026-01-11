@@ -105,12 +105,12 @@ const SettingsManager: React.FC<SettingsManagerProps> = (props) => {
             
             <div className="flex-col">
                 <label className="form-label">GEMINI API KEY</label>
-                <input type="password" value={props.apiKey} onChange={e => props.setApiKey(e.target.value)} className="form-input" placeholder="AIza..." />
+                <input type="password" value={props.apiKey} onChange={e => props.setApiKey(e.target.value)} className="form-input" placeholder="AIza..." autoComplete="off" />
             </div>
 
             <div className="flex-col">
-                <label className="form-label">HUGGINGFACE TOKEN (Chatterbox Access)</label>
-                <input type="password" value={props.hfToken} onChange={e => props.setHfToken(e.target.value)} className="form-input" placeholder="hf_..." />
+                <label className="form-label">HUGGINGFACE TOKEN (External Models)</label>
+                <input type="password" value={props.hfToken} onChange={e => props.setHfToken(e.target.value)} className="form-input" placeholder="hf_..." autoComplete="off" />
             </div>
 
             <div className="flex-col">
@@ -135,12 +135,12 @@ const SettingsManager: React.FC<SettingsManagerProps> = (props) => {
                 />
             </div>
 
-            {/* CHATTERBOX SUITE */}
-            <div className="section-panel" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', borderColor: '#facc15' }}>
-                <span className="section-header-title" style={{ fontSize: '0.7rem', color: '#facc15' }}>CHATTERBOX :: VOICE ARCHITECTURE</span>
-                
+            {/* LIVE INTERFACE VOICE (GEMINI) */}
+            <div className="section-panel" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', borderColor: '#4ade80' }}>
+                <span className="section-header-title" style={{ fontSize: '0.7rem', color: '#4ade80' }}>LIVE INTERFACE (GEMINI NATIVE AUDIO)</span>
+                <p style={{fontSize:'0.7rem', color:'#888', margin:0}}>Select the real-time, low-latency voice for this agent's live conversation.</p>
                 <div className="flex-col">
-                    <label className="form-label">INTERFACE PRESET</label>
+                    <label className="form-label">VOICE PRESET</label>
                     <select value={props.selectedVoice} onChange={(e) => props.onVoiceChange(e.target.value)} className="form-select">
                         <option value="Puck">Puck (Fast/Young)</option>
                         <option value="Charon">Charon (Deep/Old)</option>
@@ -152,7 +152,13 @@ const SettingsManager: React.FC<SettingsManagerProps> = (props) => {
                         <option value="Leda">Leda (Oracle/Intuitive)</option>
                     </select>
                 </div>
+            </div>
 
+            {/* LONG-FORM SYNTHESIS (CHATTERBOX) */}
+            <div className="section-panel" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', borderColor: '#facc15' }}>
+                <span className="section-header-title" style={{ fontSize: '0.7rem', color: '#facc15' }}>LONG-FORM SYNTHESIS (CHATTERBOX)</span>
+                <p style={{fontSize:'0.7rem', color:'#888', margin:0}}>Configure the high-fidelity voice clone for generating long-form audio assets (e.g., audiobooks, podcasts) via the `routeRequest` tool.</p>
+                
                 <div className="flex-group">
                     <div style={{ flex: 1 }}>
                         <label className="form-label">TEMPORAL SPEED: {speed}x</label>
