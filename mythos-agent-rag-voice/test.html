@@ -15,7 +15,8 @@
         * { box-sizing: border-box; }
         body {
             background-color: var(--bg-color); color: var(--text-color); font-family: var(--font-mono);
-            margin: 0; padding: 20px; font-size: 13px; height: 100vh;
+            margin: 0; padding: 20px 20px 100px 20px; /* Adjusted padding for fixed chat bar */
+            font-size: 13px; height: 100vh;
             display: flex; flex-direction: column; overflow: hidden;
         }
         ::-webkit-scrollbar { width: 8px; }
@@ -89,6 +90,58 @@
         .modal h2 { margin-top: 0; color: #fff; }
         .modal p { color: var(--dim-text); line-height: 1.6; }
         .modal-actions { margin-top: 30px; display: flex; gap: 15px; justify-content: center; }
+        .chat-bar {
+            background: var(--panel-bg);
+            border-top: 1px solid var(--border-color);
+            padding: 10px 20px;
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+            position: fixed; /* Fixed position */
+            bottom: 0; /* Align to bottom */
+            left: 0; /* Align to left */
+            right: 0; /* Align to right */
+            z-index: 999; /* Ensure it's on top of other content */
+        }
+        .chat-history {
+            flex-grow: 1; /* Allow history to take available space */
+            overflow-y: auto; /* Scroll for long history */
+            max-height: 150px; /* Limit chat history height */
+            padding-bottom: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        .chat-message {
+            background: #1a1a1a;
+            padding: 8px 12px;
+            border-radius: 5px;
+            max-width: 70%;
+        }
+        .chat-message.user {
+            align-self: flex-end;
+            background: rgba(0, 255, 170, 0.1);
+            border: 1px solid var(--main-color);
+        }
+        .chat-message.archivax {
+            align-self: flex-start;
+            background: #1a1a1a;
+            border: 1px solid var(--border-color);
+        }
+        .chat-input-group {
+            display: flex;
+            gap: 10px;
+            padding-top: 10px;
+            border-top: 1px solid #222;
+        }
+        .chat-input-group input {
+            flex-grow: 1;
+        }
+        .chat-input-group button {
+            width: 80px;
+            flex-shrink: 0;
+        }
+
     </style>
 </head>
 <body>
@@ -200,6 +253,14 @@
         </div>
     </div>
 
+    <div id="chatBar" class="chat-bar">
+        <div id="chatHistory" class="chat-history"></div>
+        <div class="chat-input-group">
+            <input type="text" id="chatInput" placeholder="Ask ARCHIVAX..." disabled>
+            <button id="chatSendBtn" class="btn" disabled>SEND</button>
+        </div>
+    </div>
+
     <script type="module">
         import { Lorepack } from './lorepack.js';
 
@@ -297,6 +358,8 @@
                     lorepackInstance.apiKeys = apiKeys; // Ensure keys are up-to-date
                 }
                 ui.sysStatus('ONLINE');
+                document.getElementById('chatInput').disabled = false;
+                document.getElementById('chatSendBtn').disabled = false;
                 await refreshStats();
                 await checkForResumeState();
                 return true;
@@ -497,6 +560,108 @@ ${n.text}
 
         document.getElementById('agentMismatchConfirmBtn').onclick = () => {
             ui.setAgentMismatchModalVisible(false);
+        };
+
+        // --- Chat Bar Logic ---
+        function addChatMessage(sender, message) {
+            const chatHistory = document.getElementById('chatHistory');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `chat-message ${sender}`;
+            messageDiv.innerHTML = message.replace(/\n/g, '<br>'); // Preserve newlines
+            chatHistory.appendChild(messageDiv);
+            chatHistory.scrollTop = chatHistory.scrollHeight; // Auto-scroll to bottom
+        }
+
+        function cosineSimilarity(vecA, vecB) {
+            let dotProduct = 0;
+            let magnitudeA = 0;
+            let magnitudeB = 0;
+            for (let i = 0; i < vecA.length; i++) {
+                dotProduct += vecA[i] * vecB[i];
+                magnitudeA += vecA[i] * vecA[i];
+                magnitudeB += vecB[i] * vecB[i];
+            }
+            magnitudeA = Math.sqrt(magnitudeA);
+            magnitudeB = Math.sqrt(magnitudeB);
+            if (magnitudeA && magnitudeB) {
+                return dotProduct / (magnitudeA * magnitudeB);
+            } else {
+                return 0;
+            }
+        }
+
+        async function queryArchivax(userQuery) {
+            if (!lorepackInstance) throw new Error("Lorepack module not initialized.");
+            const agentId = document.getElementById('agentId').value.trim().toUpperCase();
+            if (!agentId) throw new Error("Agent ID is required to query ARCHIVAX.");
+
+            // 1. Retrieve all nodes for the active agent
+            const allNodes = await lorepackInstance.getNodes(agentId);
+            if (allNodes.length === 0) {
+                return "My knowledge base for this agent is currently empty. Please ingest some source material.";
+            }
+
+            // 2. Embed the user's query
+            ui.log("Archivax: Embedding query...", 'info');
+            const queryEmbeddingResponse = await lorepackInstance._geminiApiCall('embed', { text: userQuery, type: 'RETRIEVAL_QUERY' });
+            const queryVector = queryEmbeddingResponse.embedding.values;
+
+            // 3. Find most relevant nodes
+            const scoredNodes = allNodes.map(node => ({
+                node,
+                score: cosineSimilarity(queryVector, node.vector)
+            }));
+            const relevantNodes = scoredNodes.sort((a, b) => b.score - a.score).slice(0, 5); // Top 5 nodes
+
+            if (relevantNodes[0].score < 0.7) { // Threshold for relevance, adjust as needed
+                return "My knowledge base does not contain sufficiently relevant information for your query. Please try rephrasing or ingesting more data.";
+            }
+
+            const context = relevantNodes.map(sn => sn.node.text).join('\n---\n');
+
+            // 4. Construct prompt for generative model
+            const systemInstruction = "You are ARCHIVAX, a neutral, factual AI system. Your purpose is to provide brief, precise answers based solely on the provided context. Do not invent information. If the context does not contain the answer, state that you cannot answer based on the available data.";
+            const modelPrompt = `CONTEXT:\n${context}\n\nUSER QUERY: ${userQuery}\n\nARCHIVAX's response:`;
+
+            // 5. Generate response
+            ui.log("Archivax: Generating response...", 'info');
+            const generateResponse = await lorepackInstance._geminiApiCall('generate', { 
+                prompt: modelPrompt, 
+                systemInstruction: systemInstruction 
+            }, 'gemini-1.5-flash-latest'); // Specify model explicitly
+
+            return generateResponse.candidates[0].content.parts[0].text;
+        }
+
+        async function processChatInput() {
+            const chatInput = document.getElementById('chatInput');
+            const userInput = chatInput.value.trim();
+            if (!userInput) return;
+
+            addChatMessage('user', userInput);
+            chatInput.value = '';
+            chatInput.disabled = true;
+            document.getElementById('chatSendBtn').disabled = true;
+
+            try {
+                const aiResponse = await queryArchivax(userInput);
+                addChatMessage('archivax', aiResponse);
+            } catch (e) {
+                addChatMessage('archivax', `[ERROR]: ${e.message}`);
+                ui.log(`Chat Error: ${e.message}`, 'err');
+            } finally {
+                chatInput.disabled = false;
+                document.getElementById('chatSendBtn').disabled = false;
+                chatInput.focus();
+            }
+        }
+
+        document.getElementById('chatSendBtn').onclick = processChatInput;
+        document.getElementById('chatInput').onkeypress = (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                processChatInput();
+            }
         };
 
         // Initial load
