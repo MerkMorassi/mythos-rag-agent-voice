@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LOREPACK :: STANDALONE TEST HARNESS</title>
+    <script src="https://mozilla.github.io/pdf.js/build/pdf.mjs" type="module"></script>
+    <style>
+        /* --- CSS: CANONICAL MYTHOS STYLE (Same as original) --- */
+        :root {
+            --bg-color: #050505; --panel-bg: #111111; --main-color: #00ffaa;
+            --text-color: #cccccc; --dim-text: #666666; --error-color: #ff3333;
+            --border-color: #333333; --font-mono: 'Menlo', 'Consolas', 'Courier New', monospace;
+        }
+        * { box-sizing: border-box; }
+        body {
+            background-color: var(--bg-color); color: var(--text-color); font-family: var(--font-mono);
+            margin: 0; padding: 20px; font-size: 13px; height: 100vh;
+            display: flex; flex-direction: column; overflow: hidden;
+        }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #000; }
+        ::-webkit-scrollbar-thumb { background: #333; border: 1px solid #000; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--main-color); }
+        .header {
+            display: flex; justify-content: space-between; align-items: center;
+            padding-bottom: 15px; border-bottom: 1px solid var(--border-color);
+            margin-bottom: 20px;
+        }
+        .brand { font-size: 1.4rem; font-weight: bold; color: var(--main-color); letter-spacing: 2px; }
+        .main-grid { display: grid; grid-template-columns: 350px 1fr; gap: 20px; flex: 1; overflow: hidden; }
+        .controls {
+            background: var(--panel-bg); border: 1px solid var(--border-color); padding: 15px;
+            display: flex; flex-direction: column; gap: 15px; overflow-y: auto;
+        }
+        .input-group { display: flex; flex-direction: column; gap: 5px; }
+        label { color: var(--dim-text); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1px; }
+        input, textarea, select {
+            background: #000; border: 1px solid #444; color: #fff; padding: 10px;
+            font-family: var(--font-mono); font-size: 0.9rem; outline: none; transition: border 0.2s;
+        }
+        input:focus, textarea:focus { border-color: var(--main-color); }
+        .btn {
+            background: #222; color: #fff; border: 1px solid #555; padding: 12px;
+            cursor: pointer; text-transform: uppercase; font-size: 0.8rem;
+            letter-spacing: 1px; transition: all 0.2s; text-align: center;
+        }
+        .btn:hover:not(:disabled) { background: #333; border-color: var(--main-color); color: var(--main-color); }
+        .btn.primary { border-color: var(--main-color); color: var(--main-color); background: rgba(0, 255, 170, 0.05); }
+        .btn.danger { border-color: var(--error-color); color: var(--error-color); }
+        .dashboard { display: flex; flex-direction: column; gap: 15px; overflow: hidden; }
+        .stats-grid {
+            display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; padding: 15px;
+            background: #000; border: 1px solid var(--border-color);
+        }
+        .stat-item { text-align: center; }
+        .stat-label { font-size: 0.65rem; color: var(--dim-text); display: block; margin-bottom: 5px; }
+        .stat-value { font-size: 1.2rem; font-weight: bold; color: #fff; }
+        .stat-value.active { color: var(--main-color); }
+        #logConsole {
+            flex: 1; background: #000; border: 1px solid var(--border-color); padding: 10px;
+            overflow-y: auto; font-size: 0.8rem; display: flex; flex-direction: column; gap: 4px;
+        }
+        .log-entry { padding-left: 8px; border-left: 2px solid #333; line-height: 1.4; }
+        .log-entry.info { border-color: #555; color: #aaa; }
+        .log-entry.sys { border-color: var(--main-color); color: var(--main-color); }
+        .log-entry.err { border-color: var(--error-color); color: var(--error-color); }
+        .progress-container { height: 4px; background: #222; width: 100%; }
+        .progress-bar { height: 100%; background: var(--main-color); width: 0%; transition: width 0.2s; }
+        #fileList { list-style: none; padding: 0; margin: 0; max-height: 150px; overflow-y: auto; border: 1px solid #333; }
+        #fileList li {
+            padding: 5px 10px; border-bottom: 1px solid #222; font-size: 0.8rem;
+            display: flex; justify-content: space-between; align-items: center; position: relative;
+        }
+        .remove-file-btn {
+            color: var(--error-color); cursor: pointer; font-weight: bold; display: none;
+        }
+        #fileList li:hover .remove-file-btn { display: inline; }
+        .modal-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.8); backdrop-filter: blur(5px);
+            display: none; justify-content: center; align-items: center; z-index: 1000;
+        }
+        .modal {
+            background: var(--panel-bg); border: 1px solid var(--error-color); padding: 30px; 
+            text-align: center; max-width: 450px; box-shadow: 0 0 30px rgba(255, 51, 51, 0.3);
+        }
+        .modal-icon { color: var(--error-color); margin-bottom: 15px; }
+        .modal h2 { margin-top: 0; color: #fff; }
+        .modal p { color: var(--dim-text); line-height: 1.6; }
+        .modal-actions { margin-top: 30px; display: flex; gap: 15px; justify-content: center; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="brand">LOREPACK <span style="color:#666">//</span> TEST HARNESS v1.3</div>
+        <div style="font-size: 0.8rem; color: var(--dim-text);">STATUS: <span id="sysStatus">AWAITING KEY</span></div>
+    </div>
+
+    <div class="main-grid">
+        <div class="controls">
+            <div class="input-group">
+                <label>LOCUS ID (AGENT)</label>
+                <input id="agentId" type="text">
+            </div>
+            <div class="input-group">
+                <label>GEMINI API KEY #1</label>
+                <input id="apiKey1" type="password" autocomplete="off">
+            </div>
+            <div class="input-group">
+                <label>GEMINI API KEY #2</label>
+                <input id="apiKey2" type="password" autocomplete="off">
+            </div>
+            <div class="input-group">
+                <label>GEMINI API KEY #3</label>
+                <input id="apiKey3" type="password" autocomplete="off">
+                <div style="display:flex; justify-content:space-between; margin-top:5px;">
+                    <span id="keyStatus" style="font-size:0.7rem; color:#666;"></span>
+                    <button id="saveKeyBtn" style="background:none; border:none; color:var(--main-color); cursor:pointer; font-size:0.7rem;">[SAVE ALL KEYS]</button>
+                </div>
+            </div>
+            <hr style="border:0; border-top:1px solid #333; width:100%;">
+            <div class="input-group">
+                <label>SOURCE MATERIAL</label>
+                <button class="btn" onclick="document.getElementById('fileInput').click()">[+] STAGE FILES</button>
+                <input id="fileInput" type="file" multiple accept=".txt,.md,.json,.pdf" style="display:none">
+                <ul id="fileList"></ul>
+            </div>
+            <div style="margin-top:auto; display:flex; flex-direction:column; gap:10px;">
+                <div id="ingest-controls" style="display: flex; flex-direction: column; gap: 10px;">
+                    <button id="resumeIngestBtn" class="btn primary" style="display:none;">RESUME INGEST</button>
+                    <button id="ingestBtn" class="btn primary">INGEST (BATCH)</button>
+                </div>
+                <div id="ingest-active-controls" style="display:none; grid-template-columns: 1fr 1fr; gap: 10px;">
+                    <button id="pauseIngestBtn" class="btn">PAUSE</button>
+                    <button id="abortIngestBtn" class="btn danger">ABORT</button>
+                </div>
+                <hr style="border:0; border-top:1px solid #222; width:100%;">
+                <button id="exportBtn" class="btn">EXPORT LOREPACK</button>
+                <input id="importFile" type="file" accept=".json,.jsonl,.lorepack" style="display:none;">
+                <button id="importBtn" class="btn" onclick="document.getElementById('importFile').click()">IMPORT LOREPACK</button>
+                <hr style="border:0; border-top:1px solid #222; width:100%;">
+                <button id="listNodesBtn" class="btn">LIST AGENT NODES</button>
+                <hr style="border:0; border-top:1px solid #222; width:100%;">
+                <button id="nukeBtn" class="btn danger">NUKE VAULT</button>
+            </div>
+        </div>
+        <div class="dashboard">
+            <div class="stats-grid">
+                <div class="stat-item"><span class="stat-label">TOTAL NODES</span><span id="statVectors" class="stat-value active">0</span></div>
+                <div class="stat-item"><span class="stat-label">STAGED FILES</span><span id="statFiles" class="stat-value">0</span></div>
+                <div class="stat-item"><span class="stat-label">CHUNKS</span><span id="statChunks" class="stat-value">0</span></div>
+                <div class="stat-item"><span class="stat-label">ETA</span><span id="statEta" class="stat-value">--:--</span></div>
+                <div class="stat-item"><span class="stat-label">STATE</span><span id="statState" class="stat-value" style="font-size:0.8rem; line-height: 1.5rem; color:#888;">IDLE</span></div>
+            </div>
+            <div id="logConsole"></div>
+            <pre id="nodeDisplay" style="background:#000; border:1px solid #333; padding:10px; height:200px; overflow-y:auto; font-size:0.7rem; display:none;"></pre>
+            <div class="progress-container"><div id="progressBar" class="progress-bar"></div></div>
+        </div>
+    </div>
+
+    <div id="nukeModal" class="modal-overlay">
+        <div class="modal">
+            <div class="modal-icon"><svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg></div>
+            <h2>CRITICAL WARNING</h2>
+            <p>This action will permanently vaporize the entire local lore database ('mythos_vault'). This cannot be undone.</p>
+            <div class="modal-actions"><button id="nukeCancelBtn" class="btn">CANCEL</button><button id="nukeConfirmBtn" class="btn danger">CONFIRM NUKE</button></div>
+        </div>
+    </div>
+
+    <!-- Agent ID Mismatch Modal -->
+    <div id="agentMismatchModal" class="modal-overlay">
+        <div class="modal" style="border-color: var(--main-color); box-shadow: 0 0 30px rgba(0, 255, 170, 0.3);">
+            <div class="modal-icon" style="color: var(--main-color);">
+                <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+            </div>
+            <h2>AGENT ID MISMATCH!</h2>
+            <p>The LOREPACK you are trying to import has an Agent ID that does not match your currently active Agent.</p>
+            <p style="color:var(--main-color); font-weight:bold;">Please ensure the active Agent ID and the LOREPACK's Agent ID are identical before importing.</p>
+            <p style="font-size:0.9rem;">Active Agent: <span id="activeAgentNameModal" style="color:#fff;"></span></p>
+            <p style="font-size:0.9rem;">LOREPACK Agent: <span id="lorepackAgentNameModal" style="color:#fff;"></span></p>
+            <div class="modal-actions">
+                <button id="agentMismatchConfirmBtn" class="btn primary">UNDERSTOOD</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="importProgressModal" class="modal-overlay">
+        <div class="modal" style="border-color: var(--main-color); box-shadow: 0 0 30px rgba(0, 255, 170, 0.3);">
+            <div class="modal-icon" style="color: var(--main-color);">
+                <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2 0 0 1-2.5-2.5zM10 10l4 4m0-4l-4 4"/></svg>
+            </div>
+            <h2>IMPORTING LOREPACK...</h2>
+            <p>Please wait while your knowledge is being restored.</p>
+            <div style="width:100%; height:8px; background:#222; margin: 15px 0;">
+                <div id="importProgressBar" style="height:100%; background:var(--main-color); width:0%; transition: width 0.2s;"></div>
+            </div>
+            <p id="importProgressText" style="font-size:0.9rem; color:var(--main-color);">0%</p>
+            <p id="importStatusText" style="font-size:0.7rem; color:var(--dim-text); margin-top:10px;">Initializing...</p>
+        </div>
+    </div>
+
+    <script type="module">
+        import { Lorepack } from './lorepack.js';
+
+        const ui = {
+            log: (msg, type='info') => { const c=document.getElementById('logConsole'); if(!c)return; c.innerHTML += `<div class="log-entry ${type}">[${new Date().toLocaleTimeString()}] ${msg}</div>`; c.scrollTop = c.scrollHeight; },
+            stat: (id, val) => { const el=document.getElementById(id); if (el) el.innerText = val; },
+            bar: (pct) => { const el=document.getElementById('progressBar'); if (el) el.style.width = `${pct}%`; },
+            sysStatus: (msg, color='var(--main-color)') => { const el=document.getElementById('sysStatus'); if(el) { el.textContent = msg; el.style.color = color; }},
+            keyStatus: (msg, color='#666') => { const el=document.getElementById('keyStatus'); if (el) { el.textContent = msg; el.style.color = color; }},
+            nodeDisplay: (content) => { const el=document.getElementById('nodeDisplay'); if(el) { el.style.display = 'block'; el.textContent = content; }},
+            setModalVisible: (v) => document.getElementById('nukeModal').style.display = v ? 'flex':'none',
+            setAgentMismatchModalVisible: (v) => document.getElementById('agentMismatchModal').style.display = v ? 'flex':'none',
+            setImportProgressModalVisible: (v) => document.getElementById('importProgressModal').style.display = v ? 'flex':'none',
+            setIngestControlsVisible: (isIngesting) => {
+                document.getElementById('ingest-controls').style.display = isIngesting ? 'none' : 'grid';
+                document.getElementById('ingest-active-controls').style.display = isIngesting ? 'grid' : 'none';
+            }
+        };
+
+        const KEYS_STORAGE = 'MYTHOS_GEMINI_KEYS'; // Changed to store multiple keys
+        let lorepackInstance;
+        let fileQueue = [];
+        let activeApiKeys = []; // Declare activeApiKeys globally
+
+        function formatEta(seconds) {
+            if (isNaN(seconds) || seconds < 0) return "--:--";
+            const mins = Math.floor(seconds / 60);
+            const secs = seconds % 60;
+            return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+        }
+
+        async function refreshStats() {
+            if (!lorepackInstance) return;
+            const stats = await lorepackInstance.getStats();
+            ui.stat('statVectors', stats.totalNodes);
+            return stats;
+        }
+
+        function renderFileList() {
+            const list = document.getElementById('fileList');
+            list.innerHTML = '';
+            fileQueue.forEach((f, index) => {
+                const li = document.createElement('li');
+                li.innerHTML = `<span>${f.name}</span><span class="remove-file-btn" data-index="${index}">&times;</span>`;
+                list.appendChild(li);
+            });
+             ui.stat('statFiles', fileQueue.length);
+        }
+
+        function removeFile(index) {
+            const removedFile = fileQueue.splice(index, 1);
+            ui.log(`Removed: ${removedFile[0].name}`, 'info');
+            renderFileList();
+        }
+
+        const handleProgress = ({ state, processed, total, error, etaSeconds }) => {
+            ui.stat('statState', state);
+            if (state === 'CHUNKING' || state === 'RESUMING') { ui.stat('statChunks', total); }
+            if (state === 'EMBEDDING') {
+                ui.bar(total > 0 ? (processed / total) * 100 : 0);
+                ui.stat('statBatches', Math.ceil(processed / 20));
+                ui.stat('statVectors', processed);
+                ui.stat('statEta', formatEta(etaSeconds));
+            }
+            if (state === 'PAUSED' || state === 'ABORTED') {
+                ui.setIngestControlsVisible(false);
+                document.getElementById('resumeIngestBtn').style.display = (state === 'PAUSED') ? 'block' : 'none';
+                if (state === 'ABORTED') {
+                    ui.log('Ingestion Aborted by user.', 'err');
+                    ui.bar(0);
+                    ui.stat('statEta', '--:--');
+                }
+            }
+            if (state === 'COMPLETE') {
+                ui.log(`Ingestion Complete. ${processed} nodes added to Vault.`, "sys");
+                ui.bar(100); ui.stat('statEta', '00:00');
+                refreshStats();
+                fileQueue = []; renderFileList();
+                ui.setIngestControlsVisible(false);
+            }
+            if (state === 'ERROR') {
+                ui.log(`Ingestion Error: ${error}`, "err");
+                ui.stat('statEta', 'ERROR');
+                ui.setIngestControlsVisible(false);
+            }
+        };
+
+        async function initialize(apiKeys) {
+            if (!apiKeys || apiKeys.length === 0) { ui.sysStatus('AWAITING KEY', '#f3a324'); return false; }
+            try {
+                if (!lorepackInstance) {
+                    lorepackInstance = new Lorepack(apiKeys);
+                    ui.log('Lorepack module initialized.', 'sys');
+                } else {
+                    lorepackInstance.apiKeys = apiKeys; // Ensure keys are up-to-date
+                }
+                ui.sysStatus('ONLINE');
+                await refreshStats();
+                await checkForResumeState();
+                return true;
+            } catch (e) {
+                ui.sysStatus('ERROR', 'var(--error-color)');
+                ui.log(e.message, 'err');
+                return false;
+            }
+        }
+
+        async function checkForResumeState() {
+            if(!lorepackInstance) return;
+            const state = await lorepackInstance.checkForResume();
+            if (state && state.chunks) {
+                ui.log(`Incomplete ingestion found for Agent ${state.agentId}.`, 'sys');
+                ui.log(`${state.nextIndex} / ${state.chunks.length} chunks processed.`, 'info');
+                document.getElementById('ingestBtn').style.display = 'none';
+                document.getElementById('resumeIngestBtn').style.display = 'block';
+                ui.stat('statState', 'PAUSED');
+            } else {
+                document.getElementById('ingestBtn').style.display = 'block';
+                document.getElementById('resumeIngestBtn').style.display = 'none';
+            }
+        }
+        
+        document.getElementById('saveKeyBtn').onclick = () => {
+            const keys = [
+                document.getElementById('apiKey1').value.trim(),
+                document.getElementById('apiKey2').value.trim(),
+                document.getElementById('apiKey3').value.trim()
+            ].filter(key => key !== '');
+
+            if (keys.length > 0) {
+                localStorage.setItem(KEYS_STORAGE, JSON.stringify(keys));
+                activeApiKeys = keys; // Update global variable
+                ui.keyStatus(`Saved ${keys.length} Key(s)`, "var(--main-color)");
+                initialize(activeApiKeys); // Pass keys to initialize
+            } else {
+                localStorage.removeItem(KEYS_STORAGE);
+                activeApiKeys = []; // Clear global variable
+                ui.keyStatus("No Keys Stored", "var(--error-color)");
+                lorepackInstance = null; // Clear instance if no keys
+            }
+        };
+
+        document.getElementById('fileInput').onchange = (e) => {
+            const newFiles = Array.from(e.target.files);
+            let addedCount = 0;
+            newFiles.forEach(file => {
+                if (!fileQueue.some(f => f.name === file.name && f.size === file.size)) {
+                    fileQueue.push(file);
+                    addedCount++;
+                } else { ui.log(`Duplicate skipped: ${file.name}`, 'info'); }
+            });
+            if (addedCount > 0) { ui.log(`Staged ${addedCount} new files.`, 'sys'); renderFileList(); }
+        };
+
+        document.getElementById('ingestBtn').onclick = async () => {
+            if (!lorepackInstance && !initialize(activeApiKeys)) { ui.log('Please enter and save your Gemini API Key.', 'err'); return; }
+            const agentId = document.getElementById('agentId').value.trim().toUpperCase();
+            if (!agentId) return ui.log('Agent ID is required.', 'err');
+            if (fileQueue.length === 0) return ui.log('No files are staged.', 'err');
+            ui.setIngestControlsVisible(true);
+            await lorepackInstance.ingest(fileQueue, agentId, handleProgress);
+        };
+        
+        document.getElementById('resumeIngestBtn').onclick = async () => {
+            if (!lorepackInstance && !initialize(activeApiKeys)) return;
+            ui.log('Resuming ingestion...', 'sys');
+            ui.setIngestControlsVisible(true);
+            await lorepackInstance.resumeIngest(handleProgress);
+        };
+
+        document.getElementById('pauseIngestBtn').onclick = () => lorepackInstance?.pauseIngest();
+        document.getElementById('abortIngestBtn').onclick = () => lorepackInstance?.abortIngest();
+
+        document.getElementById('exportBtn').onclick = async () => {
+            if (!lorepackInstance && !initialize(activeApiKeys)) return;
+            const agentId = document.getElementById('agentId').value.trim().toUpperCase();
+            if (!agentId) return ui.log('Agent ID is required.', 'err');
+            ui.stat('statState', 'EXPORTING');
+            try {
+                const { nodes, count } = await lorepackInstance.export(agentId); // Get nodes and count
+                const jsonlContent = nodes.map(node => JSON.stringify(node)).join('\n'); // Create JSONL string
+                const blob = new Blob([jsonlContent], { type: 'application/jsonl' }); // Set type to JSONL
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = `MYTHOS.LORE.${agentId}.LOREPACK.${new Date().toISOString().slice(0, 10)}.jsonl`; // Change extension to .jsonl
+                a.click();
+                URL.revokeObjectURL(a.href);
+                ui.log(`Exported ${count} nodes to ${a.download}`, 'sys'); // Update log message
+            } catch (e) { ui.log(`Export failed: ${e.message}`, 'err'); }
+            finally { ui.stat('statState', 'IDLE'); }
+        };
+        
+        document.getElementById('importFile').onchange = async (e) => {
+            if (!lorepackInstance && !initialize(activeApiKeys)) return;
+            const file = e.target.files[0];
+            if (!file) return;
+
+            ui.stat('statState', 'IMPORTING');
+            ui.setImportProgressModalVisible(true); // Show progress modal
+            
+            const importProgressBar = document.getElementById('importProgressBar');
+            const importProgressText = document.getElementById('importProgressText');
+            const importStatusText = document.getElementById('importStatusText');
+
+            const handleImportProgress = ({ processed, total }) => {
+                const percentage = total > 0 ? Math.round((processed / total) * 100) : 0;
+                importProgressBar.style.width = `${percentage}%`;
+                importProgressText.innerText = `${percentage}%`;
+                importStatusText.innerText = `Importing node ${processed} of ${total}...`;
+            };
+
+            try {
+                // Parsing file content (can be time-consuming for large files)
+                importStatusText.innerText = "Parsing file...";
+                let importedAgentId;
+                let importedNodes;
+                let isJsonl = file.name.toLowerCase().endsWith('.jsonl');
+
+                const fileContent = await file.text();
+
+                if (isJsonl) {
+                    importedNodes = fileContent.split('\n')
+                                        .filter(line => line.trim() !== '')
+                                        .map(line => JSON.parse(line));
+                    if (importedNodes.length > 0) {
+                        importedAgentId = importedNodes[0].agentId; // Assuming all nodes in JSONL have the same agentId
+                    }
+                } else { // Assume .json or .lorepack (old format)
+                    const importedPack = JSON.parse(fileContent);
+                    importedAgentId = importedPack.agentId || importedPack.agent; // Handle both agentId and older 'agent'
+                    importedNodes = importedPack.sacred_archive || importedPack.nodes; // Handle both
+                    if (!importedNodes) {
+                        throw new Error("Invalid LOREPACK file format. Missing nodes array.");
+                    }
+                }
+
+                // Agent ID mismatch check
+                const currentAgentId = document.getElementById('agentId').value.trim().toUpperCase();
+                
+                if (!currentAgentId) {
+                    ui.log('Agent ID input is empty. Please provide an Agent ID.', 'err');
+                    ui.stat('statState', 'IDLE');
+                    e.target.value = ''; // Clear file input
+                    return;
+                }
+
+                if (!importedAgentId || importedAgentId !== currentAgentId) {
+                    document.getElementById('activeAgentNameModal').innerText = currentAgentId;
+                    document.getElementById('lorepackAgentNameModal').innerText = importedAgentId || 'Missing';
+                    ui.setAgentMismatchModalVisible(true);
+                    ui.log(`LOREPACK import failed: Agent ID mismatch. LOREPACK agent "${importedAgentId || 'Missing'}" does not match active agent "${currentAgentId}".`, 'err');
+                    ui.stat('statState', 'IDLE');
+                    e.target.value = ''; // Clear file input
+                    return;
+                }
+                
+                // Actual import with progress
+                importStatusText.innerText = `Importing ${importedNodes.length} nodes...`;
+                const result = await lorepackInstance.import({ agentId: importedAgentId, nodes: importedNodes }, handleImportProgress);
+                ui.log(`Import complete. ${result.nodesImported} nodes restored.`, 'sys');
+                await refreshStats();
+                await checkForResumeState(); // Check if the imported pack had a paused ingest
+            } catch (e) { 
+                ui.log(`Import failed: ${e.message}`, 'err'); 
+            } finally { 
+                ui.stat('statState', 'IDLE'); 
+                e.target.value = ''; // Clear file input
+                ui.setImportProgressModalVisible(false); // Hide progress modal
+            }
+        };
+
+        document.getElementById('listNodesBtn').onclick = async () => {
+            if (!lorepackInstance && !initialize(activeApiKeys)) return;
+            const agentId = document.getElementById('agentId').value.trim().toUpperCase();
+            if (!agentId) return ui.log('Agent ID is required.', 'err');
+            try {
+                const nodes = await lorepackInstance.getNodes(agentId);
+                const output = nodes.map(n => `[${n.metadata.source}]
+${n.text}
+---`).join('\n');
+                ui.nodeDisplay(output || 'No nodes found for this agent.');
+                ui.log(`Listed ${nodes.length} nodes for ${agentId}.`, 'info');
+            } catch(e) { ui.log(`Failed to list nodes: ${e.message}`, 'err'); }
+        };
+
+        document.getElementById('nukeBtn').onclick = () => ui.setModalVisible(true);
+        document.getElementById('nukeCancelBtn').onclick = () => ui.setModalVisible(false);
+        document.getElementById('nukeConfirmBtn').onclick = async () => {
+            if (!lorepackInstance && !initialize(activeApiKeys)) { ui.log('Initialize module first.', 'err'); return; }
+            await lorepackInstance.nuke();
+            ui.log("Vault vaporized.", 'err');
+            await refreshStats(); // Refresh stats after nuke
+            ui.setModalVisible(false);
+        };
+
+        document.getElementById('agentMismatchConfirmBtn').onclick = () => {
+            ui.setAgentMismatchModalVisible(false);
+        };
+
+        // Initial load
+        const savedKeys = JSON.parse(localStorage.getItem(KEYS_STORAGE) || '[]');
+        if (savedKeys.length > 0) {
+            document.getElementById('apiKey1').value = savedKeys[0] || '';
+            document.getElementById('apiKey2').value = savedKeys[1] || '';
+            document.getElementById('apiKey3').value = savedKeys[2] || '';
+            activeApiKeys = savedKeys; // Assign to global variable
+            ui.keyStatus(`Loaded ${savedKeys.length} Key(s) from Vault`, "var(--main-color)");
+        } else {
+            ui.keyStatus("No Keys Stored", "#f3a324");
+        }
+        initialize(activeApiKeys);
+
+    </script>
+</body>
+</html>
