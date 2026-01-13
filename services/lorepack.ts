@@ -196,6 +196,9 @@ export class Lorepack {
         }
 
         const totalVectors = allTasks.length;
+        if (totalVectors === 0) {
+            throw new Error("No content found to ingest.");
+        }
         let processedCount = 0;
         const BATCH_SIZE = 50;
         
@@ -225,6 +228,7 @@ export class Lorepack {
                 throw err;
             }
         }
+        if (onProgress) onProgress({ processed: totalVectors, total: totalVectors });
         return processedCount;
     }
 
@@ -237,7 +241,10 @@ export class Lorepack {
 
         if (candidates.length > 0) {
             const queryEmbData = await this._geminiApiCall('embedContent', { text: userQuery });
-            const queryVec = queryEmbData.embedding.values;
+            const queryVec = queryEmbData.embedding?.values ?? queryEmbData.embeddings?.[0]?.values;
+            if (!queryVec) {
+                throw new Error("Embedding response missing vector data.");
+            }
             
             const scored = candidates.map(doc => ({
                 ...doc,
@@ -253,7 +260,7 @@ export class Lorepack {
 
         const defaultSystemInstruction = "You are a neutral, factual AI assistant. Your task is to answer the user's query based *only* on the provided context. If the context does not contain the answer, state that the information is not available in the provided documents.";
         const systemInstruction = customSystemPrompt || defaultSystemInstruction;
-        const modelPrompt = `CONTEXT:\n${context || 'No context available.'}\n\nUSER QUERY: ${userQuery}\n\nRESPONSE:`
+        const modelPrompt = `CONTEXT:\n${context || 'No context available.'}\n\nUSER QUERY: ${userQuery}\n\nRESPONSE:`;
 
         const genData = await this._geminiApiCall('generateContent', { prompt: modelPrompt, systemInstruction }, 'gemini-3-flash-preview');
 
@@ -332,6 +339,7 @@ export class Lorepack {
 
         const tx = rawDb.transaction('vectors', 'readwrite');
         const store = tx.objectStore('vectors');
+        const updateEvery = Math.max(1, Math.floor(total / 100));
 
         await new Promise<void>((resolve, reject) => {
             tx.oncomplete = () => resolve();
@@ -341,7 +349,7 @@ export class Lorepack {
                 if (!node.id) node.id = crypto.randomUUID();
                 store.put(node);
                 imported++;
-                if (onProgress && imported % 100 === 0) {
+                if (onProgress && (imported % updateEvery === 0 || imported === total)) {
                     onProgress({ processed: imported, total: total });
                 }
             });
