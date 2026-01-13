@@ -13,6 +13,7 @@ interface SimulationNode extends GraphNode {
 interface SimulationEdge {
     source: SimulationNode;
     target: SimulationNode;
+    label: string; // Keep the label for display
 }
 
 const COLOR_MAP: Record<string, string> = {
@@ -58,9 +59,7 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ currentAgentId
 
     const loadGraph = async () => {
         const rawNodes = await getGraphNodesByAgent(currentAgentId);
-        const allRawEdges = await getGraphEdges();
-        // Filter edges for the current agent
-        const rawEdges = allRawEdges.filter(edge => edge.agentId === currentAgentId);
+        const rawEdges = await getGraphEdges(currentAgentId);
         
         initSimulation(rawNodes, rawEdges);
     };
@@ -83,7 +82,7 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ currentAgentId
             const source = nodeMap.get(e.source);
             const target = nodeMap.get(e.target);
             if (source && target) {
-                simEdges.push({ source, target });
+                simEdges.push({ source, target, label: e.label });
             }
         });
 
@@ -204,15 +203,30 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ currentAgentId
         ctx.translate(canvas.width / 2 + offsetRef.current.x, canvas.height / 2 + offsetRef.current.y);
         ctx.scale(zoomRef.current, zoomRef.current);
 
-        // Draw Edges
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+        // Draw Edges and their labels
         ctx.lineWidth = 1;
-        ctx.beginPath();
-        for (const e of edges) {
+        edges.forEach(e => {
+            // Edge line
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+            ctx.beginPath();
             ctx.moveTo(e.source.x, e.source.y);
             ctx.lineTo(e.target.x, e.target.y);
-        }
-        ctx.stroke();
+            ctx.stroke();
+
+            // Edge label
+            if (zoomRef.current > 0.5) {
+                ctx.save();
+                ctx.translate((e.source.x + e.target.x) / 2, (e.source.y + e.target.y) / 2);
+                const angle = Math.atan2(e.target.y - e.source.y, e.target.x - e.source.x);
+                ctx.rotate(angle > Math.PI / 2 || angle < -Math.PI / 2 ? angle + Math.PI : angle);
+                ctx.textAlign = 'center';
+                ctx.fillStyle = '#666';
+                ctx.font = '8px monospace';
+                ctx.fillText(e.label, 0, -4);
+                ctx.restore();
+            }
+        });
+
 
         // Draw Nodes
         for (const n of nodes) {
@@ -407,7 +421,7 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ currentAgentId
                             NO GRAPH DATA FOR THIS AGENT
                         </div>
                         <div style={{ color: '#444', fontSize: '0.8rem' }}>
-                            Ingest documents or use the "Inject Graph" command in 'Active Memory' to build the lattice.
+                            Go to the LOREPACK FACTORY, load nodes for an agent, and use 'BUILD GRAPH LITE'.
                         </div>
                     </div>
                 )}

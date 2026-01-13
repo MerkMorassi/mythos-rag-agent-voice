@@ -13,6 +13,7 @@ import {
     GraphNode,
     GraphEdge
 } from '../types';
+import { GoogleGenAI, Type } from "@google/genai";
 import { UsageLogEntry } from './llmUsageLogger';
 
 export interface SavedPrompt {
@@ -41,6 +42,7 @@ export const GRAPH_NODE_STORE = 'graph_nodes';
 export const GRAPH_EDGE_STORE = 'graph_edges';
 
 let dbInstance: IDBDatabase | null = null;
+let vaultInstance: IDBDatabase | null = null;
 
 export const initDB = (): Promise<IDBDatabase> => {
     if (dbInstance) return Promise.resolve(dbInstance);
@@ -84,11 +86,26 @@ export const initDB = (): Promise<IDBDatabase> => {
             createStore(CANON_STORE, 'id', []);
             createStore(HOLODECK_STORE, 'id', []);
             createStore(LLM_USAGE_LOG_STORE, { autoIncrement: true }, []);
+            // THESE ARE DEPRECATED / UNUSED but kept for schema stability
             createStore(GRAPH_NODE_STORE, 'id', [{name: 'agentId', unique: false}]);
             createStore(GRAPH_EDGE_STORE, { autoIncrement: true }, []);
         };
     });
 };
+
+// --- HELPER TO CONNECT TO THE LOREPACK FACTORY DB ---
+const connectToVault = (): Promise<IDBDatabase> => {
+    if (vaultInstance) return Promise.resolve(vaultInstance);
+    return new Promise((resolve, reject) => {
+        const req = indexedDB.open('mythos_vault', 10);
+        req.onsuccess = () => {
+            vaultInstance = req.result;
+            resolve(vaultInstance);
+        };
+        req.onerror = () => reject(req.error || 'Vault connection failed');
+    });
+};
+
 
 // --- HELPER GENERIC FUNCTIONS ---
 const getAll = async <T>(storeName: string): Promise<T[]> => {
@@ -195,9 +212,76 @@ export const updateDocumentPermissions = async (id: string, permissions: string)
     }
 };
 
-// --- GRAPH (DEPRECATED - VISUALIZER ONLY) ---
-export const getGraphNodesByAgent = (agentId: string) => getByIndex<GraphNode>(GRAPH_NODE_STORE, 'agentId', agentId);
-export const getGraphEdges = () => getAll<GraphEdge>(GRAPH_EDGE_STORE);
+// --- GRAPH (RE-ARCHITECTED TO READ FROM VAULT) ---
+const normalizeId = (name: string) => (name || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '_');
+
+export const getGraphNodesByAgent = async (agentId: string): Promise<GraphNode[]> => {
+    try {
+        const vault = await connectToVault();
+        const edges: any[] = await new Promise(r => vault.transaction('edges').objectStore('edges').getAll().onsuccess = e => r((e.target as any).result));
+        const agentEdges = edges.filter(e => e.agentId === agentId.toUpperCase());
+
+        if (agentEdges.length === 0) return [];
+        
+        const entitySet = new Set<string>();
+        agentEdges.forEach(e => {
+            if (e.s) entitySet.add(e.s);
+            if (e.o) entitySet.add(e.o);
+        });
+
+        const entities = Array.from(entitySet);
+        const apiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY;
+        let classifications: Record<string, string> = {};
+
+        if (apiKey && entities.length > 0) {
+            try {
+                const ai = new GoogleGenAI({ apiKey });
+                const prompt = `Classify the following named entities. Return ONLY a JSON object where keys are the entity names and values are one of 'PERSON', 'LOCATION', 'CONCEPT', or 'EVENT'.
+
+Entities: ${JSON.stringify(entities)}`;
+
+                const response = await ai.models.generateContent({
+                    model: 'gemini-3-flash-preview',
+                    contents: prompt,
+                    config: { responseMimeType: "application/json" }
+                });
+                
+                classifications = JSON.parse(response.text || '{}');
+            } catch (e) {
+                console.warn("Graph node classification failed, defaulting to CONCEPT:", e);
+            }
+        }
+        
+        return entities.map(name => ({
+            id: normalizeId(name),
+            name: name,
+            label: classifications[name] || 'CONCEPT',
+            description: `Entity: ${name}`,
+            agentId: agentId.toUpperCase()
+        }));
+    } catch (e) {
+        console.error("Failed to get graph nodes:", e);
+        return [];
+    }
+};
+
+export const getGraphEdges = async (agentId: string): Promise<GraphEdge[]> => {
+    try {
+        const vault = await connectToVault();
+        const edges: any[] = await new Promise(r => vault.transaction('edges').objectStore('edges').getAll().onsuccess = e => r((e.target as any).result));
+        const agentEdges = edges.filter(e => e.agentId === agentId.toUpperCase());
+        
+        return agentEdges.map(e => ({
+            source: normalizeId(e.s),
+            target: normalizeId(e.o),
+            label: e.r,
+            agentId: e.agentId
+        }));
+    } catch (e) {
+        console.error("Failed to get graph edges:", e);
+        return [];
+    }
+};
 
 
 // --- CHAT HISTORY ---
