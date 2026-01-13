@@ -115,13 +115,30 @@ export const LorepackHarness: React.FC = () => {
         }
     };
 
+    const handleExportGzip = async () => {
+        if (!agentId) return addLog('Agent ID required for export.', 'err');
+        setState('EXPORTING');
+        try {
+            const count = await lorepack.current.exportGzip(agentId.toUpperCase());
+            addLog(`Exported ${count} nodes (gzip).`, 'sys');
+        } catch (e: any) {
+            addLog(`Export failed: ${e.message}`, 'err');
+        } finally {
+            setState('IDLE');
+        }
+    };
+
     const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
         setState('IMPORTING');
         addLog(`Importing ${file.name}...`, 'sys');
         try {
-            const res = await lorepack.current.import(file, ({ processed, total }) => {
+            const res = file.name.endsWith('.gz')
+                ? await lorepack.current.importGzip(file, ({ processed, total }) => {
+                    setProgress((processed / total) * 100);
+                })
+                : await lorepack.current.import(file, ({ processed, total }) => {
                 setProgress((processed / total) * 100);
             });
             addLog(`Imported ${res.nodesImported} nodes for ${res.agentId || 'unknown'}.`, 'sys');
@@ -132,6 +149,20 @@ export const LorepackHarness: React.FC = () => {
             setState('IDLE');
             setProgress(0);
             if (importRef.current) importRef.current.value = '';
+        }
+    };
+
+    const handleBuildGraph = async () => {
+        if (!agentId) return addLog('Agent ID required for graph build.', 'err');
+        setState('BUILDING GRAPH');
+        addLog(`Building graph lite for ${agentId.toUpperCase()}...`, 'sys');
+        try {
+            const res = await lorepack.current.buildGraphLite(agentId.toUpperCase());
+            addLog(`Graph built (${res.nodes} nodes, ${res.edges} edges).`, 'sys');
+        } catch (e: any) {
+            addLog(`Graph build failed: ${e.message}`, 'err');
+        } finally {
+            setState('IDLE');
         }
     };
 
@@ -187,8 +218,10 @@ export const LorepackHarness: React.FC = () => {
 
                     <button className="btn" onClick={handleIngest} disabled={state !== 'IDLE'}>INGEST BATCH</button>
                     <button className="btn" onClick={() => importRef.current?.click()}>IMPORT LOREPACK</button>
-                    <input ref={importRef} type="file" style={{display:'none'}} onChange={handleImport} />
+                    <input ref={importRef} type="file" accept=".jsonl,.jsonl.gz,.gz" style={{display:'none'}} onChange={handleImport} />
                     <button className="btn" onClick={handleExport}>EXPORT LOREPACK</button>
+                    <button className="btn" onClick={handleExportGzip}>EXPORT GZIP</button>
+                    <button className="btn" onClick={handleBuildGraph}>BUILD GRAPH LITE</button>
                     <button className="btn danger" onClick={async () => { if(confirm('Nuke Vault?')) { await lorepack.current.nuke(); addLog('Vault nuked.', 'err'); refreshStats(); } }}>NUKE VAULT</button>
                 </div>
 

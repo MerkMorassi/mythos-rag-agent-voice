@@ -1,4 +1,5 @@
-import { VectorRecord } from '../types';
+import { GraphEdge, GraphNode, VectorRecord } from '../types';
+import { bulkPutGraphEdges, bulkPutGraphNodes, deleteGraphByAgent } from './db';
 
 // LOREPACK™ v1.1 :: Standalone Module (Corrected & Integrated)
 // © 2026 MYTHOS, All Rights Reserved
@@ -6,6 +7,14 @@ import { VectorRecord } from '../types';
 const DB_NAME = 'mythos_vault';
 const DB_VERSION = 8;
 const GENERATION_MODEL = 'gemini-1.5-flash';
+const LOREPACK_GRAPH_LABEL = 'CONCEPT';
+const STOP_WORDS = new Set([
+    'the', 'and', 'for', 'with', 'that', 'this', 'from', 'into', 'your', 'you',
+    'are', 'was', 'were', 'but', 'not', 'its', 'their', 'they', 'them', 'his',
+    'her', 'she', 'him', 'our', 'out', 'about', 'over', 'under', 'then', 'than',
+    'when', 'where', 'what', 'which', 'who', 'why', 'how', 'a', 'an', 'of', 'to',
+    'in', 'on', 'at', 'as', 'it', 'be', 'by', 'or', 'if', 'is'
+]);
 
 export interface LorepackNode extends VectorRecord {
     numMarkId?: string;
@@ -112,6 +121,36 @@ const NumMarkX_GenSigil = (text: string): string => {
     const hash = cyrb53(text).toString(16);
     const prefix = text.substring(0, 10).toLowerCase().replace(/[^a-z0-9]/g, '');
     return `${prefix}-${hash}`;
+};
+
+const extractKeywords = (text: string, limit = 4): string[] => {
+    const tokens = text
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, ' ')
+        .split(/\s+/)
+        .filter(token => token.length > 2 && !STOP_WORDS.has(token));
+    const counts = new Map<string, number>();
+    tokens.forEach(token => counts.set(token, (counts.get(token) ?? 0) + 1));
+    return [...counts.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, limit)
+        .map(([token]) => token);
+};
+
+const gzipText = async (content: string): Promise<Blob> => {
+    if (!('CompressionStream' in window)) {
+        throw new Error("CompressionStream is not supported in this browser.");
+    }
+    const stream = new Blob([content]).stream().pipeThrough(new CompressionStream('gzip'));
+    return new Response(stream).blob();
+};
+
+const ungzipText = async (file: File): Promise<string> => {
+    if (!('DecompressionStream' in window)) {
+        throw new Error("DecompressionStream is not supported in this browser.");
+    }
+    const stream = file.stream().pipeThrough(new DecompressionStream('gzip'));
+    return new Response(stream).text();
 };
 
 export class Lorepack {
@@ -297,6 +336,20 @@ export class Lorepack {
         return { nodes, count: nodes.length };
     }
 
+    async exportGzip(agentId: string) {
+        const { nodes, count } = await this.export(agentId);
+        if (count === 0) throw new Error("No nodes found to export.");
+        const content = nodes.map(n => JSON.stringify(n)).join('\n');
+        const blob = await gzipText(content);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `MYTHOS.LORE.${agentId.toUpperCase()}.jsonl.gz`;
+        a.click();
+        URL.revokeObjectURL(url);
+        return count;
+    }
+
     async import(fileOrData: File | any, onProgress?: (p: {processed: number, total: number}) => void) {
         let nodes: any[] = [];
         let agentId: string | null = null;
@@ -362,6 +415,68 @@ export class Lorepack {
         });
 
         return { success: true, nodesImported: imported, agentId };
+    }
+
+    async importGzip(file: File, onProgress?: (p: {processed: number, total: number}) => void) {
+        const text = await ungzipText(file);
+        const lines = text.split(/\r?\n/).filter(line => line.trim().length > 0);
+        const nodes = lines.map(line => JSON.parse(line));
+        return this.import(nodes, onProgress);
+    }
+
+    async buildGraphLite(agentId: string, maxKeywords = 4) {
+        if (!agentId) throw new Error("Agent ID is required to build a graph.");
+        const all = await this.db.getAll('vectors');
+        const nodes = all.filter(v => v.agent === agentId);
+        if (nodes.length === 0) throw new Error("No nodes available to build graph.");
+
+        const graphNodes = new Map<string, GraphNode>();
+        const graphEdges: GraphEdge[] = [];
+        const edgeKeys = new Set<string>();
+
+        nodes.forEach(node => {
+            const sourceLabel = node.source || 'Unknown Source';
+            const sourceId = `source:${agentId}:${sourceLabel}`;
+            if (!graphNodes.has(sourceId)) {
+                graphNodes.set(sourceId, {
+                    id: sourceId,
+                    name: sourceLabel,
+                    label: 'SOURCE',
+                    description: `Source file ${sourceLabel}`,
+                    agentId
+                });
+            }
+
+            const keywords = extractKeywords(node.text, maxKeywords);
+            keywords.forEach(keyword => {
+                const keywordId = `concept:${agentId}:${keyword}`;
+                if (!graphNodes.has(keywordId)) {
+                    graphNodes.set(keywordId, {
+                        id: keywordId,
+                        name: keyword,
+                        label: LOREPACK_GRAPH_LABEL,
+                        description: 'Extracted concept keyword.',
+                        agentId
+                    });
+                }
+                const edgeKey = `${sourceId}|${keywordId}`;
+                if (!edgeKeys.has(edgeKey)) {
+                    edgeKeys.add(edgeKey);
+                    graphEdges.push({
+                        source: sourceId,
+                        target: keywordId,
+                        label: 'MENTIONS',
+                        agentId
+                    });
+                }
+            });
+        });
+
+        await deleteGraphByAgent(agentId);
+        await bulkPutGraphNodes([...graphNodes.values()]);
+        await bulkPutGraphEdges(graphEdges);
+
+        return { nodes: graphNodes.size, edges: graphEdges.length };
     }
 
     async getNodes(agentId: string) {
