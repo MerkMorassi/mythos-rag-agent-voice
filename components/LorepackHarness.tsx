@@ -222,7 +222,24 @@ export const LorepackHarness: React.FC = () => {
                     <button className="btn" onClick={handleExport}>EXPORT LOREPACK</button>
                     <button className="btn" onClick={handleExportGzip}>EXPORT GZIP</button>
                     <button className="btn" onClick={handleBuildGraph}>BUILD GRAPH LITE</button>
-                    <button className="btn danger" onClick={async () => { if(confirm('Nuke Vault?')) { await lorepack.current.nuke(); addLog('Vault nuked.', 'err'); refreshStats(); } }}>NUKE VAULT</button>
+                    <button
+                        className="btn danger"
+                        onClick={async () => {
+                            if (!confirm('Nuke Vault?')) return;
+                            setState('NUKING');
+                            try {
+                                await lorepack.current.nuke();
+                                addLog('Vault nuked.', 'err');
+                                await refreshStats();
+                            } catch (e: any) {
+                                addLog(`Nuke failed: ${e.message}`, 'err');
+                            } finally {
+                                setState('IDLE');
+                            }
+                        }}
+                    >
+                        NUKE VAULT
+                    </button>
                 </div>
 
                 <div className="dashboard">

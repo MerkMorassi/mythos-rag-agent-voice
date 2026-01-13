@@ -187,6 +187,8 @@ export const getVectorCountByAgent = async (agentHandle: string): Promise<number
     return vectors.length;
 };
 
+export const clearVectorsStore = async (): Promise<void> => clearStore(VECTORS_STORE);
+
 // This is required for ensureVectorIndex call in App.tsx
 export const ensureVectorIndex = async () => { /* No-op for IndexedDB */ };
 

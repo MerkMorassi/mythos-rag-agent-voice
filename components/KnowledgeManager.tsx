@@ -7,7 +7,7 @@ import {
   getLorePacksByAgentId,
   deleteLorePack,
   bulkDeleteVectors,
-  initDB
+  clearVectorsStore
 } from '../services/db';
 import { IngestionService } from '../services/ingestion';
 import { AGENTS } from '../agents';
@@ -68,13 +68,15 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
 
   const handleNuke = async () => {
       setIsLoading(true);
-      const db = await initDB();
-      const tx = db.transaction(['vectors'], 'readwrite');
-      tx.objectStore('vectors').clear();
-      await new Promise(r => tx.oncomplete = r);
-      await fetchVectors();
-      setIsLoading(false);
-      setShowNukeModal(false);
+      try {
+          await clearVectorsStore();
+          await fetchVectors();
+      } catch (err: any) {
+          alert(`Nuke failed: ${err?.message || err}`);
+      } finally {
+          setIsLoading(false);
+          setShowNukeModal(false);
+      }
   };
 
   if (!isOpen) return null;
