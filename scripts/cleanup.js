@@ -29,7 +29,8 @@ const DIRECTORY_SCHEMA = {
         'VoiceCommandList.tsx'
     ],
     'css': [
-        'style.css'
+        'style.css',
+        'lorepack-harness.css'
     ],
     'hooks': [
         'useGeminiLive.ts'

@@ -816,10 +816,13 @@ const App: React.FC = () => {
                 <select value={currentAgentId} onChange={(e) => handleAgentChange(e.target.value)} className="agent-selector" title="Select Active Agent Persona">
                     {AGENTS.map(agent => <option key={agent.id} value={agent.id}>{agent.handle.toUpperCase()}</option>)}
                 </select>
-            ) : ( <span className="status-indicator" style={{ color: '#38bdf8', borderColor: '#38bdf8' }}>COMMS HUB</span> )}
+            ) : ( <span className="status-indicator" style={{ color: '#38bdf8', borderColor: '#38bdf8' }}>{currentView}</span> )}
         </div>
         <div className="flex-group">
             <div className={`status-indicator ${connectionState.toLowerCase()}`}>{connectionState}</div>
+             <button onClick={() => setCurrentView('LORE_HARNESS')} className={`btn btn-secondary btn-icon ${currentView === 'LORE_HARNESS' ? 'active' : ''}`} title="Lorepack Factory" style={currentView === 'LORE_HARNESS' ? {borderColor: '#ff3300', color: '#ff3300'} : {}}>
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 9.5c0-1.28 1.02-2.3 2.3-2.3H20c.88 0 1.6.72 1.6 1.6v1.4c0 .88-.72 1.6-1.6 1.6H4.4M2 14.5c0-1.28 1.02-2.3 2.3-2.3h15.4c.88 0 1.6.72 1.6 1.6v1.4c0 .88-.72 1.6-1.6 1.6H4.4"/><path d="M12.5 19.5c0-1.28 1.02-2.3 2.3-2.3h2.9c.88 0 1.6.72 1.6 1.6v1.4c0 .88-.72 1.6-1.6 1.6h-2.9C13.52 22.1 12.5 21.08 12.5 19.8Z"/><path d="m5 6 2.5 2.5L10 6"/><path d="m5 11 2.5 2.5L10 11"/></svg>
+            </button>
             <button onClick={() => setIsGraphVisualizerOpen(prev => !prev)} className={`btn btn-secondary btn-icon ${isGraphVisualizerOpen ? 'active' : ''}`} title="Neural Lattice Visualizer" style={isGraphVisualizerOpen ? {borderColor: '#38bdf8', color: '#38bdf8'} : {}}>
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line></svg>
             </button>
@@ -882,7 +885,7 @@ const App: React.FC = () => {
             </div>
         ) : currentView === 'LORE_HARNESS' ? (
             <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-                <LorepackHarness />
+                <LorepackHarness onExit={() => setCurrentView('ORCHESTRATOR')} />
             </div>
         ) : (
             <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>

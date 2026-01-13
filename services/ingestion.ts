@@ -1,4 +1,3 @@
-
 import { VectorRecord } from '../types';
 import { NumMarkX_GenerateID } from '../patterns/NumMarkX';
 import { GeminiProvider } from './llmProviders/geminiProvider';
@@ -49,38 +48,70 @@ export const IngestionService = {
 
     /**
      * STREAMING LOREPACK IMPORT
-     * Specifically designed to handle large .jsonl files without crashing the browser.
+     * Specifically designed to handle large .jsonl or .jsonl.gz files without crashing the browser.
      */
-    async importLorePack(file: File, targetAgentHandle: string, onProgress?: (p: number, t: number) => void): Promise<number> {
-        const text = await file.text();
-        const lines = text.split(/\r?\n/).filter(l => l.trim() !== '');
-        const total = lines.length;
-        
+    async importLorePack(file: File, targetAgentHandle: string, onProgress?: (processed: number) => void): Promise<number> {
+        const fileName = file.name || '';
+        let stream: ReadableStream<any> = file.stream();
+        if (fileName.endsWith('.gz')) {
+            stream = stream.pipeThrough(new DecompressionStream('gzip'));
+        }
+        const reader = stream.pipeThrough(new TextDecoderStream()).getReader();
+
+        let buffer = '';
+        let count = 0;
         let batch: VectorRecord[] = [];
         const BATCH_SIZE = 100;
-        let count = 0;
 
-        for (const line of lines) {
+        const writeBatch = async () => {
+            if (batch.length === 0) return;
+            await bulkPutVectors(batch);
+            if (onProgress) onProgress(count);
+            batch = [];
+        };
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            
+            buffer += value;
+            const lines = buffer.split(/\r?\n/);
+            buffer = lines.pop() || '';
+
+            for (const line of lines) {
+                const s = line.trim();
+                if (!s) continue;
+                try {
+                    const rawNode = JSON.parse(s);
+                    const normalized = this.normalizeNode(rawNode, targetAgentHandle, count);
+                    batch.push(normalized);
+                    count++;
+                    if (batch.length >= BATCH_SIZE) {
+                        await writeBatch();
+                    }
+                } catch (e) {
+                    console.warn(`[Import] Skipping malformed line ${count}:`, e);
+                }
+            }
+        }
+
+        if (buffer.trim()) {
             try {
-                const rawNode = JSON.parse(line);
-                // NORMALIZE: Ensure the node matches our system's VectorRecord schema
+                const rawNode = JSON.parse(buffer.trim());
                 const normalized = this.normalizeNode(rawNode, targetAgentHandle, count);
                 batch.push(normalized);
                 count++;
-
-                if (batch.length >= BATCH_SIZE) {
-                    await bulkPutVectors(batch);
-                    batch = [];
-                    if (onProgress) onProgress(count, total);
-                }
             } catch (e) {
                 console.warn(`[Import] Skipping malformed line ${count}:`, e);
             }
         }
 
         if (batch.length > 0) {
-            await bulkPutVectors(batch);
+            await writeBatch();
         }
+        
+        // Final progress update
+        if (onProgress) onProgress(count);
 
         return count;
     },

@@ -1,359 +1,509 @@
-import { VectorRecord } from '../types';
-
-// LOREPACK™ v1.1 :: Standalone Module (Corrected & Integrated)
-// © 2026 MYTHOS, All Rights Reserved
+// File: services/lorepack.ts
+// LOREPACK™ v3.7.0 :: SOVEREIGN KERNEL (TypeScript Port)
+// - GraphMAGRAG Lite Enabled (Vectors + Edges)
+// - Fixes IDB Version to 10
+// - Full Import/Export/Chat fidelity
+// © 2026 MYTHOS. All Rights Reserved.
+import { GoogleGenAI, Type } from "@google/genai";
 
 const DB_NAME = 'mythos_vault';
-const DB_VERSION = 8;
-
-export interface LorepackNode extends VectorRecord {
-    numMarkId?: string;
-    metadata: {
-        source: string;
-        timestamp: string;
-    };
-}
-
-export interface LorepackStats {
-    totalNodes: number;
-    agents: string[];
-}
-
-function cosineSimilarity(vecA: number[], vecB: number[]): number {
-    if (!vecA || !vecB || vecA.length !== vecB.length) return 0;
-    let dot = 0, magA = 0, magB = 0;
-    for (let i = 0; i < vecA.length; i++) {
-        dot += vecA[i] * vecB[i];
-        magA += vecA[i] * vecA[i];
-        magB += vecB[i] * vecB[i];
-    }
-    const mag = Math.sqrt(magA) * Math.sqrt(magB);
-    return mag === 0 ? 0 : dot / mag;
-}
+const DB_VERSION = 10;
 
 class SimpleDB {
-    private db: IDBDatabase | null = null;
-    private ready: Promise<void>;
+  db: IDBDatabase | null = null;
+  public ready: Promise<void>;
 
-    constructor() {
-        this.ready = this.init();
-    }
+  constructor() {
+    this.ready = this._init();
+  }
 
-    private init(): Promise<void> {
-        return new Promise((resolve, reject) => {
-            const req = indexedDB.open(DB_NAME, DB_VERSION);
-            req.onupgradeneeded = (e) => {
-                const db = (e.target as IDBOpenDBRequest).result;
-                if (!db.objectStoreNames.contains('vectors')) {
-                    const store = db.createObjectStore('vectors', { keyPath: 'id' });
-                    store.createIndex('agentId', 'agentId', { unique: false });
-                }
-            };
-            req.onsuccess = () => {
-                this.db = req.result;
-                resolve();
-            };
-            req.onerror = (e) => reject((e.target as IDBOpenDBRequest).error);
-        });
-    }
+  _init(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, DB_VERSION);
 
-    async put(storeName: string, data: any): Promise<void> {
-        await this.ready;
-        if (!this.db) throw new Error("Database not initialized");
-        return new Promise((resolve, reject) => {
-            const tx = this.db!.transaction(storeName, 'readwrite');
-            tx.objectStore(storeName).put(data);
-            tx.oncomplete = () => resolve();
-            tx.onerror = (e) => reject((e.target as IDBRequest).error);
-        });
-    }
+      req.onupgradeneeded = (e) => {
+        const db = (e.target as IDBOpenDBRequest).result;
 
-    async getAll(storeName: string): Promise<any[]> {
-        await this.ready;
-        if (!this.db) throw new Error("Database not initialized");
-        return new Promise((resolve, reject) => {
-            const req = this.db!.transaction(storeName, 'readonly').objectStore(storeName).getAll();
-            req.onsuccess = () => resolve(req.result);
-            req.onerror = (e) => reject((e.target as IDBRequest).error);
-        });
-    }
+        // Vectors Store
+        if (!db.objectStoreNames.contains('vectors')) {
+          const store = db.createObjectStore('vectors', { keyPath: 'id' });
+          store.createIndex('agentId', 'agentId', { unique: false });
+          store.createIndex('numMarkId', 'numMarkId', { unique: false });
+        } else {
+          const store = req.transaction!.objectStore('vectors');
+          if (!store.indexNames.contains('agentId')) store.createIndex('agentId', 'agentId', { unique: false });
+          if (!store.indexNames.contains('numMarkId')) store.createIndex('numMarkId', 'numMarkId', { unique: false });
+        }
 
-    async clear(storeName: string): Promise<void> {
-        await this.ready;
-        if (!this.db) throw new Error("Database not initialized");
-        return new Promise((resolve, reject) => {
-            const tx = this.db!.transaction(storeName, 'readwrite');
-            tx.objectStore(storeName).clear();
-            tx.oncomplete = () => resolve();
-            tx.onerror = (e) => reject((e.target as IDBRequest).error);
-        });
-    }
+        // Edges Store (Graph)
+        if (!db.objectStoreNames.contains('edges')) {
+          const edgeStore = db.createObjectStore('edges', { keyPath: 'id' });
+          edgeStore.createIndex('sourceId', 'sourceId', { unique: false });
+          edgeStore.createIndex('agentId', 'agentId', { unique: false });
+          edgeStore.createIndex('type', 'type', { unique: false });
+        }
+      };
 
-    get rawDb(): IDBDatabase | null {
-        return this.db;
-    }
+      req.onsuccess = () => {
+        this.db = req.result;
+        resolve();
+      };
+      req.onerror = () => reject(req.error || new Error('IndexedDB open failed'));
+    });
+  }
+
+  async put(storeName: string, value: any): Promise<void> {
+    await this.ready;
+    return new Promise((resolve, reject) => {
+      const tx = this.db!.transaction(storeName, 'readwrite');
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.objectStore(storeName).put(value);
+    });
+  }
+
+  async bulkPut(storeName: string, values: any[]): Promise<void> {
+    await this.ready;
+    return new Promise((resolve, reject) => {
+      const tx = this.db!.transaction(storeName, 'readwrite');
+      const store = tx.objectStore(storeName);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      for (const v of values) store.put(v);
+    });
+  }
+
+  async getAll(storeName: string): Promise<any[]> {
+    await this.ready;
+    return new Promise((resolve, reject) => {
+      const tx = this.db!.transaction(storeName, 'readonly');
+      const req = tx.objectStore(storeName).getAll();
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async count(storeName: string): Promise<number> {
+    await this.ready;
+    return new Promise((resolve, reject) => {
+      const tx = this.db!.transaction(storeName, 'readonly');
+      const req = tx.objectStore(storeName).count();
+      req.onsuccess = () => resolve(req.result || 0);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async nuke(): Promise<void> {
+    if (this.db) this.db.close();
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.deleteDatabase(DB_NAME);
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(req.error);
+      req.onblocked = () => {
+        console.warn("Nuke blocked, retrying after reload might be necessary.");
+        resolve();
+      }
+    });
+  }
 }
 
-const cyrb53 = (str: string, seed = 0): number => {
-    let h1 = 0xdeadbeef ^ seed, h2 = 0x41c6ce57 ^ seed;
-    for (let i = 0, ch; i < str.length; i++) {
-        ch = str.charCodeAt(i);
-        h1 = Math.imul(h1 ^ ch, 2654435761);
-        h2 = Math.imul(h2 ^ ch, 1597334677);
-    }
-    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
-    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
-    return 4294967296 * (2097151 & h2) + (h1 >>> 0);
-};
-
-const NumMarkX_GenSigil = (text: string): string => {
-    if (!text) return 'void';
-    const hash = cyrb53(text).toString(16);
-    const prefix = text.substring(0, 10).toLowerCase().replace(/[^a-z0-9]/g, '');
-    return `${prefix}-${hash}`;
-};
+function cosine(a: number[], b: number[]): number {
+  if (!a || !b || a.length !== b.length) return 0;
+  let dot = 0, ma = 0, mb = 0;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i], y = b[i];
+    dot += x * y;
+    ma += x * x;
+    mb += y * y;
+  }
+  const denom = Math.sqrt(ma) * Math.sqrt(mb);
+  return denom ? dot / denom : 0;
+}
 
 export class Lorepack {
-    private db = new SimpleDB();
-    private apiKeys: string[] = [];
-    private currentKeyIndex = 0;
-    private abortController: AbortController | null = null;
+  private db: SimpleDB;
+  private apiKeys: string[] = [];
+  private keyIndex = 0;
 
-    setApiKeys(keys: string[]) {
-        this.apiKeys = keys.filter(k => k && k.trim().length > 0);
+  constructor() {
+    this.db = new SimpleDB();
+  }
+
+  async ready() {
+    await this.db.ready;
+  }
+
+  setApiKeys(keys: string[]) {
+    this.apiKeys = (keys || []).map(k => (k || '').trim()).filter(Boolean);
+  }
+
+  _getKey(): string {
+    if (!this.apiKeys.length) throw new Error('API Keys Missing.');
+    const k = this.apiKeys[this.keyIndex];
+    this.keyIndex = (this.keyIndex + 1) % this.apiKeys.length;
+    return k;
+  }
+
+  genSigil(t: string): string {
+    return (t || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 50);
+  }
+
+  chunk(text: string, maxChars = 2000): string[] {
+    const raw = (text || '')
+      .replace(/\r/g, '')
+      .replace(/([.?!])\s+(?=[A-Z0-9@])/g, '$1|')
+      .split('|')
+      .map(s => s.trim())
+      .filter(Boolean);
+
+    const out = [];
+    let buf = '';
+    for (const s of raw) {
+      if (!buf) {
+        buf = s;
+        continue;
+      }
+      if ((buf.length + 1 + s.length) > maxChars) {
+        out.push(buf);
+        buf = s;
+      } else {
+        buf += ' ' + s;
+      }
     }
+    if (buf) out.push(buf);
+    return out;
+  }
 
-    private _getKey(): string {
-        if (this.apiKeys.length === 0) throw new Error("No API Keys provided.");
-        const key = this.apiKeys[this.currentKeyIndex];
-        this.currentKeyIndex = (this.currentKeyIndex + 1) % this.apiKeys.length;
-        return key;
-    }
+  async getStats(): Promise<{ totalNodes: number, totalEdges: number }> {
+    const totalNodes = await this.db.count('vectors');
+    const totalEdges = await this.db.count('edges');
+    return { totalNodes, totalEdges };
+  }
 
-    private async _geminiApiCall(action: string, payload: any, model = 'gemini-3-flash-preview') {
-        const key = this._getKey();
-        let endpointUrl: string, body: any;
+  async getNodes(agentId?: string): Promise<any[]> {
+    const all = await this.db.getAll('vectors');
+    if (!agentId || agentId === 'OPERATOR') return all;
+    const aid = agentId.toUpperCase();
+    return all.filter(n => (n.agentId || '').toUpperCase() === aid);
+  }
 
-        if (action === 'generateContent') {
-            endpointUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
-            body = {
-                contents: [{ parts: [{ text: payload.prompt }] }],
-                ...(payload.systemInstruction && { systemInstruction: { parts: [{ text: payload.systemInstruction }] } })
-            };
-        } else if (action === 'batchEmbedContents') {
-            endpointUrl = `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:batchEmbedContents?key=${key}`;
-            body = {
-                requests: payload.texts.map((t: string) => ({ model: "models/text-embedding-004", content: { parts: [{ text: t }] } }))
-            };
-        } else if (action === 'embedContent') {
-             endpointUrl = `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key=${key}`;
-             body = {
-                model: 'models/text-embedding-004',
-                content: { parts: [{ text: payload.text }] }
-            };
-        } else {
-            throw new Error(`Unknown API action: ${action}`);
+  // --- EMBEDDINGS ---
+  async embedBatch(texts: string[], keyOverride: string | null = null): Promise<number[][]> {
+    const key = keyOverride || this._getKey();
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:batchEmbedContents?key=${encodeURIComponent(key)}`;
+    const body = {
+      requests: texts.map(t => ({
+        model: 'models/text-embedding-004',
+        content: { parts: [{ text: t }] }
+      }))
+    };
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    const json = await res.json();
+    if (!res.ok || json.error) throw new Error(json.error?.message || `Embed failed (${res.status})`);
+    return (json.embeddings || []).map((e: any) => e.values);
+  }
+
+  // --- INGESTION ---
+  async ingestBatches(batches: any[], opts: any = {}): Promise<{ ingested: number }> {
+    const agentId = (opts.agentId || '').trim().toUpperCase();
+    if (!agentId) throw new Error('Agent ID required.');
+    const agentHandle = (opts.agentHandle || '').trim();
+    const batchSize = Math.max(5, Math.min(200, parseInt(opts.batchSize || 60, 10)));
+    const threadsPerKey = Math.max(1, Math.min(50, parseInt(opts.threadsPerKey || 3, 10)));
+    const signal = opts.signal || null;
+    const onProgress = typeof opts.onProgress === 'function' ? opts.onProgress : null;
+
+    if (!this.apiKeys.length) throw new Error('API Keys Missing.');
+    if (!Array.isArray(batches) || !batches.length) return { ingested: 0 };
+
+    const concurrency = this.apiKeys.length * threadsPerKey;
+    let processed = 0, written = 0;
+    const inFlight: Set<Promise<void>> = new Set();
+
+    const runOne = async (chunkGroup: any[]) => {
+      if (signal?.aborted) throw new Error('Aborted');
+      const key = this._getKey();
+      const texts = chunkGroup.map(x => x.text);
+      const vectors = await this.embedBatch(texts, key);
+      const nowISO = new Date().toISOString();
+      const nodes = chunkGroup.map((x, i) => ({
+        id: crypto.randomUUID(),
+        agentId,
+        agentHandle,
+        text: x.text,
+        vector: vectors[i],
+        numMarkId: this.genSigil(x.text),
+        metadata: {
+          source: x.source || 'UNKNOWN',
+          timestamp: nowISO,
+          locus: `MYTHOS.LORE.${agentId}`,
+          ...(x.extraMeta || {})
         }
+      }));
 
-        const res = await fetch(endpointUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-            signal: this.abortController?.signal
-        });
+      await this.db.bulkPut('vectors', nodes);
+      written += nodes.length;
+      processed += chunkGroup.length;
+      if (onProgress) onProgress({ processed, written, total: batches.length });
+    };
 
-        if (!res.ok) {
-            const err = await res.json().catch(() => ({ error: { message: res.statusText } }));
-            throw new Error(`API Error: ${err.error?.message || res.statusText}`);
-        }
-        return res.json();
+    const groups = [];
+    for (let i = 0; i < batches.length; i += batchSize) {
+      groups.push(batches.slice(i, i + batchSize));
     }
+
+    let idx = 0;
+    while (idx < groups.length) {
+      if (signal?.aborted) throw new Error('Aborted');
+      while (inFlight.size < concurrency && idx < groups.length) {
+        const g = groups[idx++];
+        const p = runOne(g).catch((e) => { throw e; }).finally(() => inFlight.delete(p));
+        inFlight.add(p);
+      }
+      if (inFlight.size) await Promise.race(Array.from(inFlight));
+    }
+    await Promise.all(Array.from(inFlight));
+    return { ingested: written };
+  }
+
+  // --- GRAPH GENERATION (NEW - CONCURRENT) ---
+  async buildGraphLite(agentId: string, opts: { onProgress: (curr: number, total: number, created: number) => void, threadsPerKey: number }): Promise<number> {
+    const { onProgress, threadsPerKey } = opts;
+    const nodes = await this.getNodes(agentId);
+    if (!nodes.length) return 0;
     
-    chunkText(text: string, maxChunkSize = 1000): string[] {
-        const sentenceRegex = /(?<=[.?!])\s+/;
-        const sentences = text.split(sentenceRegex);
-        const chunks: string[] = [];
-        let buffer = "";
-        for (const sentence of sentences) {
-            if ((buffer.length + sentence.length) <= maxChunkSize) {
-                buffer += (buffer ? " " : "") + sentence;
-            } else {
-                if (buffer) chunks.push(buffer);
-                buffer = sentence;
-            }
-        }
-        if (buffer) chunks.push(buffer);
-        return chunks;
-    }
+    let createdEdges = 0;
+    let processedNodes = 0;
+    const totalNodes = nodes.length;
 
-    async ingest(files: File[], agentId: string, onProgress?: (p: {processed: number, total: number}) => void) {
-        this.abortController = new AbortController();
-        let allTasks: { text: string, source: string, sigil: string }[] = [];
-        for (const file of files) {
-            const text = await file.text();
-            const chunks = this.chunkText(text);
-            chunks.forEach(chunk => allTasks.push({ text: chunk, source: file.name, sigil: NumMarkX_GenSigil(chunk) }));
-        }
-
-        const totalVectors = allTasks.length;
-        let processedCount = 0;
-        const BATCH_SIZE = 50;
-        
-        for (let i = 0; i < allTasks.length; i += BATCH_SIZE) {
-            if (this.abortController.signal.aborted) throw new Error("Ingestion Aborted.");
-            const batch = allTasks.slice(i, i + BATCH_SIZE);
-            const batchTexts = batch.map(t => t.text);
-            try {
-                const data = await this._geminiApiCall('batchEmbedContents', { texts: batchTexts });
-                if (!data.embeddings) throw new Error("Invalid API response for batch embeddings.");
-                for (let j = 0; j < batch.length; j++) {
-                    await this.db.put('vectors', {
-                        id: crypto.randomUUID(),
-                        agent: agentId.toUpperCase(),
-                        text: batch[j].text,
-                        vector: data.embeddings[j].values,
-                        numMarkId: batch[j].sigil,
-                        timestamp: Date.now(),
-                        source: batch[j].source,
-                        metadata: { source: batch[j].source, timestamp: new Date().toISOString() }
-                    });
-                }
-                processedCount += batch.length;
-                if (onProgress) onProgress({ processed: processedCount, total: totalVectors });
-            } catch (err) {
-                console.error("Batch Failed:", err);
-                throw err;
-            }
-        }
-        return processedCount;
-    }
-
-    async chat(userQuery: string, agentId: string | null, customSystemPrompt?: string) {
-        const allNodes = await this.db.getAll('vectors');
-        const candidates = agentId ? allNodes.filter(v => v.agent === agentId) : allNodes;
-        let context = "";
-        let derivation = "General Knowledge";
-        let source = "System";
-
-        if (candidates.length > 0) {
-            const queryEmbData = await this._geminiApiCall('embedContent', { text: userQuery });
-            const queryVec = queryEmbData.embedding.values;
-            
-            const scored = candidates.map(doc => ({
-                ...doc,
-                score: cosineSimilarity(queryVec, doc.vector)
-            })).sort((a, b) => b.score - a.score).slice(0, 5);
-
-            if (scored.length > 0 && scored[0].score > 0.45) {
-                 context = scored.map(s => `[SOURCE: ${s.source || 'Unknown'}]\n${s.text}`).join('\n\n');
-                 derivation = `Derived from ${scored.length} nodes (Top match: ${(scored[0].score * 100).toFixed(1)}%)`;
-                 source = scored[0].source || "Archive";
-            }
-        }
-
-        const defaultSystemInstruction = "You are a neutral, factual AI assistant. Your task is to answer the user's query based *only* on the provided context. If the context does not contain the answer, state that the information is not available in the provided documents.";
-        const systemInstruction = customSystemPrompt || defaultSystemInstruction;
-        const modelPrompt = `CONTEXT:\n${context || 'No context available.'}\n\nUSER QUERY: ${userQuery}\n\nRESPONSE:`
-
-        const genData = await this._geminiApiCall('generateContent', { prompt: modelPrompt, systemInstruction }, 'gemini-3-flash-preview');
-
-        if (!genData.candidates || genData.candidates.length === 0) {
-            throw new Error("Model returned no response.");
-        }
-
-        return {
-            response: genData.candidates[0].content.parts[0].text,
-            derivation,
-            source
-        };
-    }
-
-    async nuke() { await this.db.clear('vectors'); }
+    const concurrency = this.apiKeys.length * (threadsPerKey || 3);
+    const inFlight: Set<Promise<void>> = new Set();
     
-    async getStats(): Promise<LorepackStats> { 
-        const all = await this.db.getAll('vectors');
-        return {
-            totalNodes: all.length,
-            agents: [...new Set(all.map(v => v.agent))] as string[]
-        };
-    }
+    const runOneNode = async (node: any): Promise<number> => {
+        const prompt = `From the following text, extract up to 5 key relationships between entities (people, places, concepts). Present them as a JSON array of triplets, where each triplet has a subject 's', a relation 'r', and an object 'o'. If no clear relationships are found, return an empty array.
 
-    async export(agentId?: string): Promise<{ nodes: any[], count: number }> { 
-        const all = await this.db.getAll('vectors');
-        const nodes = agentId ? all.filter(v => v.agent === agentId) : all;
-        return { nodes, count: nodes.length };
-    }
+CONTEXT:
+${node.text}
+`;
+        const systemInstruction = "You are a Relationship Extractor. Output strictly JSON. Do not use markdown. Your output must be an array of objects, even if it's empty.";
+        try {
+          const key = this._getKey();
+          const ai = new GoogleGenAI({ apiKey: key });
 
-    async import(fileOrData: File | any, onProgress?: (p: {processed: number, total: number}) => void) {
-        let nodes: any[] = [];
-        let agentId: string | null = null;
-
-        if (fileOrData instanceof File) {
-            const text = await fileOrData.text();
-            try {
-                const data = JSON.parse(text);
-                if (data.schema === 'MYTHOS.LOREPACK.v1' && Array.isArray(data.sacred_archive)) {
-                    nodes = data.sacred_archive;
-                    agentId = data.agentId;
-                } else if (Array.isArray(data)) {
-                    nodes = data;
-                } else {
-                    nodes = [data]; 
+          const response = await ai.models.generateContent({
+            model: 'gemini-3-flash-preview',
+            contents: prompt,
+            config: {
+              systemInstruction: systemInstruction,
+              responseMimeType: "application/json",
+              responseSchema: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    s: { type: Type.STRING, description: "The subject of the relationship." },
+                    r: { type: Type.STRING, description: "The relationship between subject and object." },
+                    o: { type: Type.STRING, description: "The object of the relationship." }
+                  },
+                  required: ["s", "r", "o"]
                 }
-            } catch (e) {
-                console.log("JSON Parse failed, attempting JSONL stream parsing...");
-                const lines = text.split(/\r?\n/);
-                for (const line of lines) {
-                    if (line.trim()) {
-                        try {
-                            const node = JSON.parse(line);
-                            if (node && node.vector && node.text) {
-                                nodes.push(node);
-                                if (!agentId && node.agent) agentId = node.agent;
-                            }
-                        } catch (lineErr) {
-                            console.warn("Skipping malformed JSONL line:", lineErr);
-                        }
-                    }
-                }
+              }
             }
-        } else {
-            nodes = Array.isArray(fileOrData) ? fileOrData : 
-                   (fileOrData.sacred_archive ? fileOrData.sacred_archive : [fileOrData]);
-            agentId = fileOrData.agentId || (nodes[0] ? nodes[0].agent : null);
+          });
+          
+          const textResponse = response.text;
+          if (!textResponse) return 0;
+
+          const triplets = JSON.parse(textResponse);
+          
+          if (Array.isArray(triplets) && triplets.length > 0) {
+            const edges = triplets.map(t => ({
+              id: crypto.randomUUID(),
+              type: 'edge',
+              agentId: (agentId || 'UNKNOWN').toUpperCase(),
+              sourceId: node.id,
+              s: t.s,
+              r: t.r,
+              o: t.o,
+              timestamp: new Date().toISOString()
+            }));
+            await this.db.bulkPut('edges', edges);
+            return edges.length;
+          }
+        } catch (e: any) { 
+          console.warn(`[GraphBuild] Failed to extract relationships for a node. Error: ${e.message}`);
         }
+        return 0;
+    };
 
-        if (nodes.length === 0) throw new Error("No valid nodes found in import.");
-
-        let imported = 0;
-        const total = nodes.length;
-        const rawDb = this.db.rawDb;
-        if (!rawDb) throw new Error("Database not ready");
-
-        const tx = rawDb.transaction('vectors', 'readwrite');
-        const store = tx.objectStore('vectors');
-
-        await new Promise<void>((resolve, reject) => {
-            tx.oncomplete = () => resolve();
-            tx.onerror = (e) => reject((e.target as IDBRequest).error);
-
-            nodes.forEach(node => {
-                if (!node.id) node.id = crypto.randomUUID();
-                store.put(node);
-                imported++;
-                if (onProgress && imported % 100 === 0) {
-                    onProgress({ processed: imported, total: total });
+    let nodeIndex = 0;
+    const processQueue = async () => {
+        while (nodeIndex < totalNodes) {
+            if (inFlight.size >= concurrency) {
+                await Promise.race(Array.from(inFlight));
+                continue;
+            }
+            const nodeToProcess = nodes[nodeIndex++];
+            const p = runOneNode(nodeToProcess).then(newEdges => {
+                createdEdges += newEdges;
+            }).catch(err => {
+                console.error(`[GraphBuild] Error processing node ${nodeToProcess.id}:`, err);
+            }).finally(() => {
+                processedNodes++;
+                if (onProgress) {
+                    onProgress(processedNodes, totalNodes, createdEdges);
                 }
+                inFlight.delete(p);
             });
-        });
+            inFlight.add(p);
+        }
+    };
+    
+    await processQueue();
+    await Promise.all(Array.from(inFlight));
 
-        return { success: true, nodesImported: imported, agentId };
-    }
+    return createdEdges;
+  }
 
-    async getNodes(agentId: string) {
-        if (!agentId) throw new Error("Agent ID is required to get nodes.");
-        const all = await this.db.getAll('vectors');
-        if (agentId === 'OPERATOR') return all;
-        return all.filter(v => v.agent === agentId);
+
+  // --- EXPORT ---
+  async *yieldExportBatches(agentId: string, batch = 1000): AsyncGenerator<any[]> {
+    // Vectors
+    const nodes = await this.getNodes(agentId);
+    for (let i = 0; i < nodes.length; i += batch) {
+      yield nodes.slice(i, i + batch).map(o => ({
+        v: 2,
+        type: 'vector',
+        a: o.agentId,
+        h: o.agentHandle || '',
+        t: o.text,
+        vec: o.vector,
+        m: o.numMarkId,
+        d: o.metadata || {}
+      }));
     }
+    // Edges
+    const allEdges = await this.db.getAll('edges');
+    const agentEdges = allEdges.filter(e => (e.agentId || '').toUpperCase() === (agentId || '').toUpperCase());
+    for (let i = 0; i < agentEdges.length; i += batch) {
+      yield agentEdges.slice(i, i + batch).map(e => ({
+        v: 2,
+        type: 'edge',
+        id: e.id,
+        aid: e.agentId,
+        src: e.sourceId,
+        s: e.s,
+        r: e.r,
+        o: e.o
+      }));
+    }
+  }
+
+  // --- IMPORT ---
+  async import(fileOrBlob: File, onProgress: (p: {processed: number}) => void): Promise<{ success: boolean, nodesImported: number }> {
+    const fileName = fileOrBlob?.name || '';
+    let stream: ReadableStream<any> = fileOrBlob.stream();
+    if (fileName.endsWith('.gz')) stream = stream.pipeThrough(new DecompressionStream('gzip'));
+    const reader = stream.pipeThrough(new TextDecoderStream()).getReader();
+
+    let buffer = '';
+    let count = 0;
+    let batch: any[] = [];
+    const BATCH_WRITE = 1000;
+
+    const writeBatch = async () => {
+      if (!batch.length) return;
+      const vectors: any[] = [];
+      const edges: any[] = [];
+
+      for (const n of batch) {
+        if (n.type === 'edge') {
+           edges.push({
+            id: n.id || crypto.randomUUID(),
+            type: 'edge',
+            agentId: n.aid || n.a, 
+            sourceId: n.src,
+            s: n.s,
+            r: n.r,
+            o: n.o,
+            timestamp: new Date().toISOString()
+           });
+        } else {
+           const vNode = (n.v === 2) 
+             ? {
+                 id: crypto.randomUUID(),
+                 agentId: n.a,
+                 agentHandle: n.h || '',
+                 text: n.t,
+                 vector: n.vec,
+                 numMarkId: n.m,
+                 metadata: n.d || {}
+               }
+             : { ...n, id: n.id || crypto.randomUUID() };
+           vectors.push(vNode);
+        }
+      }
+
+      if (vectors.length) await this.db.bulkPut('vectors', vectors);
+      if (edges.length) await this.db.bulkPut('edges', edges);
+      
+      count += batch.length;
+      batch = [];
+      if (onProgress) onProgress({ processed: count });
+    };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += value;
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        const s = line.trim();
+        if (!s) continue;
+        try { batch.push(JSON.parse(s)); } catch(e) {}
+        if (batch.length >= BATCH_WRITE) await writeBatch();
+      }
+    }
+    if (buffer.trim()) {
+       try { batch.push(JSON.parse(buffer.trim())); } catch(e){}
+    }
+    await writeBatch();
+    return { success: true, nodesImported: count };
+  }
+
+  // --- CHAT ---
+  async chat(userQuery: string, agentId: string | null, systemPrompt?: string, model = 'gemini-3-flash-preview', topK = 6, threshold = 0.45): Promise<{ response: string, derivation: string, source: string }> {
+    const pool = await this.getNodes(agentId || undefined);
+    if (!pool.length) return { response: 'Vault empty.', derivation: 'EMPTY_VAULT', source: 'NULL' };
+
+    const qVec = (await this.embedBatch([userQuery]))[0];
+    const scored = pool.map(n => ({ n, s: cosine(qVec, n.vector) })).sort((a, b) => b.s - a.s).slice(0, topK);
+    const best = scored[0]?.s || 0;
+    const contextNodes = best >= threshold ? scored : [];
+    
+    const context = contextNodes.map(x => `--- [SOURCE: ${x.n.metadata?.source || 'UNKNOWN'} | ${(x.s * 100).toFixed(1)}%] ---\n${x.n.text}`).join('\n\n');
+    const derivation = contextNodes.length ? `COSINE_TOPK(${topK})` : `NO_CONTEXT`;
+
+    const key = this._getKey();
+    const ai = new GoogleGenAI({ apiKey: key });
+
+    const response = await ai.models.generateContent({
+      model: model,
+      contents: `CONTEXT:\n${context}\n\nUSER:\n${userQuery}`,
+      config: {
+        systemInstruction: systemPrompt || '',
+      }
+    });
+
+    return { response: response.text || '(no reply)', derivation, source: 'RAG' };
+  }
+
+  async nuke() { return this.db.nuke(); }
 }

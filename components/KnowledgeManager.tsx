@@ -30,7 +30,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
   const [vectors, setVectors] = useState<VectorRecord[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [showNukeModal, setShowNukeModal] = useState(false);
-  const [importProgress, setImportProgress] = useState({ p: 0, t: 0 });
+  const [importProgress, setImportProgress] = useState({ processed: 0, active: false });
   
   const importInputRef = useRef<HTMLInputElement>(null);
   const agentHandle = AGENTS.find(a => a.id === currentAgentId)?.handle || currentAgentId;
@@ -51,9 +51,10 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
       const file = e.target.files?.[0];
       if (!file) return;
       setIsLoading(true);
+      setImportProgress({ processed: 0, active: true });
       try {
-          await IngestionService.importLorePack(file, agentHandle, (p, t) => {
-              setImportProgress({ p, t });
+          await IngestionService.importLorePack(file, agentHandle, (processed) => {
+              setImportProgress({ processed, active: true });
           });
           await fetchVectors();
           alert(`Import Success: Knowledge base synchronized for ${agentHandle}.`);
@@ -61,7 +62,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
           alert(`Import Failed: ${err.message}`);
       } finally {
           setIsLoading(false);
-          setImportProgress({ p: 0, t: 0 });
+          setImportProgress({ processed: 0, active: false });
           if (importInputRef.current) importInputRef.current.value = '';
       }
   };
@@ -106,15 +107,15 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
           )}
 
           <div className="flex-group" style={{ marginBottom: '1rem' }}>
-              <button onClick={() => importInputRef.current?.click()} className="btn btn-primary" style={{ flex: 2 }}>IMPORT LOREPACK (.jsonl)</button>
+              <button onClick={() => importInputRef.current?.click()} className="btn btn-primary" style={{ flex: 2 }}>IMPORT LOREPACK (.jsonl / .gz)</button>
               <button onClick={() => IngestionService.exportLorePack(agentHandle)} className="btn btn-secondary" style={{ flex: 1 }}>EXPORT</button>
               <button onClick={() => setShowNukeModal(true)} className="btn btn-danger" style={{ width: 'auto' }}>NUKE VAULT</button>
-              <input type="file" ref={importInputRef} className="hidden" onChange={handleImport} accept=".jsonl" />
+              <input type="file" ref={importInputRef} className="hidden" onChange={handleImport} accept=".jsonl,.gz" />
           </div>
 
           {isLoading && (
               <div className="status-banner status-info">
-                  {importProgress.t > 0 ? `Syncing Lattice: ${importProgress.p} / ${importProgress.t}` : 'Accessing Vault...'}
+                  {importProgress.active ? `Syncing Lattice: ${importProgress.processed} nodes...` : 'Accessing Vault...'}
               </div>
           )}
 

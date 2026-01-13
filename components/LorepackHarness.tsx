@@ -1,265 +1,330 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Lorepack, LorepackStats } from '../services/lorepack';
+import { Lorepack } from '../services/lorepack';
+import './../css/lorepack-harness.css';
 
-export const LorepackHarness: React.FC = () => {
-    const [agentId, setAgentId] = useState('');
-    const [sysStatus, setSysStatus] = useState('AWAITING KEY');
-    const [keyStatus, setKeyStatus] = useState('No Keys Stored');
-    const [stats, setStats] = useState<LorepackStats>({ totalNodes: 0, agents: [] });
-    const [state, setState] = useState('IDLE');
-    const [logs, setLogs] = useState<{msg: string, type: string}[]>([]);
-    const [fileQueue, setFileQueue] = useState<File[]>([]);
-    const [progress, setProgress] = useState(0);
-    const [eta, setEta] = useState('--:--');
-    const [chatInput, setChatInput] = useState('');
-    const [isProcessing, setIsProcessing] = useState(false);
-    const [nodeOutput, setNodeOutput] = useState('');
+interface LogEntry {
+  id: string;
+  msg: string;
+  src: string;
+  type: string;
+}
 
-    const lorepack = useRef(new Lorepack());
-    const fileInputRef = useRef<HTMLInputElement>(null);
-    const importRef = useRef<HTMLInputElement>(null);
-    const logEndRef = useRef<HTMLDivElement>(null);
+interface LorepackHarnessProps {
+  onExit: () => void;
+}
 
-    const KEYS_STORAGE = 'MYTHOS_GEMINI_KEYS';
+export const LorepackHarness: React.FC<LorepackHarnessProps> = ({ onExit }) => {
+  const loreRef = useRef<Lorepack | null>(null);
+  const [isReady, setIsReady] = useState(false);
+  
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [stats, setStats] = useState({ totalNodes: 0, totalEdges: 0 });
+  const [fileQueue, setFileQueue] = useState<File[]>([]);
+  const [stateLabel, setStateLabel] = useState('IDLE');
+  const [progress, setProgress] = useState(0);
+  const [progressLog, setProgressLog] = useState('0');
+  
+  const [agentId, setAgentId] = useState('');
+  const [agentHandle, setAgentHandle] = useState('');
+  const [systemPrompt, setSystemPrompt] = useState('You are ARCHIVAX.');
+  const [model, setModel] = useState('gemini-2.5-flash');
+  const [threads, setThreads] = useState('3');
+  const [batchSize, setBatchSize] = useState('60');
+  
+  const [keys, setKeys] = useState(['', '', '', '', '']);
+  const [isPromptVisible, setIsPromptVisible] = useState(false);
+  const [isKeysVisible, setIsKeysVisible] = useState(false);
+  const [isNukeModalVisible, setIsNukeModalVisible] = useState(false);
 
-    useEffect(() => {
-        const keys = JSON.parse(localStorage.getItem(KEYS_STORAGE) || '[]');
-        if (keys.length > 0) {
-            lorepack.current.setApiKeys(keys);
-            setKeyStatus(`Loaded ${keys.length} Key(s)`);
-            setSysStatus('ONLINE');
-        }
-        refreshStats();
-    }, []);
+  const [chatInput, setChatInput] = useState('');
 
-    useEffect(() => {
-        logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [logs]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const importFileRef = useRef<HTMLInputElement>(null);
+  const logConsoleRef = useRef<HTMLDivElement>(null);
+  let abortControllerRef = useRef<AbortController | null>(null);
 
-    const addLog = (msg: string, type = 'info') => {
-        setLogs(prev => [...prev, { msg, type }]);
-    };
+  const uiLog = (msg: string, src = 'SYS', type = 'sys') => {
+    setLogs(prev => [...prev, { id: crypto.randomUUID(), msg, src, type }]);
+  };
 
-    const refreshStats = async () => {
-        const s = await lorepack.current.getStats();
-        setStats(s);
-    };
-
-    const handleSaveKeys = () => {
-        const key1 = (document.getElementById('apiKey1') as HTMLInputElement).value.trim();
-        const key2 = (document.getElementById('apiKey2') as HTMLInputElement).value.trim();
-        const key3 = (document.getElementById('apiKey3') as HTMLInputElement).value.trim();
-        const keys = [key1, key2, key3].filter(k => k !== '');
+  const refreshStats = async () => {
+    if (!loreRef.current) return;
+    const s = await loreRef.current.getStats();
+    setStats({ totalNodes: s.totalNodes, totalEdges: s.totalEdges });
+  };
+  
+  // --- INITIALIZATION ---
+  useEffect(() => {
+    const init = async () => {
+      try {
+        const lore = new Lorepack();
+        await lore.ready();
+        loreRef.current = lore;
         
-        if (keys.length > 0) {
-            localStorage.setItem(KEYS_STORAGE, JSON.stringify(keys));
-            lorepack.current.setApiKeys(keys);
-            setKeyStatus(`Saved ${keys.length} Key(s)`);
-            setSysStatus('ONLINE');
-            addLog("API Keys updated.", "sys");
-        }
+        const savedPrompt = localStorage.getItem('O_PROMPT');
+        if (savedPrompt) setSystemPrompt(savedPrompt);
+        
+        const savedKeys = JSON.parse(localStorage.getItem('O_KEYS') || '[]');
+        const newKeys = [...savedKeys];
+        while (newKeys.length < 5) newKeys.push('');
+        setKeys(newKeys);
+        
+        lore.setApiKeys(savedKeys.filter(Boolean));
+        
+        await refreshStats();
+        setStateLabel('IDLE');
+        uiLog('LOREPACK Factory online (Graph Ready).', 'SYS', 'ok');
+        setIsReady(true);
+      } catch (e: any) {
+        uiLog(`Boot error: ${e.message}`, 'ERR', 'err');
+      }
     };
+    init();
+  }, []);
+  
+  useEffect(() => {
+    logConsoleRef.current?.scrollTo({ top: logConsoleRef.current.scrollHeight, behavior: 'smooth' });
+  }, [logs]);
 
-    const handleIngest = async () => {
-        const id = agentId.trim().toUpperCase();
-        if (!id) return addLog('Agent ID required.', 'err');
-        if (fileQueue.length === 0) return addLog('No files staged.', 'err');
+  // --- ACTIONS ---
 
-        setState('INGESTING');
-        setProgress(0);
-        const start = Date.now();
+  const handleSaveParams = () => {
+    localStorage.setItem('O_PROMPT', systemPrompt);
+    const validKeys = keys.map(k => k.trim()).filter(Boolean);
+    localStorage.setItem('O_KEYS', JSON.stringify(validKeys));
+    loreRef.current?.setApiKeys(validKeys);
+    uiLog(`Parameters saved. Keys: ${validKeys.length}`, 'SYS');
+  };
 
-        try {
-            await lorepack.current.ingest(fileQueue, id, ({ processed, total }) => {
-                setProgress((processed / total) * 100);
-                const elapsed = (Date.now() - start) / 1000;
-                const rate = processed / elapsed;
-                const remaining = (total - processed) / rate;
-                
-                const mins = Math.floor(remaining / 60);
-                const secs = Math.floor(remaining % 60);
-                setEta(`${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`);
-            });
-            addLog('Ingestion complete.', 'sys');
-            setFileQueue([]);
-            await refreshStats();
-        } catch (e: any) {
-            addLog(`Error: ${e.message}`, 'err');
-        } finally {
-            setState('IDLE');
-            setProgress(0);
-            setEta('--:--');
+  const handleStageFiles = (files: FileList | null) => {
+    const fileList = Array.from(files || []);
+    if (!fileList.length) return;
+    setFileQueue(prev => [...prev, ...fileList]);
+    uiLog(`Staged ${fileList.length} file(s).`, 'SYS');
+  };
+
+  const buildTasksFromFiles = async () => {
+    const tasks = [];
+    for (const f of fileQueue) {
+      const text = await f.text();
+      const chunks = loreRef.current!.chunk(text);
+      for (const c of chunks) tasks.push({ text: c, source: f.name });
+    }
+    return tasks;
+  };
+
+  const setControlsEnabled = (enabled: boolean) => {
+    // In React, this is handled by the `disabled` prop on buttons based on stateLabel
+  };
+
+  const handleIngest = async () => {
+    if (!agentId) return uiLog('Agent ID required.', 'ERR', 'err');
+    if (fileQueue.length === 0) return uiLog('No files staged.', 'ERR', 'err');
+
+    abortControllerRef.current = new AbortController();
+    setControlsEnabled(false);
+    setStateLabel('INGESTING');
+    setProgress(0);
+    
+    try {
+      const tasks = await buildTasksFromFiles();
+      uiLog(`Ingesting ${tasks.length} chunks...`, 'SYS');
+      await loreRef.current!.ingestBatches(tasks, {
+        agentId: agentId.trim().toUpperCase(),
+        agentHandle: agentHandle.trim(),
+        batchSize: parseInt(batchSize, 10),
+        threadsPerKey: parseInt(threads, 10),
+        signal: abortControllerRef.current.signal,
+        onProgress: ({ processed, total }) => {
+          setProgress((processed / total) * 100);
+          setProgressLog(String(processed));
         }
-    };
+      });
+      uiLog('Ingestion complete.', 'SYS', 'ok');
+      setFileQueue([]);
+      await refreshStats();
+    } catch (e: any) {
+      uiLog(`Ingest failed: ${e.message}`, 'ERR', 'err');
+    } finally {
+      setStateLabel('IDLE');
+      setControlsEnabled(true);
+      abortControllerRef.current = null;
+    }
+  };
+  
+  const handleExport = async () => {
+    const id = agentId.trim().toUpperCase();
+    if (!id) return uiLog('Agent ID required.', 'ERR', 'err');
+    setControlsEnabled(false);
+    setStateLabel('EXPORTING');
+    setProgress(0);
 
-    const handleExport = async () => {
-        if (!agentId) return addLog('Agent ID required for export.', 'err');
-        setState('EXPORTING');
-        try {
-            const { nodes, count } = await lorepack.current.export(agentId.toUpperCase());
-            if (count === 0) throw new Error("No nodes found.");
-            
-            const content = nodes.map(n => JSON.stringify(n)).join('\n');
-            const blob = new Blob([content], { type: 'application/jsonl' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `MYTHOS.LORE.${agentId.toUpperCase()}.jsonl`;
-            a.click();
-            URL.revokeObjectURL(url);
-            addLog(`Exported ${count} nodes.`, 'sys');
-        } catch (e: any) {
-            addLog(`Export failed: ${e.message}`, 'err');
-        } finally {
-            setState('IDLE');
+    try {
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream({
+        async start(controller) {
+          let count = 0;
+          for await (const batch of loreRef.current!.yieldExportBatches(id, 1000)) {
+            const lines = batch.map(obj => JSON.stringify(obj)).join('\n') + '\n';
+            controller.enqueue(encoder.encode(lines));
+            count += batch.length;
+            setProgressLog(String(count));
+            setProgress(Math.min(99, (count % 5000) / 50));
+          }
+          controller.close();
         }
-    };
+      });
+      const gz = stream.pipeThrough(new CompressionStream('gzip'));
+      const blob = await new Response(gz).blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `MYTHOS.LORE.${id}.LOREPACK.${new Date().toISOString().slice(0,10)}.jsonl.gz`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+      uiLog(`Exported ${id}.`, 'SYS', 'ok');
+    } catch (e: any) {
+      uiLog(`Export failed: ${e.message}`, 'ERR', 'err');
+    } finally {
+      setStateLabel('IDLE');
+      setControlsEnabled(true);
+      setProgress(0);
+    }
+  };
 
-    const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        if (!file) return;
-        setState('IMPORTING');
-        addLog(`Importing ${file.name}...`, 'sys');
-        try {
-            const res = await lorepack.current.import(file, ({ processed, total }) => {
-                setProgress((processed / total) * 100);
-            });
-            addLog(`Imported ${res.nodesImported} nodes for ${res.agentId || 'unknown'}.`, 'sys');
-            await refreshStats();
-        } catch (e: any) {
-            addLog(`Import failed: ${e.message}`, 'err');
-        } finally {
-            setState('IDLE');
-            setProgress(0);
-            if (importRef.current) importRef.current.value = '';
-        }
-    };
+  const handleImport = async (file: File | null) => {
+    if (!file) return;
+    setControlsEnabled(false);
+    setStateLabel('IMPORTING');
+    setProgress(0);
+    try {
+      const res = await loreRef.current!.import(file, ({ processed }) => {
+        setProgress(Math.min(99, (processed % 5000) / 50));
+        setProgressLog(String(processed));
+      });
+      uiLog(`Imported ${res.nodesImported} items.`, 'SYS', 'ok');
+      await refreshStats();
+    } catch (e: any) {
+      uiLog(`Import failed: ${e.message}`, 'ERR', 'err');
+    } finally {
+      setStateLabel('IDLE');
+      setControlsEnabled(true);
+      setProgress(0);
+    }
+  };
 
-    const handleChat = async () => {
-        if (!chatInput.trim() || isProcessing) return;
-        const query = chatInput.trim();
-        setChatInput('');
-        addLog(`${agentId || 'USER'}: ${query}`, 'user');
-        setIsProcessing(true);
+  const handleChat = async () => {
+    const q = chatInput.trim();
+    if (!q) return;
+    uiLog(q, 'OPERATOR', 'user');
+    setChatInput('');
+    try {
+      const res = await loreRef.current!.chat(q, agentId.trim().toUpperCase(), systemPrompt, model);
+      uiLog(res.response, agentId.trim().toUpperCase() || 'ARCHIVAX', 'ai');
+      uiLog(`[${res.derivation}]`, 'SYS', 'sys');
+    } catch (e: any) {
+      uiLog(`Chat error: ${e.message}`, 'ERR', 'err');
+    }
+  };
+  
+  const handleBuildGraph = async () => {
+    const aid = agentId.trim().toUpperCase();
+    if (!aid) return uiLog('Agent ID required.', 'ERR', 'err');
+    setControlsEnabled(false);
+    setStateLabel('GRAPHING');
+    setProgress(0);
+    try {
+      uiLog(`Building Graph for ${aid}...`, 'SYS');
+      const count = await loreRef.current!.buildGraphLite(aid, {
+        onProgress: (curr, total, created) => {
+          setProgress((curr / total) * 100);
+          setProgressLog(`${curr}/${total} | +${created} Edges`);
+        },
+        threadsPerKey: parseInt(threads, 10)
+      });
+      uiLog(`Graph build complete. ${count} edges created.`, 'SYS', 'ok');
+      await refreshStats();
+    } catch (e: any) {
+      uiLog(`Graph build failed: ${e.message}`, 'ERR', 'err');
+    } finally {
+      setStateLabel('IDLE');
+      setControlsEnabled(true);
+      setProgress(0);
+    }
+  };
+  
+  const handleNuke = async () => {
+      await loreRef.current?.nuke();
+      window.location.reload();
+  };
 
-        try {
-            const res = await lorepack.current.chat(query, agentId.toUpperCase() || null);
-            addLog(`ARCHIVAX: ${res.response}`, 'ai');
-        } catch (e: any) {
-            addLog(`Query Error: ${e.message}`, 'err');
-        } finally {
-            setIsProcessing(false);
-        }
-    };
-
-    return (
-        <div className="lorepack-harness">
-            <div className="header">
-                <div className="brand">LOREPACK <span style={{color:'#666'}}>//</span> HARNESS v1.1</div>
-                <div className="status">STATUS: <span style={{color: sysStatus === 'ONLINE' ? '#00ffaa' : '#f87171'}}>{sysStatus}</span></div>
-            </div>
-            
-            <div className="main-grid">
-                <div className="controls">
-                    <div className="input-group">
-                        <label>LOCUS ID (AGENT)</label>
-                        <input value={agentId} onChange={e => setAgentId(e.target.value)} type="text" placeholder="e.g. BARBELO" />
-                    </div>
-
-                    <div className="collapsible-section">
-                        <label>GEMINI API KEYS</label>
-                        <div className="key-inputs">
-                            <input id="apiKey1" type="password" placeholder="Key #1" />
-                            <input id="apiKey2" type="password" placeholder="Key #2" />
-                            <input id="apiKey3" type="password" placeholder="Key #3" />
-                            <div className="key-footer">
-                                <span>{keyStatus}</span>
-                                <button className="btn btn-xs" onClick={handleSaveKeys}>SAVE KEYS</button>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div className="input-group">
-                        <label>SOURCE MATERIAL</label>
-                        <button className="btn primary" onClick={() => fileInputRef.current?.click()}>STAGED FILES ({fileQueue.length})</button>
-                        <input ref={fileInputRef} type="file" multiple style={{display:'none'}} onChange={e => setFileQueue(Array.from(e.target.files || []))} />
-                    </div>
-
-                    <button className="btn" onClick={handleIngest} disabled={state !== 'IDLE'}>INGEST BATCH</button>
-                    <button className="btn" onClick={() => importRef.current?.click()}>IMPORT LOREPACK</button>
-                    <input ref={importRef} type="file" style={{display:'none'}} onChange={handleImport} />
-                    <button className="btn" onClick={handleExport}>EXPORT LOREPACK</button>
-                    <button className="btn danger" onClick={async () => { if(confirm('Nuke Vault?')) { await lorepack.current.nuke(); addLog('Vault nuked.', 'err'); refreshStats(); } }}>NUKE VAULT</button>
-                </div>
-
-                <div className="dashboard">
-                    <div className="stats-grid">
-                        <div className="stat-item"><span className="label">NODES</span><span className="value">{stats.totalNodes}</span></div>
-                        <div className="stat-item"><span className="label">STAGED</span><span className="value">{fileQueue.length}</span></div>
-                        <div className="stat-item"><span className="label">ETA</span><span className="value">{eta}</span></div>
-                        <div className="stat-item" style={{gridColumn:'span 2'}}><span className="label">STATE</span><span className="value" style={{color: '#00ffaa'}}>{state}</span></div>
-                    </div>
-
-                    <div className="log-console">
-                        {logs.map((log, i) => (
-                            <div key={i} className={`log-entry ${log.type}`}>
-                                {log.msg}
-                            </div>
-                        ))}
-                        <div ref={logEndRef} />
-                    </div>
-
-                    {progress > 0 && (
-                        <div className="progress-container">
-                            <div className="progress-bar" style={{width: `${progress}%`}}></div>
-                        </div>
-                    )}
-
-                    <div className="chat-input-area">
-                        <span>&gt;</span>
-                        <textarea 
-                            value={chatInput} 
-                            onChange={e => setChatInput(e.target.value)} 
-                            placeholder="Query Archivax..."
-                            onKeyDown={e => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), handleChat())}
-                        />
-                        <button className="btn primary" onClick={handleChat} disabled={isProcessing}>SEND</button>
-                    </div>
-                </div>
-            </div>
-
-            <style>{`
-                .lorepack-harness { display: flex; flex-direction: column; height: 100vh; background: #050505; color: #ccc; font-family: monospace; font-size: 13px; }
-                .header { display: flex; justify-content: space-between; padding: 1rem; border-bottom: 1px solid #333; }
-                .brand { font-size: 1.2rem; font-weight: bold; color: #00ffaa; letter-spacing: 2px; }
-                .main-grid { display: grid; grid-template-columns: 300px 1fr; gap: 1rem; flex: 1; padding: 1rem; overflow: hidden; }
-                .controls { background: #111; border: 1px solid #333; padding: 1rem; display: flex; flex-direction: column; gap: 1rem; overflow-y: auto; }
-                .dashboard { display: flex; flex-direction: column; gap: 1rem; overflow: hidden; }
-                .input-group { display: flex; flex-direction: column; gap: 0.5rem; }
-                label { color: #666; font-size: 0.7rem; text-transform: uppercase; }
-                input, textarea { background: #000; border: 1px solid #444; color: #fff; padding: 0.5rem; font-family: inherit; }
-                .btn { background: #222; color: #fff; border: 1px solid #555; padding: 0.75rem; cursor: pointer; text-transform: uppercase; font-size: 0.75rem; }
-                .btn:hover { border-color: #00ffaa; color: #00ffaa; }
-                .btn.primary { border-color: #00ffaa; color: #00ffaa; background: rgba(0, 255, 170, 0.05); }
-                .btn.danger { border-color: #ff3333; color: #ff3333; }
-                .btn-xs { padding: 0.25rem 0.5rem; font-size: 0.6rem; }
-                .stats-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0.5rem; background: #000; padding: 0.5rem; border: 1px solid #333; }
-                .stat-item { text-align: center; }
-                .stat-item .label { display: block; font-size: 0.6rem; color: #666; }
-                .stat-item .value { font-size: 1rem; font-weight: bold; }
-                .log-console { flex: 1; background: #000; border: 1px solid #333; padding: 0.5rem; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
-                .log-entry { padding-left: 0.5rem; border-left: 2px solid #333; }
-                .log-entry.sys { border-left-color: #00ffaa; color: #00ffaa; }
-                .log-entry.err { border-left-color: #ff3333; color: #ff3333; }
-                .log-entry.user { border-left-color: #38bdf8; color: #eee; }
-                .log-entry.ai { border-left-color: #888; color: #ccc; white-space: pre-wrap; padding: 0.5rem; background: #0a0a0a; }
-                .progress-container { height: 4px; background: #222; }
-                .progress-bar { height: 100%; background: #00ffaa; transition: width 0.2s; }
-                .chat-input-area { display: flex; align-items: center; gap: 0.5rem; background: #0a0a0a; padding: 0.5rem; border: 1px solid #333; }
-                .chat-input-area textarea { flex: 1; height: 2.5rem; resize: none; background: transparent; border: none; outline: none; }
-                .key-inputs { display: flex; flex-direction: column; gap: 0.25rem; }
-                .key-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 0.25rem; font-size: 0.6rem; color: #666; }
-            `}</style>
+  return (
+    <div className="lorepack-harness">
+      <div className="header">
+        <div className="brand">MYTHOS <span className="text-dim-alt">//</span> LOREPACK FACTORY</div>
+        <button onClick={onExit} className="btn danger">EXIT FACTORY</button>
+      </div>
+      <div className="main-grid">
+        <div className="controls">
+          <input value={agentId} onChange={e => setAgentId(e.target.value)} type="text" placeholder="AGENT ID" />
+          <input value={agentHandle} onChange={e => setAgentHandle(e.target.value)} type="text" placeholder="AGENT HANDLE (Optional)" />
+          <div className="input-group">
+            <label>MODEL OVERRIDE</label>
+            <select value={model} onChange={e => setModel(e.target.value)}>
+              <option value="gemini-2.5-flash">GEMINI 2.5 FLASH</option>
+              <option value="gemini-3-pro-preview">GEMINI 3 PRO</option>
+            </select>
+          </div>
+          <div className="input-group">
+            <label onClick={() => setIsPromptVisible(!isPromptVisible)} className="cursor-pointer">SYSTEM INSTRUCTIONS</label>
+            {isPromptVisible && <div className="collapsible-content"><textarea value={systemPrompt} onChange={e => setSystemPrompt(e.target.value)} rows={6}></textarea></div>}
+          </div>
+          <div className="input-group">
+            <label onClick={() => setIsKeysVisible(!isKeysVisible)} className="cursor-pointer">PARALLEL API ARRAY</label>
+            {isKeysVisible && <div className="collapsible-content">
+              {keys.map((k, i) => <input key={i} value={k} onChange={e => { const newKeys = [...keys]; newKeys[i] = e.target.value; setKeys(newKeys); }} type="password" placeholder={`KEY ${i+1}`} />)}
+            </div>}
+          </div>
+          <div className="input-group"><label>EMBED BATCH SIZE</label><input value={batchSize} onChange={e => setBatchSize(e.target.value)} type="number" min="1" max="200" /></div>
+          <div className="input-group"><label>THREADS PER KEY</label><input value={threads} onChange={e => setThreads(e.target.value)} type="number" min="1" max="50" /></div>
+          <button onClick={handleSaveParams} className="btn">LOCK PARAMETERS</button>
+          <hr className="sep" />
+          <button className="btn" onClick={() => fileInputRef.current?.click()}>[+] STAGE FILES</button>
+          <input ref={fileInputRef} type="file" multiple style={{display:'none'}} onChange={(e) => { handleStageFiles(e.target.files); (e.target as HTMLInputElement).value = ''; }} />
+          <button id="ingestBtn" onClick={handleIngest} className="btn">INGEST LORE</button>
+          <button id="buildGraphBtn" onClick={handleBuildGraph} className="btn text-main-color">BUILD GRAPH LITE</button>
+          <button id="exportBtn" onClick={handleExport} className="btn">EXPORT (GZIP)</button>
+          <button id="importBtn" onClick={() => importFileRef.current?.click()} className="btn">IMPORT (GZIP)</button>
+          <input ref={importFileRef} type="file" accept=".gz,.jsonl,.json" style={{display:'none'}} onChange={async (e) => { await handleImport(e.target.files?.[0] || null); (e.target as HTMLInputElement).value = ''; }} />
+          <button id="nukeTrigger" onClick={() => setIsNukeModalVisible(true)} className="btn text-error-color margin-top-auto">NUKE VAULT</button>
         </div>
-    );
+        <div className="dashboard">
+          <div className="stats-grid">
+            <div className="stat-item"><span className="stat-label">TOTAL NODES/EDGES</span><span id="statVectors" className="stat-value active">{stats.totalNodes} N / {stats.totalEdges} E</span></div>
+            <div className="stat-item"><span className="stat-label">STAGED</span><span id="statChunks" className="stat-value">{fileQueue.length} Files | {(fileQueue.reduce((a, f) => a + (f.size || 0), 0) / (1024 * 1024)).toFixed(2)} MB</span></div>
+            <div className="stat-item"><span className="stat-label">STATE</span><span id="statState" className="text-state-idle stat-value">{stateLabel}</span></div>
+          </div>
+          <div className="flex-row" style={{paddingBottom:'5px', fontSize:'12px'}}><div className="text-dim-alt">LOG: <span className="text-main-color">{progressLog}</span></div><div onClick={() => setLogs([])} className="cursor-pointer text-dim-alt">[X] CLEAR LOG</div></div>
+          <div id="logConsole" ref={logConsoleRef}>
+            {logs.map(log => (
+              <div key={log.id} className={`log-entry ${log.type}`}><b>{log.src}</b>: {log.msg}</div>
+            ))}
+          </div>
+          <div className="progress-container"><div id="progressBar" className="progress-bar" style={{width: `${progress}%`}}></div></div>
+          <div className="terminal-group">
+            <textarea id="chatInput" value={chatInput} onChange={e => setChatInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleChat(); } }} placeholder="Command Oracle." rows={1} className="flex-1"></textarea>
+            <button id="sendBtn" onClick={handleChat} className="btn" style={{padding: '0 20px'}}>SEND</button>
+          </div>
+        </div>
+      </div>
+      {isNukeModalVisible && <div id="nukeModal" className="modal-overlay">
+        <div className="modal">
+          <h2>PURGE VAULT?</h2>
+          <div className="row" style={{display: 'flex', gap: '10px'}}>
+            <button onClick={handleNuke} className="btn danger flex-1">CONFIRM</button>
+            <button onClick={() => setIsNukeModalVisible(false)} className="btn flex-1">CANCEL</button>
+          </div>
+        </div>
+      </div>}
+    </div>
+  );
 };
