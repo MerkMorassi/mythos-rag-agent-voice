@@ -5,6 +5,7 @@ import { VectorRecord } from '../types';
 
 const DB_NAME = 'mythos_vault';
 const DB_VERSION = 8;
+const GENERATION_MODEL = 'gemini-1.5-flash';
 
 export interface LorepackNode extends VectorRecord {
     numMarkId?: string;
@@ -130,7 +131,7 @@ export class Lorepack {
         return key;
     }
 
-    private async _geminiApiCall(action: string, payload: any, model = 'gemini-3-flash-preview') {
+    private async _geminiApiCall(action: string, payload: any, model = GENERATION_MODEL) {
         const key = this._getKey();
         let endpointUrl: string, body: any;
 
@@ -208,8 +209,13 @@ export class Lorepack {
             const batchTexts = batch.map(t => t.text);
             try {
                 const data = await this._geminiApiCall('batchEmbedContents', { texts: batchTexts });
-                if (!data.embeddings) throw new Error("Invalid API response for batch embeddings.");
+                if (!Array.isArray(data.embeddings) || data.embeddings.length !== batch.length) {
+                    throw new Error("Invalid API response for batch embeddings.");
+                }
                 for (let j = 0; j < batch.length; j++) {
+                    if (!data.embeddings[j]?.values) {
+                        throw new Error("Embedding response missing vector data.");
+                    }
                     await this.db.put('vectors', {
                         id: crypto.randomUUID(),
                         agent: agentId.toUpperCase(),
@@ -262,7 +268,7 @@ export class Lorepack {
         const systemInstruction = customSystemPrompt || defaultSystemInstruction;
         const modelPrompt = `CONTEXT:\n${context || 'No context available.'}\n\nUSER QUERY: ${userQuery}\n\nRESPONSE:`;
 
-        const genData = await this._geminiApiCall('generateContent', { prompt: modelPrompt, systemInstruction }, 'gemini-3-flash-preview');
+        const genData = await this._geminiApiCall('generateContent', { prompt: modelPrompt, systemInstruction });
 
         if (!genData.candidates || genData.candidates.length === 0) {
             throw new Error("Model returned no response.");
