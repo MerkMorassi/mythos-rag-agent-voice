@@ -94,15 +94,23 @@ class SimpleDB {
   }
 
   async nuke(): Promise<void> {
-    if (this.db) this.db.close();
+    if (this.db) {
+        this.db.close();
+        this.db = null;
+    }
     return new Promise((resolve, reject) => {
       const req = indexedDB.deleteDatabase(DB_NAME);
-      req.onsuccess = () => resolve();
-      req.onerror = () => reject(req.error);
-      req.onblocked = () => {
-        console.warn("Nuke blocked, retrying after reload might be necessary.");
+      req.onsuccess = () => {
         resolve();
-      }
+      };
+      req.onerror = (event) => {
+        reject((event.target as IDBRequest).error);
+      };
+      req.onblocked = (event) => {
+        console.warn("Database deletion is blocked. Please close other tabs running this application.");
+        alert("Database deletion is blocked. Please close all other tabs with this application open to proceed.");
+        // Do not resolve here. This allows the request to wait for other connections to close.
+      };
     });
   }
 }
