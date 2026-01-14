@@ -520,11 +520,19 @@ export class Lorepack {
             sacred_archive: nodes,
             graph
         };
-        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+        const json = JSON.stringify(payload, null, 2);
+        let blob: Blob;
+        let fileName = `MYTHOS.LORE.${resolvedAgentId.toUpperCase()}.lorepack.json`;
+        try {
+            blob = await gzipText(json);
+            fileName = `${fileName}.gz`;
+        } catch (e) {
+            blob = new Blob([json], { type: 'application/json' });
+        }
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `MYTHOS.LORE.${resolvedAgentId.toUpperCase()}.lorepack.json`;
+        a.download = fileName;
         a.click();
         URL.revokeObjectURL(url);
         return { nodes: nodes.length, graphNodes: graph.nodes.length, graphEdges: graph.edges.length };
