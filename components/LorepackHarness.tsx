@@ -18,6 +18,7 @@ export const LorepackHarness: React.FC = () => {
     const lorepack = useRef(new Lorepack());
     const fileInputRef = useRef<HTMLInputElement>(null);
     const importRef = useRef<HTMLInputElement>(null);
+    const graphPackRef = useRef<HTMLInputElement>(null);
     const logEndRef = useRef<HTMLDivElement>(null);
 
     const KEYS_STORAGE = 'MYTHOS_GEMINI_KEYS';
@@ -166,6 +167,22 @@ export const LorepackHarness: React.FC = () => {
         }
     };
 
+    const handleGraphPack = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        setState('BUILDING GRAPH');
+        addLog(`Building graph for ${file.name}...`, 'sys');
+        try {
+            const res = await lorepack.current.exportLorepackWithGraph(file);
+            addLog(`Graph LOREPACK exported (${res.nodes} nodes, ${res.graphNodes} graph nodes).`, 'sys');
+        } catch (e: any) {
+            addLog(`Graph LOREPACK failed: ${e.message}`, 'err');
+        } finally {
+            setState('IDLE');
+            if (graphPackRef.current) graphPackRef.current.value = '';
+        }
+    };
+
     const handleChat = async () => {
         if (!chatInput.trim() || isProcessing) return;
         const query = chatInput.trim();
@@ -222,6 +239,8 @@ export const LorepackHarness: React.FC = () => {
                     <button className="btn" onClick={handleExport}>EXPORT LOREPACK</button>
                     <button className="btn" onClick={handleExportGzip}>EXPORT GZIP</button>
                     <button className="btn" onClick={handleBuildGraph}>BUILD GRAPH LITE</button>
+                    <button className="btn" onClick={() => graphPackRef.current?.click()}>GRAPH + EXPORT LOREPACK</button>
+                    <input ref={graphPackRef} type="file" accept=".jsonl,.jsonl.gz,.gz,.json" style={{display:'none'}} onChange={handleGraphPack} />
                     <button
                         className="btn danger"
                         onClick={async () => {

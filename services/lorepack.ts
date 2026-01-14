@@ -149,6 +149,95 @@ const ungzipText = async (file: File): Promise<string> => {
     return new Response(stream).text();
 };
 
+const parseLorepackText = (text: string): { nodes: any[]; agentId: string | null } => {
+    let nodes: any[] = [];
+    let agentId: string | null = null;
+    try {
+        const data = JSON.parse(text);
+        if (data.schema === 'MYTHOS.LOREPACK.v1' && Array.isArray(data.sacred_archive)) {
+            nodes = data.sacred_archive;
+            agentId = data.agentId || data.header?.agentId || null;
+        } else if (Array.isArray(data)) {
+            nodes = data;
+        } else {
+            nodes = [data];
+        }
+    } catch (e) {
+        const lines = text.split(/\r?\n/);
+        for (const line of lines) {
+            if (line.trim()) {
+                try {
+                    const node = JSON.parse(line);
+                    if (node && node.vector && node.text) {
+                        nodes.push(node);
+                        if (!agentId && node.agent) agentId = node.agent;
+                    }
+                } catch (lineErr) {
+                    console.warn("Skipping malformed JSONL line:", lineErr);
+                }
+            }
+        }
+    }
+
+    return { nodes, agentId };
+};
+
+const buildGraphLiteFromNodes = (nodes: any[], agentId: string, maxKeywords: number, minTermCount: number) => {
+    const graphNodes = new Map<string, GraphNode>();
+    const graphEdges: GraphEdge[] = [];
+    const termCountsBySource = new Map<string, Map<string, number>>();
+
+    nodes.forEach(node => {
+        const sourceLabel = node.source || node.metadata?.source || 'Unknown Source';
+        const sourceId = `source:${agentId}:${sourceLabel}`;
+        if (!termCountsBySource.has(sourceId)) {
+            termCountsBySource.set(sourceId, new Map());
+        }
+        const termCounts = termCountsBySource.get(sourceId)!;
+        tokenize(node.text || '').forEach(token => {
+            termCounts.set(token, (termCounts.get(token) ?? 0) + 1);
+        });
+    });
+
+    termCountsBySource.forEach((termCounts, sourceId) => {
+        const sourceLabel = sourceId.replace(`source:${agentId}:`, '');
+        graphNodes.set(sourceId, {
+            id: sourceId,
+            name: sourceLabel,
+            label: 'SOURCE',
+            description: `Source file ${sourceLabel}`,
+            agentId
+        });
+
+        const topTerms = [...termCounts.entries()]
+            .filter(([, count]) => count >= minTermCount)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, maxKeywords)
+            .map(([term]) => term);
+
+        topTerms.forEach(term => {
+            const keywordId = `concept:${agentId}:${term}`;
+            if (!graphNodes.has(keywordId)) {
+                graphNodes.set(keywordId, {
+                    id: keywordId,
+                    name: term,
+                    label: LOREPACK_GRAPH_LABEL,
+                    description: 'Extracted concept keyword.',
+                    agentId
+                });
+            }
+            graphEdges.push({
+                source: sourceId,
+                target: keywordId,
+                label: 'MENTIONS',
+                agentId
+            });
+        });
+    });
+
+    return { nodes: [...graphNodes.values()], edges: graphEdges };
+};
+
 export class Lorepack {
     private db = new SimpleDB();
     private apiKeys: string[] = [];
@@ -415,9 +504,30 @@ export class Lorepack {
 
     async importGzip(file: File, onProgress?: (p: {processed: number, total: number}) => void) {
         const text = await ungzipText(file);
-        const lines = text.split(/\r?\n/).filter(line => line.trim().length > 0);
-        const nodes = lines.map(line => JSON.parse(line));
+        const { nodes } = parseLorepackText(text);
         return this.import(nodes, onProgress);
+    }
+
+    async exportLorepackWithGraph(file: File, maxKeywords = 4, minTermCount = 2) {
+        const text = file.name.endsWith('.gz') ? await ungzipText(file) : await file.text();
+        const { nodes, agentId } = parseLorepackText(text);
+        if (nodes.length === 0) throw new Error("No valid nodes found in import.");
+        const resolvedAgentId = agentId || nodes[0]?.agent || 'UNKNOWN';
+        const graph = buildGraphLiteFromNodes(nodes, resolvedAgentId, maxKeywords, minTermCount);
+        const payload = {
+            schema: 'MYTHOS.LOREPACK.v1',
+            agentId: resolvedAgentId,
+            sacred_archive: nodes,
+            graph
+        };
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `MYTHOS.LORE.${resolvedAgentId.toUpperCase()}.lorepack.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+        return { nodes: nodes.length, graphNodes: graph.nodes.length, graphEdges: graph.edges.length };
     }
 
     async buildGraphLite(agentId: string, maxKeywords = 4, minTermCount = 2) {
@@ -426,63 +536,13 @@ export class Lorepack {
         const nodes = all.filter(v => v.agent === agentId);
         if (nodes.length === 0) throw new Error("No nodes available to build graph.");
 
-        const graphNodes = new Map<string, GraphNode>();
-        const graphEdges: GraphEdge[] = [];
-        const termCountsBySource = new Map<string, Map<string, number>>();
-
-        nodes.forEach(node => {
-            const sourceLabel = node.source || 'Unknown Source';
-            const sourceId = `source:${agentId}:${sourceLabel}`;
-            if (!termCountsBySource.has(sourceId)) {
-                termCountsBySource.set(sourceId, new Map());
-            }
-            const termCounts = termCountsBySource.get(sourceId)!;
-            tokenize(node.text).forEach(token => {
-                termCounts.set(token, (termCounts.get(token) ?? 0) + 1);
-            });
-        });
-
-        termCountsBySource.forEach((termCounts, sourceId) => {
-            const sourceLabel = sourceId.replace(`source:${agentId}:`, '');
-            graphNodes.set(sourceId, {
-                id: sourceId,
-                name: sourceLabel,
-                label: 'SOURCE',
-                description: `Source file ${sourceLabel}`,
-                agentId
-            });
-
-            const topTerms = [...termCounts.entries()]
-                .filter(([, count]) => count >= minTermCount)
-                .sort((a, b) => b[1] - a[1])
-                .slice(0, maxKeywords)
-                .map(([term]) => term);
-
-            topTerms.forEach(term => {
-                const keywordId = `concept:${agentId}:${term}`;
-                if (!graphNodes.has(keywordId)) {
-                    graphNodes.set(keywordId, {
-                        id: keywordId,
-                        name: term,
-                        label: LOREPACK_GRAPH_LABEL,
-                        description: 'Extracted concept keyword.',
-                        agentId
-                    });
-                }
-                graphEdges.push({
-                    source: sourceId,
-                    target: keywordId,
-                    label: 'MENTIONS',
-                    agentId
-                });
-            });
-        });
+        const graph = buildGraphLiteFromNodes(nodes, agentId, maxKeywords, minTermCount);
 
         await deleteGraphByAgent(agentId);
-        await bulkPutGraphNodes([...graphNodes.values()]);
-        await bulkPutGraphEdges(graphEdges);
+        await bulkPutGraphNodes(graph.nodes);
+        await bulkPutGraphEdges(graph.edges);
 
-        return { nodes: graphNodes.size, edges: graphEdges.length };
+        return { nodes: graph.nodes.length, edges: graph.edges.length };
     }
 
     async getNodes(agentId: string) {
