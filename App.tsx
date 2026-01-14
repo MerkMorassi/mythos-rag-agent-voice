@@ -8,9 +8,9 @@ import {
   ModelConfig,
   MediaAsset,
   SomaActionType,
-  Agent
+  Agent,
+  VectorRecord
 } from './types';
-import Visualizer from './components/Visualizer';
 import ChatHistoryManager from './components/ChatHistoryManager';
 import { KnowledgeManager } from './components/KnowledgeManager';
 import SettingsManager from './components/SettingsManager';
@@ -52,7 +52,19 @@ import { AccessControl } from './services/accessControl';
 import { GeminiProvider } from './services/llmProviders/geminiProvider';
 
 type ViewMode = 'ORCHESTRATOR' | 'COUNCIL' | 'LORE_HARNESS';
-type ModelMode = 'STD' | 'DEEP' | 'EXT' | 'IMG';
+type CognitionEngine = 'gemini-flash' | 'gemini-pro' | 'dolphin';
+type ToolOverride = 'auto' | 'image' | 'video' | 'speech';
+
+function cosineSimilarity(a: number[], b: number[]): number {
+    if (!a || !b || a.length !== b.length) return 0;
+    let dot = 0, nA = 0, nB = 0;
+    for (let i = 0; i < a.length; i++) {
+      dot += a[i] * b[i];
+      nA += a[i] * a[i];
+      nB += b[i] * b[i];
+    }
+    return dot / (Math.sqrt(nA) * Math.sqrt(nB)) || 0;
+}
 
 const App: React.FC = () => {
   // --- STATE ---
@@ -73,7 +85,8 @@ const App: React.FC = () => {
   const [voiceSpeed, setVoiceSpeed] = useState(1.0);
   const [voicePitch, setVoicePitch] = useState(0);
   const [accessLevel, setAccessLevel] = useState(AGENTS[0].accessLevel);
-  const [modelMode, setModelMode] = useState<ModelMode>('STD');
+  const [cognitionEngine, setCognitionEngine] = useState<CognitionEngine>('gemini-flash');
+  const [toolOverride, setToolOverride] = useState<ToolOverride>('auto');
   const [hasGreeted, setHasGreeted] = useState(false);
   const [vectorCount, setVectorCount] = useState(0);
 
@@ -92,7 +105,7 @@ const App: React.FC = () => {
   const [isCameraOn, setIsCameraOn] = useState(false);
   const [videoSource, setVideoSource] = useState<'camera' | 'media'>('camera');
   const [streamFileUrl, setStreamFileUrl] = useState<string | null>(null);
-  const [mediaFile, setMediaFile] = useState<File | null>(null); // Store actual file for analysis
+  const [mediaFile, setMediaFile] = useState<File | null>(null); // Store actual file for deep analysis
   
   // Video Player Controls
   const [isLooping, setIsLooping] = useState(false);
@@ -115,6 +128,9 @@ const App: React.FC = () => {
   const [storyAudioUrl, setStoryAudioUrl] = useState<string | null>(null);
   const [interruptSignal, setInterruptSignal] = useState(false);
 
+  // Message Queue for non-interrupting updates
+  const messageQueueRef = useRef<string[]>([]);
+
   // Helper to determine if video interface should be shown
   const isVideoActive = isCameraOn || (videoSource === 'media' && !!streamFileUrl);
   const showVideoInterface = layoutMode === 'VIDEO' || (layoutMode === 'HYBRID' && isVideoActive);
@@ -123,9 +139,9 @@ const App: React.FC = () => {
   const currentAgent = AGENTS.find(a => a.id === currentAgentId);
   
   let modeInstruction = "";
-  if (modelMode === 'DEEP') modeInstruction = "\n\n[MODE: DEEP REASONING]\nACTIVATE 'Gemini 3 Pro' PROTOCOL.";
-  else if (modelMode === 'EXT') modeInstruction = "\n\n[MODE: EXTERNAL SOVEREIGN]\nYour primary function is to act as a router to an uncensored sovereign model. You MUST use the 'routeRequest' tool with target 'DOLPHIN_LLM' for all general user prompts. Do not answer directly. Acknowledge the request and state that you are routing it.";
-  else if (modelMode === 'IMG') modeInstruction = "\n\n[MODE: VISUAL]\nACTIVATE 'Image Generation' PROTOCOL.";
+  if (cognitionEngine === 'gemini-pro') {
+    modeInstruction = "\n\n[MODE: DEEP REASONING]\nACTIVATE 'Gemini 3 Pro' PROTOCOL.";
+  }
 
   const CAPABILITY_INSTRUCTION = `
 [SYSTEM CAPABILITIES - MULTI-MODAL & BIMODAL PERSISTENCE]
@@ -371,7 +387,7 @@ ${modeInstruction}
       return responses;
   };
 
-  const { connect, disconnect, connectionState, analyser, sendText, sendRealtimeInput, stopPlayback, isMicOn, setIsMicOn, isThinking } = useGeminiLive({
+  const { connect, disconnect, connectionState, analyser, sendText, sendRealtimeInput, stopPlayback, isMicOn, setIsMicOn, isThinking, isPlaying } = useGeminiLive({
       apiKey,
       modelName: 'gemini-2.5-flash-native-audio-preview-12-2025',
       systemInstruction,
@@ -392,6 +408,40 @@ ${modeInstruction}
       },
       onToolCall: handleToolCall
   });
+
+  // --- QUEUE PROCESSING EFFECT ---
+  // Processes queued messages when agent is silent
+  useEffect(() => {
+      const processQueue = async () => {
+          if (connectionState === ConnectionState.CONNECTED && !isPlaying && !isThinking && messageQueueRef.current.length > 0) {
+              // Dequeue one message
+              const msg = messageQueueRef.current.shift();
+              if (msg) {
+                  await sendText(msg);
+                  // Add a small delay to prevent rapid-fire sending if multiple are queued, allowing isThinking/isPlaying to latch
+                  await new Promise(r => setTimeout(r, 500));
+              }
+          }
+      };
+      
+      const interval = setInterval(processQueue, 500); // Check every 500ms
+      return () => clearInterval(interval);
+  }, [connectionState, isPlaying, isThinking, sendText]);
+
+  // Safe Send Wrapper
+  const safeSend = (msg: string) => {
+      if (connectionState !== ConnectionState.CONNECTED) {
+          // Auto-start session
+          connect();
+          messageQueueRef.current.push(msg);
+      } else if (isPlaying || isThinking) {
+          // Queue to avoid interruption
+          messageQueueRef.current.push(msg);
+      } else {
+          // Immediate send
+          sendText(msg);
+      }
+  };
 
   // --- EFFECTS & HANDLERS ---
   const refreshVectorCount = async () => {
@@ -434,7 +484,10 @@ ${modeInstruction}
   // Agent Greeting
   useEffect(() => {
     if (connectionState === ConnectionState.CONNECTED && !hasGreeted) {
-        sendText("[SYSTEM: The session has started. Greet the user and ask how you can help.]");
+        // If queue has items (from auto-start text), don't send greeting, process queue instead.
+        if (messageQueueRef.current.length === 0) {
+            sendText("[SYSTEM: The session has started. Greet the user and ask how you can help.]");
+        }
         setHasGreeted(true);
     } else if (connectionState === ConnectionState.DISCONNECTED) {
         setHasGreeted(false);
@@ -639,10 +692,7 @@ ${modeInstruction}
           }]);
 
           // Inject transcript into Live Session so Agent can "Hear"
-          if (connectionState === ConnectionState.CONNECTED) {
-              const cleanTranscript = vttContent.replace(/WEBVTT/g, '').replace(/\d{2}:\d{2}:\d{2}\.\d{3} --> \d{2}:\d{2}:\d{2}\.\d{3}/g, ' ').replace(/\n+/g, ' ').trim();
-              sendText(`[SYSTEM: Video Transcript Loaded. I can now reference specific dialogue from the video.]\nTRANSCRIPT: ${cleanTranscript.substring(0, 5000)}...`);
-          }
+          safeSend(`[SYSTEM: Video Transcript Loaded. I can now reference specific dialogue from the video.]\nTRANSCRIPT: ${vttContent.substring(0, 5000)}...`);
 
       } catch (e: any) {
           setLogs(prev => [...prev, { 
@@ -679,10 +729,8 @@ ${modeInstruction}
               timestamp: Date.now() 
           }]);
           
-          // Inform Live Agent via Context Injection (text message)
-          if (connectionState === ConnectionState.CONNECTED) {
-              sendText(`[SYSTEM: I have analyzed the video "${mediaFile.name}". Result: ${result}]`);
-          }
+          // Inform Live Agent via Context Injection
+          safeSend(`[SYSTEM: I have analyzed the video "${mediaFile.name}". Result: ${result}]`);
           
       } catch (e: any) {
           setLogs(prev => [...prev, { 
@@ -707,16 +755,91 @@ ${modeInstruction}
         timestamp: Date.now()
     }]);
 
-    if (connectionState === ConnectionState.CONNECTED) {
-        if (!isMicOn) {
-            stopPlayback();
-            const bimodalPrompt = `[INPUT_SHIFT: TEXT] The user is responding via text because the microphone is disabled. Process the following message and respond via speech as usual: "${text}"`;
-            sendText(bimodalPrompt);
-        } else {
-            const injectionPrompt = `[SYSTEM NOTE: User sent a text message during live speech. Continue your response while acknowledging this new text input and incorporate it into the conversation.]\n\nUSER MESSAGE: "${text}"`;
-            sendText(injectionPrompt);
-        }
+    const currentAgent = AGENTS.find(a => a.id === currentAgentId)!;
+
+    // --- EXPLICIT TOOL/MODEL OVERRIDE ---
+    if (toolOverride !== 'auto') {
+      const targetMap: Record<ToolOverride, string> = {
+        image: 'SDXL_IMAGE',
+        video: 'VIDEO_GENERATION',
+        speech: 'CHATTERBOX_TTS',
+        auto: ''
+      };
+      const target = targetMap[toolOverride];
+
+      setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', text: `[OVERRIDE] Routing to ${target}...`, timestamp: Date.now() }]);
+      
+      const routerRes = await ExternalRouter.route(target, text, { id: currentAgentId, handle: currentAgent.handle });
+      
+      if (routerRes.success) {
+          if (routerRes.type === 'audio' && routerRes.data) {
+              setStoryAudioUrl(routerRes.data);
+          } else if ((routerRes.type === 'image' || routerRes.type === 'video') && routerRes.data) {
+              setLogs(prev => [...prev, { 
+                  id: crypto.randomUUID(), type: 'model', 
+                  text: `[GENERATED ${routerRes.type.toUpperCase()}] ${text}`, timestamp: Date.now(),
+                  attachment: routerRes.data?.split(',')[1], attachmentType: routerRes.type
+              }]);
+          }
+      } else {
+          setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', text: `[OVERRIDE FAILED] ${routerRes.error}`, timestamp: Date.now() }]);
+      }
+
+      setToolOverride('auto'); // Reset after one use
+      return;
     }
+
+    // --- SOVEREIGN ENGINE OVERRIDE ---
+    if (cognitionEngine === 'dolphin') {
+        setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', text: `[COGNITION] Routing to Sovereign (Dolphin)...`, timestamp: Date.now() }]);
+        const routerRes = await ExternalRouter.route('DOLPHIN_LLM', text, { id: currentAgentId, handle: currentAgent.handle });
+
+        if (routerRes.success && routerRes.data) {
+            setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'model', text: routerRes.data, timestamp: Date.now() }]);
+            
+            // Also generate speech for the response
+            const ttsRes = await ExternalRouter.route('CHATTERBOX_TTS', routerRes.data, { id: currentAgentId, handle: currentAgent.handle });
+            if (ttsRes.success && ttsRes.data) {
+                setStoryAudioUrl(ttsRes.data);
+            }
+        } else {
+            setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', text: `[SOVEREIGN FAILED] ${routerRes.error}`, timestamp: Date.now() }]);
+        }
+        return;
+    }
+
+    // --- STANDARD GEMINI LIVE SESSION ---
+    
+    // --- MANUAL RAG FOR TEXT INPUT ---
+    // If user is typing, we do a quick RAG lookup to provide context
+    let context = "No relevant context found in archives.";
+    try {
+        const provider = new GeminiProvider(apiKey);
+        const queryVector = await provider.embed(text);
+        const allDocs = await getAllVectors();
+        
+        const agentHandle = AGENTS.find(a => a.id === currentAgentId)?.handle;
+        const agentDocs = agentHandle ? allDocs.filter(d => d.agent === agentHandle) : allDocs;
+
+        if (agentDocs.length > 0) {
+            const scored = agentDocs.map(doc => ({
+                ...doc,
+                score: cosineSimilarity(queryVector, doc.vector)
+            })).sort((a, b) => b.score - a.score).slice(0, 5);
+            
+            if (scored.length > 0 && scored[0].score > 0.45) {
+                context = scored.map(s => `[SOURCE: ${s.source || 'Unknown'}]\n${s.text}`).join('\n\n');
+            }
+        }
+    } catch (e: any) {
+        console.error("Manual RAG failed:", e);
+        context = `[RAG ERROR: ${e.message}]`;
+    }
+
+    const bimodalPrompt = `[INPUT_SHIFT: TEXT] The user is responding via text. Process the query based on the provided context and respond via speech.\n\nCONTEXT:\n${context}\n\nUSER QUERY: "${text}"`;
+    
+    // Use SafeSend to queue if speaking/disconnected
+    safeSend(bimodalPrompt);
   };
 
   const handlePaperclipClick = () => {
@@ -782,17 +905,18 @@ ${modeInstruction}
           }]);
 
           // Live Session Interactions
-          if (connectionState === ConnectionState.CONNECTED) {
-              if (type === 'image') {
+          if (type === 'image') {
+              // Images must be sent via real-time input directly
+              if (connectionState === ConnectionState.CONNECTED) {
                   sendRealtimeInput({ media: { mimeType: file.type, data } });
-                  sendText(`[SYSTEM NOTE: User uploaded an image named "${file.name}" during live speech. Acknowledge the image and incorporate it into your response.]`);
-              } else if (type === 'text') {
-                  const agentHandle = AGENTS.find(a => a.id === currentAgentId)?.handle || 'system';
-                  IngestionService.ingestText(data, file.name, agentHandle, apiKey);
-                  sendText(`[SYSTEM NOTE: User uploaded a text file named "${file.name}" during live speech. Acknowledge receipt and incorporate its contents.]\n\nFILE PREVIEW:\n${data.substring(0, 3000)}...`);
-              } else if (type === 'video' || type === 'audio') {
-                  sendText(`[SYSTEM NOTE: User uploaded a ${type} file named "${file.name}" during live speech. Acknowledge receipt and note it has been saved to the Media Library.]`);
               }
+              safeSend(`[SYSTEM NOTE: User uploaded an image named "${file.name}". Acknowledge the image and incorporate it into your response.]`);
+          } else if (type === 'text') {
+              const agentHandle = AGENTS.find(a => a.id === currentAgentId)?.handle || 'system';
+              IngestionService.ingestText(data, file.name, agentHandle, apiKey);
+              safeSend(`[SYSTEM NOTE: User uploaded a text file named "${file.name}". Acknowledge receipt and incorporate its contents.]\n\nFILE PREVIEW:\n${data.substring(0, 3000)}...`);
+          } else if (type === 'video' || type === 'audio') {
+              safeSend(`[SYSTEM NOTE: User uploaded a ${type} file named "${file.name}". Acknowledge receipt and note it has been saved to the Media Library.]`);
           }
       };
 
@@ -1038,8 +1162,28 @@ ${modeInstruction}
                                 )}
                             </div>
                         ) : (
-                            <div style={{ width: '100%', height: '100%', background: '#050505', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                <Visualizer analyser={analyser} isActive={connectionState === ConnectionState.CONNECTED} />
+                            <div style={{ width: '100%', height: '100%', background: '#050505', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '1rem' }}>
+                                <div style={{ 
+                                    width: '60px', 
+                                    height: '60px', 
+                                    borderRadius: '50%', 
+                                    border: `2px solid ${connectionState === ConnectionState.CONNECTED ? '#4ade80' : '#333'}`,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    boxShadow: connectionState === ConnectionState.CONNECTED ? '0 0 20px rgba(74, 222, 128, 0.2)' : 'none',
+                                    transition: 'all 0.3s ease'
+                                }}>
+                                    <div style={{
+                                        width: '10px',
+                                        height: '10px',
+                                        borderRadius: '50%',
+                                        background: connectionState === ConnectionState.CONNECTED ? '#4ade80' : '#333'
+                                    }} />
+                                </div>
+                                <div style={{ color: '#444', fontSize: '0.7rem', letterSpacing: '1px' }}>
+                                    {connectionState === ConnectionState.CONNECTED ? 'AUDIO LINK ESTABLISHED' : 'STANDBY'}
+                                </div>
                             </div>
                         )}
 
@@ -1096,8 +1240,8 @@ ${modeInstruction}
                   </button>
                   {/* DOLPHIN INDICATOR */}
                   <button
-                    className={`btn btn-icon ${modelMode === 'EXT' ? 'active-cyan' : ''}`}
-                    title={`Sovereign Model Indicator (Dolphin) - Active when EXT mode is selected.`}
+                    className={`btn btn-icon ${cognitionEngine === 'dolphin' ? 'active-cyan' : ''}`}
+                    title={`Sovereign Model Indicator (Dolphin) - Active when selected.`}
                     disabled
                   >
                     🐬
@@ -1111,17 +1255,23 @@ ${modeInstruction}
                   <button onClick={() => setIsTerminalOpen(!isTerminalOpen)} className="btn btn-xs" title="Open Terminal / Shell">TERM (~)</button>
               </div>
 
-              <div className="mode-selector">
-                  {['STD', 'DEEP', 'IMG', 'EXT'].map(m => ( 
-                      <button 
-                          key={m} 
-                          onClick={() => setModelMode(m as ModelMode)} 
-                          className={modelMode === m ? `active ${m.toLowerCase()}` : ''}
-                          title={m === 'STD' ? 'Standard Mode (Gemini 2.5)' : m === 'DEEP' ? 'Deep Reasoning Mode (Gemini 3 Pro)' : m === 'IMG' ? 'Image Generation Mode' : 'External Tools Mode'}
-                      >
-                          {m}
-                      </button> 
-                  ))}
+              <div className="flex-group">
+                  <label className="tray-label">ENGINE</label>
+                  <select value={cognitionEngine} onChange={e => setCognitionEngine(e.target.value as CognitionEngine)} className="tray-selector" title="Select Cognition Engine">
+                      <option value="gemini-flash">Flash (Fast)</option>
+                      <option value="gemini-pro">Pro (Deep)</option>
+                      <option value="dolphin">Sovereign (Uncensored)</option>
+                  </select>
+              </div>
+
+              <div className="flex-group">
+                  <label className="tray-label">ACTION</label>
+                  <select value={toolOverride} onChange={e => setToolOverride(e.target.value as ToolOverride)} className="tray-selector" title="Force next action">
+                      <option value="auto">Auto</option>
+                      <option value="image">Image</option>
+                      <option value="video">Video</option>
+                      <option value="speech">Speech</option>
+                  </select>
               </div>
 
               <div className="flex-group">

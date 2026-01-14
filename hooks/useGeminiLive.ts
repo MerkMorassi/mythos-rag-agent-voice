@@ -25,6 +25,7 @@ export function useGeminiLive({
     const [connectionState, setConnectionState] = useState<ConnectionState>(ConnectionState.DISCONNECTED);
     const [isMicOn, setIsMicOn] = useState(true);
     const [isThinking, setIsThinking] = useState(false);
+    const [isPlaying, setIsPlaying] = useState(false);
 
     // Audio Contexts
     const audioContextRef = useRef<AudioContext | null>(null);
@@ -33,6 +34,7 @@ export function useGeminiLive({
     const nextStartTimeRef = useRef<number>(0);
     const sessionPromiseRef = useRef<Promise<any> | null>(null);
     const sourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
+    const activeSourcesCountRef = useRef(0);
     
     // Disconnect Flag to suppress "Cancelled" errors during teardown
     const isIntentionalDisconnect = useRef(false);
@@ -145,10 +147,22 @@ export function useGeminiLive({
                             source.buffer = audioBuffer;
                             source.connect(analyserRef.current);
                             analyserRef.current.connect(ctx.destination);
+                            
+                            source.onended = () => {
+                                sourcesRef.current.delete(source);
+                                activeSourcesCountRef.current--;
+                                if (activeSourcesCountRef.current <= 0) {
+                                    activeSourcesCountRef.current = 0;
+                                    setIsPlaying(false);
+                                }
+                            };
+                            
                             source.start(nextStartTimeRef.current);
                             nextStartTimeRef.current += audioBuffer.duration;
-                            source.onended = () => sourcesRef.current.delete(source);
+                            
                             sourcesRef.current.add(source);
+                            activeSourcesCountRef.current++;
+                            setIsPlaying(true);
                         }
 
                         // C. Transcripts (Text Logs)
@@ -165,11 +179,15 @@ export function useGeminiLive({
                             sourcesRef.current.forEach(s => s.stop());
                             sourcesRef.current.clear();
                             nextStartTimeRef.current = 0;
+                            activeSourcesCountRef.current = 0;
+                            setIsPlaying(false);
                             callbackRef.current.onLog({ id: crypto.randomUUID(), type: 'system', text: '[Interrupted]', timestamp: Date.now() });
                         }
                     },
                     onclose: () => {
                         setConnectionState(ConnectionState.DISCONNECTED);
+                        activeSourcesCountRef.current = 0;
+                        setIsPlaying(false);
                         callbackRef.current.onLog({ id: crypto.randomUUID(), type: 'system', text: 'Disconnected', timestamp: Date.now() });
                     },
                     onerror: (err: any) => {
@@ -181,6 +199,8 @@ export function useGeminiLive({
 
                         console.error(err);
                         setConnectionState(ConnectionState.ERROR);
+                        activeSourcesCountRef.current = 0;
+                        setIsPlaying(false);
                         callbackRef.current.onLog({ id: crypto.randomUUID(), type: 'system', text: `Error: ${err.message}`, timestamp: Date.now() });
                     }
                 }
@@ -191,6 +211,8 @@ export function useGeminiLive({
         } catch (e: any) {
             console.error(e);
             setConnectionState(ConnectionState.ERROR);
+            activeSourcesCountRef.current = 0;
+            setIsPlaying(false);
             callbackRef.current.onLog({ id: crypto.randomUUID(), type: 'system', text: `Connection Failed: ${e.message}`, timestamp: Date.now() });
         }
     }, []);
@@ -223,6 +245,8 @@ export function useGeminiLive({
         }
         
         setConnectionState(ConnectionState.DISCONNECTED);
+        activeSourcesCountRef.current = 0;
+        setIsPlaying(false);
     }, []);
 
     const sendText = useCallback(async (text: string) => {
@@ -259,6 +283,8 @@ export function useGeminiLive({
         });
         sourcesRef.current.clear();
         nextStartTimeRef.current = 0;
+        activeSourcesCountRef.current = 0;
+        setIsPlaying(false);
         callbackRef.current.onLog({ id: crypto.randomUUID(), type: 'system', text: '[Playback Interrupted by User Action]', timestamp: Date.now() });
     }, []);
 
@@ -272,6 +298,7 @@ export function useGeminiLive({
         stopPlayback,
         isMicOn,
         setIsMicOn,
-        isThinking // Exposed for UI visualization
+        isThinking,
+        isPlaying // Exposed for UI visualization and queue logic
     };
 }

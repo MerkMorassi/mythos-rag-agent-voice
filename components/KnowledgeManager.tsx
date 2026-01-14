@@ -108,10 +108,10 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
           )}
 
           <div className="flex-group" style={{ marginBottom: '1rem' }}>
-              <button onClick={() => importInputRef.current?.click()} className="btn btn-primary" style={{ flex: 2 }}>IMPORT LOREPACK (.jsonl)</button>
+              <button onClick={() => importInputRef.current?.click()} className="btn btn-primary" style={{ flex: 2 }}>IMPORT LOREPACK (.jsonl / .gz)</button>
               <button onClick={() => IngestionService.exportLorePack(agentHandle)} className="btn btn-secondary" style={{ flex: 1 }}>EXPORT</button>
               <button onClick={() => setShowNukeModal(true)} className="btn btn-danger" style={{ width: 'auto' }}>NUKE VAULT</button>
-              <input type="file" ref={importInputRef} className="hidden" onChange={handleImport} accept=".jsonl" />
+              <input type="file" ref={importInputRef} className="hidden" onChange={handleImport} accept=".jsonl,.jsonl.gz,.gz,.json" />
           </div>
 
           {isLoading && (

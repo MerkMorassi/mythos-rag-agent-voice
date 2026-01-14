@@ -153,31 +153,73 @@ const ungzipText = async (file: File): Promise<string> => {
     return new Response(stream).text();
 };
 
+// Internal Helper to normalize nodes from various schemas
+const normalizeNode = (obj: any): any => {
+    // 1. Text aliases
+    const text = obj.text || obj.content || obj.t || '';
+    
+    // 2. Vector aliases
+    const vector = obj.vector || obj.vec || obj.embedding || obj.values || [];
+    
+    // 3. ID and defaults
+    const id = obj.id || crypto.randomUUID();
+    
+    return {
+        ...obj, // Preserve metadata
+        id,
+        text,
+        vector: Array.isArray(vector) ? vector : [],
+        timestamp: obj.timestamp || Date.now()
+    };
+};
+
 const parseLorepackText = (text: string): { nodes: any[]; agentId: string | null } => {
     let nodes: any[] = [];
     let agentId: string | null = null;
+    
+    // STRATEGY 1: Parse entire file as JSON (Standard Lorepack or Single Object)
     try {
         const data = JSON.parse(text);
+        let rawNodes: any[] = [];
+
         if (data.schema === 'MYTHOS.LOREPACK.v1' && Array.isArray(data.sacred_archive)) {
-            nodes = data.sacred_archive;
+            // Standard Format
+            rawNodes = data.sacred_archive;
             agentId = data.agentId || data.header?.agentId || null;
         } else if (Array.isArray(data)) {
-            nodes = data;
+            // Raw Array
+            rawNodes = data;
         } else {
-            nodes = [data];
+            // Single Object
+            rawNodes = [data];
         }
+        
+        // Normalize and Filter
+        for (const raw of rawNodes) {
+            const node = normalizeNode(raw);
+            if (node.text && typeof node.text === 'string') {
+                nodes.push(node);
+                if (!agentId && node.agent) agentId = node.agent;
+            }
+        }
+
     } catch (e) {
+        // STRATEGY 2: Parse as JSONL (Line-by-Line)
+        // This handles large files or streaming dumps better, and is common for .gz exports
         const lines = text.split(/\r?\n/);
         for (const line of lines) {
             if (line.trim()) {
                 try {
-                    const node = JSON.parse(line);
-                    if (node && node.vector && node.text) {
+                    const raw = JSON.parse(line);
+                    const node = normalizeNode(raw);
+                    
+                    // We permit nodes without vectors (text archives) but they must have text
+                    if (node.text && typeof node.text === 'string') {
                         nodes.push(node);
                         if (!agentId && node.agent) agentId = node.agent;
                     }
                 } catch (lineErr) {
-                    console.warn("Skipping malformed JSONL line:", lineErr);
+                    // Skip malformed lines silently
                 }
             }
         }
@@ -487,6 +529,7 @@ export class Lorepack {
 
     async importGzip(file: File, onProgress?: (p: {processed: number, total: number}) => void) {
         const text = await ungzipText(file);
+        if (!text) throw new Error("Gzip decompression returned empty text.");
         const { nodes } = parseLorepackText(text);
         return this.import(nodes, onProgress);
     }

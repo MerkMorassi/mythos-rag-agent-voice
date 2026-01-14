@@ -155,10 +155,18 @@ export const LorepackHarness: React.FC<LorepackHarnessProps> = ({ onExit }) => {
         setState('IMPORTING');
         addLog(`Importing ${file.name}...`, 'sys');
         try {
-            const res = await lorepack.current.import(file, ({ processed, total }) => {
+            const onProgressCallback = ({ processed, total }: { processed: number; total: number }) => {
                 const percent = total > 0 ? (processed / total) * 100 : 0;
                 setProgress(percent);
-            });
+            };
+
+            let res;
+            if (file.name.endsWith('.gz')) {
+                res = await lorepack.current.importGzip(file, onProgressCallback);
+            } else {
+                res = await lorepack.current.import(file, onProgressCallback);
+            }
+            
             addLog(`Imported ${res.nodesImported} nodes.`, 'sys');
             await refreshStats();
         } catch (e: any) {
