@@ -167,7 +167,11 @@ export const LorepackHarness: React.FC<LorepackHarnessProps> = ({ onExit }) => {
                 res = await lorepack.current.import(file, onProgressCallback);
             }
             
-            addLog(`Imported ${res.nodesImported} nodes.`, 'sys');
+            let msg = `Imported ${res.nodesImported} nodes`;
+            if (res.graphNodesImported > 0) msg += ` and ${res.graphNodesImported} graph nodes`;
+            msg += `.`;
+            
+            addLog(msg, 'sys');
             await refreshStats();
         } catch (e: any) {
             addLog(`Import failed: ${e.message}`, 'err');

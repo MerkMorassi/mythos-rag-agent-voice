@@ -2,7 +2,7 @@ import { GraphEdge, GraphNode, VectorRecord } from '../types';
 import { bulkPutGraphEdges, bulkPutGraphNodes, deleteGraphByAgent } from './db';
 import { GoogleGenAI, Type } from "@google/genai";
 
-// LOREPACK™ v1.1 :: Standalone Module (Corrected & Integrated)
+// LOREPACK™ v1.2 :: Graph & Compression Support
 // © 2026 MYTHOS, All Rights Reserved
 
 const DB_NAME = 'mythos_vault';
@@ -173,59 +173,67 @@ const normalizeNode = (obj: any): any => {
     };
 };
 
-const parseLorepackText = (text: string): { nodes: any[]; agentId: string | null } => {
+const parseLorepackText = (text: string): { nodes: any[]; graph?: { nodes: any[], edges: any[] }; agentId: string | null } => {
     let nodes: any[] = [];
+    let graph: { nodes: any[], edges: any[] } | undefined;
     let agentId: string | null = null;
     
     // STRATEGY 1: Parse entire file as JSON (Standard Lorepack or Single Object)
     try {
         const data = JSON.parse(text);
-        let rawNodes: any[] = [];
-
-        if (data.schema === 'MYTHOS.LOREPACK.v1' && Array.isArray(data.sacred_archive)) {
+        
+        if (data.schema === 'MYTHOS.LOREPACK.v1') {
             // Standard Format
-            rawNodes = data.sacred_archive;
+            if (Array.isArray(data.sacred_archive)) {
+                nodes = data.sacred_archive.map(normalizeNode);
+            }
+            if (data.graph) {
+                graph = data.graph;
+            }
             agentId = data.agentId || data.header?.agentId || null;
         } else if (Array.isArray(data)) {
             // Raw Array
-            rawNodes = data;
+            nodes = data.map(normalizeNode);
         } else {
             // Single Object
-            rawNodes = [data];
+            nodes = [normalizeNode(data)];
         }
         
-        // Normalize and Filter
-        for (const raw of rawNodes) {
-            const node = normalizeNode(raw);
-            if (node.text && typeof node.text === 'string') {
-                nodes.push(node);
-                if (!agentId && node.agent) agentId = node.agent;
-            }
-        }
+        // Use first node agent as fallback
+        if (nodes.length > 0 && !agentId) agentId = nodes[0].agent;
+
+        return { nodes, graph, agentId };
 
     } catch (e) {
-        // STRATEGY 2: Parse as JSONL (Line-by-Line)
-        // This handles large files or streaming dumps better, and is common for .gz exports
-        const lines = text.split(/\r?\n/);
-        for (const line of lines) {
-            if (line.trim()) {
-                try {
-                    const raw = JSON.parse(line);
-                    const node = normalizeNode(raw);
-                    
-                    // We permit nodes without vectors (text archives) but they must have text
-                    if (node.text && typeof node.text === 'string') {
-                        nodes.push(node);
-                        if (!agentId && node.agent) agentId = node.agent;
-                    }
-                } catch (lineErr) {
-                    // Skip malformed lines silently
+        // Fall through to JSONL
+    }
+
+    // STRATEGY 2: Parse as JSONL (Line-by-Line)
+    const lines = text.split(/\r?\n/);
+    for (const line of lines) {
+        if (line.trim()) {
+            try {
+                const raw = JSON.parse(line);
+                
+                // Header detection in JSONL stream
+                if (raw.schema === 'MYTHOS.LOREPACK.v1') {
+                    agentId = raw.agentId || raw.header?.agentId || agentId;
+                    if(raw.graph) graph = raw.graph;
+                    continue; 
                 }
+
+                const node = normalizeNode(raw);
+                if (node.text && typeof node.text === 'string') {
+                    nodes.push(node);
+                    if (!agentId && node.agent) agentId = node.agent;
+                }
+            } catch (lineErr) {
+                // Skip malformed lines
             }
         }
     }
 
-    return { nodes, agentId };
+    return { nodes, graph, agentId };
 };
 
 const buildGraphLiteFromNodes = (nodes: any[], agentId: string, maxKeywords: number, minTermCount: number) => {
@@ -486,17 +494,37 @@ export class Lorepack {
 
     async import(fileOrData: File | any, onProgress?: (p: {processed: number, total: number}) => void) {
         let nodes: any[] = [];
+        let graph: { nodes: any[], edges: any[] } | undefined;
         let agentId: string | null = null;
 
         if (fileOrData instanceof File) {
             const text = await fileOrData.text();
             const parsed = parseLorepackText(text);
             nodes = parsed.nodes;
+            graph = parsed.graph;
             agentId = parsed.agentId;
         } else {
-            nodes = Array.isArray(fileOrData) ? fileOrData : 
-                   (fileOrData.sacred_archive ? fileOrData.sacred_archive : [fileOrData]);
-            agentId = fileOrData.agentId || (nodes[0] ? nodes[0].agent : null);
+            // It's data object or array
+            const data = fileOrData;
+            if (data.schema === 'MYTHOS.LOREPACK.v1') {
+                // Standard Lorepack
+                nodes = data.sacred_archive || [];
+                graph = data.graph;
+                agentId = data.agentId || data.header?.agentId;
+            } else if (Array.isArray(data)) {
+                // Raw Array
+                nodes = data;
+                agentId = nodes[0]?.agent;
+            } else if (data.sacred_archive) {
+                // Legacy / intermediate structure
+                nodes = data.sacred_archive;
+                graph = data.graph;
+                agentId = data.agentId;
+            } else {
+                // Single node?
+                nodes = [data];
+                agentId = data.agent;
+            }
         }
 
         if (nodes.length === 0) throw new Error("No valid nodes found in import.");
@@ -524,14 +552,32 @@ export class Lorepack {
             });
         });
 
-        return { success: true, nodesImported: imported, agentId };
+        // Import Graph Data if present
+        let graphNodesCount = 0;
+        if (graph && graph.nodes && graph.nodes.length > 0 && agentId) {
+            await deleteGraphByAgent(agentId); // Clear old graph for this agent
+            await bulkPutGraphNodes(graph.nodes);
+            if (graph.edges) await bulkPutGraphEdges(graph.edges);
+            graphNodesCount = graph.nodes.length;
+        }
+
+        return { success: true, nodesImported: imported, graphNodesImported: graphNodesCount, agentId };
     }
 
     async importGzip(file: File, onProgress?: (p: {processed: number, total: number}) => void) {
         const text = await ungzipText(file);
         if (!text) throw new Error("Gzip decompression returned empty text.");
-        const { nodes } = parseLorepackText(text);
-        return this.import(nodes, onProgress);
+        const parsed = parseLorepackText(text);
+        
+        // Pass parsed structure to import
+        const payload = {
+            schema: 'MYTHOS.LOREPACK.v1',
+            agentId: parsed.agentId,
+            sacred_archive: parsed.nodes,
+            graph: parsed.graph
+        };
+        
+        return this.import(payload, onProgress);
     }
 
     async exportLorepackWithGraph(file: File, maxKeywords = 4, minTermCount = 2) {
