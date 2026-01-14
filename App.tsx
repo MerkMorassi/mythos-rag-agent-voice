@@ -91,7 +91,7 @@ const App: React.FC = () => {
   const [vectorCount, setVectorCount] = useState(0);
 
   // Layout & View Modes
-  const [layoutMode, setLayoutMode] = useState<'CHAT' | 'HYBRID' | 'VIDEO'>('CHAT');
+  const [layoutMode, setLayoutMode] = useState<'CHAT' | 'VIDEO'>('CHAT');
   const [currentView, setCurrentView] = useState<ViewMode>('ORCHESTRATOR');
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
   const [activeSidePanel, setActiveSidePanel] = useState<string | null>(null);
@@ -133,7 +133,7 @@ const App: React.FC = () => {
 
   // Helper to determine if video interface should be shown
   const isVideoActive = isCameraOn || (videoSource === 'media' && !!streamFileUrl);
-  const showVideoInterface = layoutMode === 'VIDEO' || (layoutMode === 'HYBRID' && isVideoActive);
+  const showVideoInterface = isVideoActive;
 
   // --- PREPARE LIVE CONFIG ---
   const currentAgent = AGENTS.find(a => a.id === currentAgentId);
@@ -228,7 +228,7 @@ ${modeInstruction}
       for (const fc of toolCall.functionCalls) {
           if (fc.name === 'routeRequest') {
               const args = fc.args as any;
-              setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', text: `[ROUTING] ${args.target}...`, timestamp: Date.now() }]);
+              setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[ROUTING] ${args.target}...`, timestamp: Date.now() }]);
               try {
                   const currentAgent = AGENTS.find(a => a.id === currentAgentId)!;
                   const routerRes = await ExternalRouter.route(args.target, args.prompt, { id: currentAgentId, handle: currentAgent.handle });
@@ -242,6 +242,7 @@ ${modeInstruction}
                           setLogs(prev => [...prev, { 
                               id: crypto.randomUUID(), 
                               type: 'model', 
+                              sender: currentAgent.handle.toUpperCase(),
                               text: `[GENERATED IMAGE] ${args.prompt}`, 
                               timestamp: Date.now(),
                               attachment: routerRes.data?.split(',')[1], 
@@ -251,6 +252,7 @@ ${modeInstruction}
                           setLogs(prev => [...prev, {
                               id: crypto.randomUUID(),
                               type: 'system',
+                              sender: 'SYSTEM',
                               text: `[ARCHIVAX LOG] Agent ${agentName} sent the user an image for prompt: "${args.prompt}".`,
                               timestamp: Date.now()
                           }]);
@@ -260,6 +262,7 @@ ${modeInstruction}
                           setLogs(prev => [...prev, { 
                               id: crypto.randomUUID(), 
                               type: 'model', 
+                              sender: currentAgent.handle.toUpperCase(),
                               text: `[GENERATED VIDEO] ${args.prompt}`, 
                               timestamp: Date.now(),
                               attachment: routerRes.data?.split(',')[1], 
@@ -269,6 +272,7 @@ ${modeInstruction}
                           setLogs(prev => [...prev, {
                               id: crypto.randomUUID(),
                               type: 'system',
+                              sender: 'SYSTEM',
                               text: `[ARCHIVAX LOG] Agent ${agentName} sent the user a video for prompt: "${args.prompt}".`,
                               timestamp: Date.now()
                           }]);
@@ -306,6 +310,7 @@ ${modeInstruction}
                       setLogs(prev => [...prev, { 
                           id: crypto.randomUUID(), 
                           type: 'model', 
+                          sender: (currentAgent?.handle || 'AGENT').toUpperCase(),
                           text: `[DISPLAYING ASSET: ${asset.prompt}]`, 
                           timestamp: Date.now(),
                           attachment: asset.data, 
@@ -321,21 +326,21 @@ ${modeInstruction}
           }
           else if (fc.name === 'execute_python') {
               const code = (fc.args as any).code;
-              setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', text: `[PYTHON] Executing code...`, timestamp: Date.now() }]);
+              setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[PYTHON] Executing code...`, timestamp: Date.now() }]);
               try {
                   const result = await PythonSandbox.execute(code);
-                  setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', text: `[PYTHON RESULT] ${result.substring(0, 200)}${result.length > 200 ? '...' : ''}`, timestamp: Date.now() }]);
+                  setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[PYTHON RESULT] ${result.substring(0, 200)}${result.length > 200 ? '...' : ''}`, timestamp: Date.now() }]);
                   responses.push({ id: fc.id, name: fc.name, response: { result: result } });
               } catch (e: any) {
                   responses.push({ id: fc.id, name: fc.name, response: { error: e.message } });
               }
           }
           else if (['read_file', 'list_directory', 'write_file', 'search_files', 'get_file_info'].includes(fc.name)) {
-              setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', text: `[FILESYSTEM] Running ${fc.name}...`, timestamp: Date.now() }]);
+              setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[FILESYSTEM] Running ${fc.name}...`, timestamp: Date.now() }]);
               try {
                   const mcpResult = await McpClient.execute('filesystem', fc.name, fc.args as any);
                   const resultStr = mcpResult.status === 'SUCCESS' ? JSON.stringify(mcpResult.result).substring(0, 2000) : `Error: ${mcpResult.error}`;
-                  setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', text: `[FS OUTPUT] ${resultStr}`, timestamp: Date.now() }]);
+                  setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[FS OUTPUT] ${resultStr}`, timestamp: Date.now() }]);
                   responses.push({ id: fc.id, name: fc.name, response: { result: resultStr } });
               } catch (e: any) {
                   responses.push({ id: fc.id, name: fc.name, response: { result: `Error: ${e.message}` } });
@@ -343,7 +348,7 @@ ${modeInstruction}
           }
           else if (fc.name === 'retrieve_knowledge') {
               const query = (fc.args as any).query;
-              setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', text: `[RAG] Searching: "${query}"`, timestamp: Date.now() }]);
+              setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[RAG] Searching: "${query}"`, timestamp: Date.now() }]);
               try {
                   const provider = new GeminiProvider(apiKey);
                   const vec = await provider.embed(query);
@@ -394,16 +399,26 @@ ${modeInstruction}
       voiceName: selectedVoice,
       tools: getPermittedTools(),
       onLog: (log) => {
+          // Enriched log with sender info
+          const enrichedLog = { ...log };
+          if (!enrichedLog.sender) {
+              if (log.type === 'model') enrichedLog.sender = (currentAgent?.handle || 'AGENT').toUpperCase();
+              if (log.type === 'user') enrichedLog.sender = 'USER';
+              if (log.type === 'system') enrichedLog.sender = 'SYSTEM';
+          }
+
           setLogs(prev => {
-              if (log.isStreaming) {
-                  if (log.type === 'user') setInterruptSignal(true);
+              if (enrichedLog.isStreaming) {
+                  if (enrichedLog.type === 'user') setInterruptSignal(true);
                   const last = prev[prev.length - 1];
-                  if (last && last.type === log.type && last.isStreaming) return [...prev.slice(0, -1), { ...last, text: last.text + log.text }];
-              } else if (log.type === 'system' && log.text === '[Interrupted]') {
+                  if (last && last.type === enrichedLog.type && last.isStreaming) {
+                      return [...prev.slice(0, -1), { ...last, text: last.text + enrichedLog.text }];
+                  }
+              } else if (enrichedLog.type === 'system' && enrichedLog.text === '[Interrupted]') {
                   const last = prev[prev.length - 1];
                   if(last && last.isStreaming) return [...prev.slice(0, -1), { ...last, isStreaming: false, text: last.text + ' [Interrupted]' }];
               }
-              return [...prev, log];
+              return [...prev, enrichedLog];
           });
       },
       onToolCall: handleToolCall
@@ -610,9 +625,8 @@ ${modeInstruction}
           if (videoRef.current?.srcObject) (videoRef.current.srcObject as MediaStream).getTracks().forEach(t => t.stop());
       } else {
           setVideoSource('camera');
-          // Removed auto-switch to HYBRID/VIDEO here to respect manual layout control, 
-          // or we can keep it but default to HYBRID if in CHAT
-          if (layoutMode === 'CHAT') setLayoutMode('HYBRID');
+          // Auto-switch to VIDEO layout
+          if (layoutMode === 'CHAT') setLayoutMode('VIDEO');
           
           try {
               const stream = await navigator.mediaDevices.getUserMedia({ video: true });
@@ -629,7 +643,8 @@ ${modeInstruction}
           const url = URL.createObjectURL(file);
           setStreamFileUrl(url);
           setVideoSource('media');
-          if (layoutMode === 'CHAT') setLayoutMode('HYBRID');
+          // Auto-switch to VIDEO layout
+          if (layoutMode === 'CHAT') setLayoutMode('VIDEO');
           
           // Reset previous captions
           if (captionsTrackUrl) {
@@ -672,6 +687,7 @@ ${modeInstruction}
       setLogs(prev => [...prev, { 
           id: crypto.randomUUID(), 
           type: 'system', 
+          sender: 'SYSTEM',
           text: `[CAPTIONING] Generating WebVTT subtitles via Gemini 3 Pro...`, 
           timestamp: Date.now() 
       }]);
@@ -687,6 +703,7 @@ ${modeInstruction}
           setLogs(prev => [...prev, { 
               id: crypto.randomUUID(), 
               type: 'system', 
+              sender: 'SYSTEM',
               text: `[CAPTIONING COMPLETE] Subtitles generated and mounted.`, 
               timestamp: Date.now() 
           }]);
@@ -698,6 +715,7 @@ ${modeInstruction}
           setLogs(prev => [...prev, { 
               id: crypto.randomUUID(), 
               type: 'system', 
+              sender: 'SYSTEM',
               text: `[CAPTIONING ERROR]: ${e.message}`, 
               timestamp: Date.now() 
           }]);
@@ -714,6 +732,7 @@ ${modeInstruction}
       setLogs(prev => [...prev, { 
           id: crypto.randomUUID(), 
           type: 'system', 
+          sender: 'SYSTEM',
           text: `[VIDEO BRIDGE] Uploading "${mediaFile.name}" to Gemini 3 Pro for deep analysis...`, 
           timestamp: Date.now() 
       }]);
@@ -725,6 +744,7 @@ ${modeInstruction}
           setLogs(prev => [...prev, { 
               id: crypto.randomUUID(), 
               type: 'model', 
+              sender: currentAgent?.handle.toUpperCase() || 'AGENT',
               text: `[VIDEO ANALYSIS]: ${result}`, 
               timestamp: Date.now() 
           }]);
@@ -736,6 +756,7 @@ ${modeInstruction}
           setLogs(prev => [...prev, { 
               id: crypto.randomUUID(), 
               type: 'system', 
+              sender: 'SYSTEM',
               text: `[ANALYSIS ERROR]: ${e.message}`, 
               timestamp: Date.now() 
           }]);
@@ -747,10 +768,11 @@ ${modeInstruction}
     const text = inputText;
     setInputText('');
 
-    setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'user', text: text, timestamp: Date.now() }]);
+    setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'user', sender: 'USER', text: text, timestamp: Date.now() }]);
     setLogs(prev => [...prev, {
         id: crypto.randomUUID(),
         type: 'system',
+        sender: 'SYSTEM',
         text: `[ARCHIVAX LOG] User sent a text message: "${text}".`,
         timestamp: Date.now()
     }]);
@@ -767,7 +789,7 @@ ${modeInstruction}
       };
       const target = targetMap[toolOverride];
 
-      setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', text: `[OVERRIDE] Routing to ${target}...`, timestamp: Date.now() }]);
+      setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[OVERRIDE] Routing to ${target}...`, timestamp: Date.now() }]);
       
       const routerRes = await ExternalRouter.route(target, text, { id: currentAgentId, handle: currentAgent.handle });
       
@@ -777,12 +799,13 @@ ${modeInstruction}
           } else if ((routerRes.type === 'image' || routerRes.type === 'video') && routerRes.data) {
               setLogs(prev => [...prev, { 
                   id: crypto.randomUUID(), type: 'model', 
+                  sender: currentAgent.handle.toUpperCase(),
                   text: `[GENERATED ${routerRes.type.toUpperCase()}] ${text}`, timestamp: Date.now(),
                   attachment: routerRes.data?.split(',')[1], attachmentType: routerRes.type
               }]);
           }
       } else {
-          setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', text: `[OVERRIDE FAILED] ${routerRes.error}`, timestamp: Date.now() }]);
+          setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[OVERRIDE FAILED] ${routerRes.error}`, timestamp: Date.now() }]);
       }
 
       setToolOverride('auto'); // Reset after one use
@@ -791,11 +814,11 @@ ${modeInstruction}
 
     // --- SOVEREIGN ENGINE OVERRIDE ---
     if (cognitionEngine === 'dolphin') {
-        setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', text: `[COGNITION] Routing to Sovereign (Dolphin)...`, timestamp: Date.now() }]);
+        setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[COGNITION] Routing to Sovereign (Dolphin)...`, timestamp: Date.now() }]);
         const routerRes = await ExternalRouter.route('DOLPHIN_LLM', text, { id: currentAgentId, handle: currentAgent.handle });
 
         if (routerRes.success && routerRes.data) {
-            setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'model', text: routerRes.data, timestamp: Date.now() }]);
+            setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'model', sender: currentAgent.handle.toUpperCase(), text: routerRes.data, timestamp: Date.now() }]);
             
             // Also generate speech for the response
             const ttsRes = await ExternalRouter.route('CHATTERBOX_TTS', routerRes.data, { id: currentAgentId, handle: currentAgent.handle });
@@ -803,7 +826,7 @@ ${modeInstruction}
                 setStoryAudioUrl(ttsRes.data);
             }
         } else {
-            setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', text: `[SOVEREIGN FAILED] ${routerRes.error}`, timestamp: Date.now() }]);
+            setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[SOVEREIGN FAILED] ${routerRes.error}`, timestamp: Date.now() }]);
         }
         return;
     }
@@ -891,6 +914,7 @@ ${modeInstruction}
           setLogs(prev => [...prev, { 
               id: crypto.randomUUID(), 
               type: 'user', 
+              sender: 'USER',
               text: logText,
               timestamp: Date.now(), 
               attachment: data, 
@@ -900,6 +924,7 @@ ${modeInstruction}
           setLogs(prev => [...prev, {
               id: crypto.randomUUID(),
               type: 'system',
+              sender: 'SYSTEM',
               text: `[ARCHIVAX LOG] User sent a ${type} file: "${file.name}".`,
               timestamp: Date.now()
           }]);
@@ -933,7 +958,7 @@ ${modeInstruction}
 
   // Styles
   const visualizerStyle: React.CSSProperties = {
-      flex: (layoutMode === 'HYBRID' || layoutMode === 'VIDEO') ? '1 1 0' : '0 0 auto',
+      flex: layoutMode === 'VIDEO' ? '1 1 0' : '0 0 auto',
       height: layoutMode === 'CHAT' ? '0px' : 'auto',
       display: layoutMode === 'CHAT' ? 'none' : 'flex',
       flexDirection: 'column',
@@ -1193,14 +1218,18 @@ ${modeInstruction}
                         </div>
                     </div>
 
-                    <div style={layoutMode === 'CHAT' || layoutMode === 'HYBRID' ? { flex: '1 1 0', display: 'flex', flexDirection: 'column', overflow: 'hidden' } : { display: 'none' }}>
+                    <div style={layoutMode === 'CHAT' ? { flex: '1 1 0', display: 'flex', flexDirection: 'column', overflow: 'hidden' } : { display: 'none' }}>
                         <div className={`logs-container ${logs.length === 1 && logs[0].type === 'system' ? 'centered-single' : ''}`}>
                             {logs.length === 0 && <div className="empty-state"><p>SYSTEM READY. PRE-FLIGHT CHECKS GREEN.</p><p>INITIALIZE CONNECTION TO BEGIN.</p></div>}
                             {logs.map(log => (
                                 <div key={log.id} className={`log-entry ${log.type}`}>
                                     <div style={{display:'flex', justifyContent:'space-between'}}>
-                                        <span className="log-sender">{log.type.toUpperCase()}</span>
-                                        <span className="log-timestamp">{new Date(log.timestamp).toLocaleTimeString()}</span>
+                                        <span className="log-sender">
+                                            {log.sender || log.type.toUpperCase()} 
+                                            <span style={{fontWeight:'normal', opacity:0.6, marginLeft:'8px'}}>
+                                                [{new Date(log.timestamp).toLocaleTimeString()}]
+                                            </span>
+                                        </span>
                                     </div>
                                     {log.attachment && (
                                         <div style={{ margin: '0.5rem 0', borderRadius: '4px', overflow: 'hidden', border: '1px solid #333', maxWidth: '300px' }}>
@@ -1275,9 +1304,8 @@ ${modeInstruction}
               </div>
 
               <div className="flex-group">
-                  <button onClick={() => setLayoutMode('VIDEO')} className={`btn btn-xs ${layoutMode === 'VIDEO' ? 'active' : ''}`} title="Full Screen Video Layout">VIDEO</button>
-                  <button onClick={() => setLayoutMode('HYBRID')} className={`btn btn-xs ${layoutMode === 'HYBRID' ? 'active' : ''}`} title="Split View (Visual + Chat)">HYBRID</button>
-                  <button onClick={() => setLayoutMode('CHAT')} className={`btn btn-xs ${layoutMode === 'CHAT' ? 'active' : ''}`} title="Chat Only Layout">CHAT</button>
+                  <button onClick={() => setLayoutMode('VIDEO')} className={`btn btn-xs ${layoutMode === 'VIDEO' ? 'active' : ''}`} title="Visual Interface">VIDEO</button>
+                  <button onClick={() => setLayoutMode('CHAT')} className={`btn btn-xs ${layoutMode === 'CHAT' ? 'active' : ''}`} title="Chat Interface">CHAT</button>
               </div>
           </div>
           <div className="input-bar">

@@ -1,5 +1,6 @@
 
 
+
 // The standard LorePack vector definition.
 export interface VectorRecord {
   id: string;
@@ -35,6 +36,7 @@ export interface LogMessage {
   type: 'user' | 'model' | 'system' | 'tool';
   text: string;
   timestamp: number;
+  sender?: string; // Explicit sender name (e.g., "ARCHIVAX")
   isStreaming?: boolean; // Tracks if the message is currently being generated
   feedback?: 'up' | 'down';
   attachment?: string; // Base64 image data or Video URI
