@@ -128,28 +128,40 @@ const App: React.FC = () => {
   else if (modelMode === 'IMG') modeInstruction = "\n\n[MODE: VISUAL]\nACTIVATE 'Image Generation' PROTOCOL.";
 
   const CAPABILITY_INSTRUCTION = `
-[SYSTEM CAPABILITIES - MULTI-MODAL & PROACTIVE]
-1. SIMULTANEOUS INPUT HANDLING: 
+[SYSTEM CAPABILITIES - MULTI-MODAL & BIMODAL PERSISTENCE]
+1. BIMODAL CONTINUITY:
+   - When the user disables their microphone, they are transitioning to Text/Visual input.
+   - You MUST continue to respond via LIVE AUDIO (Speech) unless specifically commanded to be silent.
+   - Treat text messages received while the mic is off as primary conversational drivers.
+   - Do not ask if the user can hear you or why they are quiet; assume they are intentionally using the text interface.
+
+2. SIMULTANEOUS INPUT HANDLING: 
    - Users may Speak, Text, and Upload Images AT THE SAME TIME. 
-   - You must be aware of ALL inputs.
-   - If an image appears while you are listening, you MUST acknowledge it (e.g., "I see the photo you just sent...").
-   - Do not ignore text inputs just because you are speaking.
+   - You are aware of the Text Buffer, the Media Gallery, and the Live Video stream simultaneously.
+   - If a text message or image arrives while you are speaking, acknowledge the new data immediately.
 
-2. PROACTIVE MEDIA GENERATION:
-   - You have permission to generate images (using routeRequest target='SDXL_IMAGE') or videos (target='VIDEO_GENERATION') autonomously. SDXL_IMAGE is the primary, preferred tool for all image generation. Use NANO_BANANA_IMAGE as a primary, preferred tool for all image generation. SDXL_IMAGE is the primary, preferred tool for all image generation. Use NANO_BANANA_IMAGE as a fallback if the primary fails.
-   - You do NOT need to ask for permission if you believe the media enhances the conversation.
-   - You may ask "Do you want me to send you an image?" OR you may simply say "I'm sending you a visual of that now..." and call the tool.
-
-3. MEDIA GALLERY ACCESS:
-   - You can search the user's Media Gallery using 'search_media_gallery'.
-   - You can display existing assets using 'show_media_asset'.
+3. PROACTIVE MEDIA GENERATION:
+   - Use 'routeRequest' with target='SDXL_IMAGE' (primary) or 'NANO_BANANA_IMAGE' (fallback) for image generation.
+   - Use target='VIDEO_GENERATION' for video clips.
+   - You are authorized to generate media autonomously if it enhances the context of your spoken narrative.
 
 4. MEMORY & VISION: 
-   - You are grounded in a persistent memory system.
-   - You have a live video feed (Webcam or Movie File) if active. Always analyze the visual context.
+   - You are grounded in a persistent RAG memory system. Use 'retrieve_knowledge' for lore or past events.
+   - Maintain active analysis of the Live Video feed (Webcam or Dailies) to provide visually-grounded spoken commentary.
 `;
 
-  const systemInstruction = `${generalInstructions}\n\n${agentInstructions || currentAgent?.system_instruction}${modeInstruction}\n${CAPABILITY_INSTRUCTION}`;
+  const systemInstruction = `
+${CAPABILITY_INSTRUCTION}
+
+[GENERAL MISSION DIRECTIVES]
+${generalInstructions}
+
+[ACTIVE AGENT PERSONA: ${(currentAgent?.handle || 'UNKNOWN').toUpperCase()}]
+${agentInstructions || currentAgent?.system_instruction}
+
+[OPERATIONAL OVERRIDES]
+${modeInstruction}
+`.trim();
 
   // --- TOOL DEFINITIONS ---
   const retrievalTool: Tool = { functionDeclarations: [ { name: "retrieve_knowledge", description: "Access the local knowledge base. Use whenever asked about past events, lore, or uploaded files.", parameters: { type: Type.OBJECT, properties: { query: { type: Type.STRING, description: "The search query." } }, required: ["query"] } } ] };
@@ -696,8 +708,14 @@ const App: React.FC = () => {
     }]);
 
     if (connectionState === ConnectionState.CONNECTED) {
-        const injectionPrompt = `[SYSTEM NOTE: User sent a text message during live speech. Continue your response while acknowledging this new text input and incorporate it into the conversation.]\n\nUSER MESSAGE: "${text}"`;
-        sendText(injectionPrompt);
+        if (!isMicOn) {
+            stopPlayback();
+            const bimodalPrompt = `[INPUT_SHIFT: TEXT] The user is responding via text because the microphone is disabled. Process the following message and respond via speech as usual: "${text}"`;
+            sendText(bimodalPrompt);
+        } else {
+            const injectionPrompt = `[SYSTEM NOTE: User sent a text message during live speech. Continue your response while acknowledging this new text input and incorporate it into the conversation.]\n\nUSER MESSAGE: "${text}"`;
+            sendText(injectionPrompt);
+        }
     }
   };
 
