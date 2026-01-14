@@ -1,3 +1,4 @@
+
 /**
  * MODEL GATE PROTOCOL (MGP)
  * Logic derived from model-gate.js
@@ -71,7 +72,11 @@ export const ModelGate = {
             'horror',
             'psychological thriller',
             'intense',
-            'adult content'
+            'adult content',
+            'nudity',
+            'uncensored',
+            'raw',
+            'unfiltered'
         ];
 
         return sovereignTriggerWords.some(word => lowQuery.includes(word));

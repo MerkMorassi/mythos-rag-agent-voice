@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { GoogleGenAI } from '@google/genai';
 import { LogMessage, ChatSession, VectorRecord } from '../types';
-import { saveChatSession, getAllChatSessions, deleteChatSession, putVector } from '../services/db';
+import { saveChatSession, getChatSessionsByAgentId, deleteChatSession, putVector } from '../services/db';
 import { IngestionService } from '../services/ingestion';
 import { NumMarkX_GenerateHeader, NumMarkX_GenerateID } from '../patterns/NumMarkX';
 import { GeminiProvider } from '../services/llmProviders/geminiProvider';
@@ -32,7 +32,7 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
 
   const loadSessions = async () => {
     try {
-      const data = await getAllChatSessions();
+      const data = await getChatSessionsByAgentId(currentAgentId);
       setSessions(data);
     } catch (e) {
       console.error("Failed to load sessions", e);
@@ -45,7 +45,7 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
       loadSessions();
       setStatusMsg(null);
     }
-  }, [isOpen]);
+  }, [isOpen, currentAgentId]);
 
   const showStatus = (text: string, type: 'success' | 'error' | 'info') => {
       setStatusMsg({ text, type });
@@ -70,7 +70,8 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
       id: crypto.randomUUID(),
       title: finalTitle,
       timestamp: Date.now(),
-      logs: currentLogs
+      logs: currentLogs,
+      agentId: currentAgentId
     };
 
     try {
@@ -252,11 +253,11 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
           </div>
 
           <div className="flex-col">
-            <span className="section-header-title">SAVED SESSIONS</span>
+            <span className="section-header-title">SAVED SESSIONS: {currentAgentId}</span>
             <div className="flex-col" style={{ gap: '0.5rem' }}>
               {sessions.length === 0 ? (
                 <div className="section-panel" style={{ textAlign: 'center', padding: '2rem' }}>
-                  <p style={{ color: '#666', fontSize: '0.75rem' }}>NO SAVED SESSIONS FOUND</p>
+                  <p style={{ color: '#666', fontSize: '0.75rem' }}>NO SAVED SESSIONS FOUND FOR THIS AGENT</p>
                 </div>
               ) : (
                 sessions.sort((a,b) => b.timestamp - a.timestamp).map((session) => (

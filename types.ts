@@ -1,6 +1,3 @@
-
-
-
 // The standard LorePack vector definition.
 export interface VectorRecord {
   id: string;
@@ -49,6 +46,7 @@ export interface ChatSession {
   title: string;
   timestamp: number;
   logs: LogMessage[];
+  agentId: string;
 }
 
 export interface ModelConfig {

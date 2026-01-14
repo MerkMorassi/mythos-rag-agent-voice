@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, FunctionDeclaration, Type, Tool, FinishReason, Content } from "@google/genai";
 import { Agent, MultiAgentMessage, SomaActionType } from "../types";
 import { AGENTS } from "../agents";
@@ -50,8 +51,8 @@ const routeRequestTool: FunctionDeclaration = {
         properties: {
             target: {
                 type: Type.STRING,
-                description: "The target ID: 'SDXL_IMAGE' (Primary Visuals), 'NANO_BANANA_IMAGE' (Backup Visuals), 'DOLPHIN_LLM' (Uncensored Text), 'CHATTERBOX_TTS' (Audio). Use SDXL_IMAGE for all image generation.",
-                enum: ["SDXL_IMAGE", "NANO_BANANA_IMAGE", "VIDEO_GENERATION", "DOLPHIN_LLM", "CHATTERBOX_TTS"]
+                description: "The target ID: 'SDXL_IMAGE' (Primary Visuals), 'NANO_BANANA_IMAGE' (Backup Visuals), 'WAN_IMAGE' (Uncensored Image), 'WANIMATE_VIDEO' (Uncensored Video), 'DOLPHIN_LLM' (Uncensored Text), 'CHATTERBOX_TTS' (Audio). Use SDXL_IMAGE for all image generation.",
+                enum: ["SDXL_IMAGE", "NANO_BANANA_IMAGE", "VIDEO_GENERATION", "DOLPHIN_LLM", "CHATTERBOX_TTS", "WAN_IMAGE", "WANIMATE_VIDEO"]
             },
             prompt: {
                 type: Type.STRING,
@@ -348,6 +349,7 @@ export const MultiAgentService = {
         const hfToken = localStorage.getItem('hf_token') || process.env.HF_TOKEN;
         const dolphinProvider = hfToken ? new DolphinProvider(EXTERNAL_MODEL_ENDPOINTS.DOLPHIN_LLM.url, hfToken) : null;
         
+        // Safety Fallback Strategy
         let provider: ILLMProvider = geminiProvider;
         let isFallback = false;
 
@@ -355,16 +357,13 @@ export const MultiAgentService = {
             const config = await getAgentConfig(agent.id);
             const agentInstructions = config.systemInstruction || agent.system_instruction;
             
-            // FIX: Replaced call to non-existent RetrievalGate.evaluate.
             const gateResult = RetrievalGate.evaluate(userMessage, agent.handle);
             let ragContext = "";
 
             if (gateResult.shouldRetrieve) {
-                // FIX: Replaced missing `searchDocuments` with modern retrieval logic.
                 const queryVector = await geminiProvider.embed(userMessage);
                 const docs = await RetrievalGate.query(queryVector, userMessage);
                 if (docs.length > 0) {
-                    // FIX: Changed d.content to d.text to match VectorRecord interface.
                     ragContext = `\n\n[CONTEXT]\n${docs.map(d => d.text).join('\n---\n')}\n[/CONTEXT]\n`;
                 }
             }
@@ -403,22 +402,43 @@ export const MultiAgentService = {
             let finalResponse: LLMResponse | null = null;
             let greetingToPrepend: string | null = null;
             
+            // Interaction Loop (Function Calls + Safety Fallback)
             for (let i = 0; i < 5; i++) {
-                const response = await provider.generateResponse(contents, { tools, modelConfig: config.modelConfig });
-
-                if (response.isSafetyRefusal && dolphinProvider) {
-                    isFallback = true;
-                    provider = dolphinProvider;
-
-                    const sovereignConfig = await getSovereignConfig();
-                    if (sovereignConfig.mode !== 'SILENT') {
-                        greetingToPrepend = sovereignConfig.mode === 'CUSTOM'
-                            ? sovereignConfig.customGreeting
-                            : SOVEREIGN_PRESETS[sovereignConfig.preset] || '';
+                
+                // --- FAIL-SAFE GENERATION ---
+                let response: LLMResponse;
+                try {
+                    response = await provider.generateResponse(contents, { tools, modelConfig: config.modelConfig });
+                } catch (genError: any) {
+                    // If running on Fallback (Dolphin) and it fails, revert to error message
+                    if (isFallback) {
+                        return { agentId: agent.id, text: `[SOVEREIGN CHANNEL FAILED]: ${genError.message}. Reverting to standard protocol safety block.` };
                     }
+                    throw genError;
+                }
 
-                    contents.push({ role: 'user', parts: [{ text: '[SYSTEM]: Request refused due to safety. Retrying with Sovereign model.' }] });
-                    continue;
+                // --- SAFETY INTERCEPTION ---
+                if (response.isSafetyRefusal) {
+                    if (dolphinProvider) {
+                        // Switch to Sovereign
+                        isFallback = true;
+                        provider = dolphinProvider;
+
+                        const sovereignConfig = await getSovereignConfig();
+                        if (sovereignConfig.mode !== 'SILENT') {
+                            greetingToPrepend = sovereignConfig.mode === 'CUSTOM'
+                                ? sovereignConfig.customGreeting
+                                : SOVEREIGN_PRESETS[sovereignConfig.preset] || '';
+                        }
+
+                        // Inject prompt to force retry
+                        contents.push({ role: 'user', parts: [{ text: '[SYSTEM]: Request refused due to safety. Retrying with Sovereign model.' }] });
+                        continue; // Restart loop with new provider
+                    } else {
+                        // No fallback available, return refusal
+                        finalResponse = response;
+                        break;
+                    }
                 }
 
                 if (!response.functionCalls) {
@@ -426,12 +446,11 @@ export const MultiAgentService = {
                     break;
                 }
                 
-                // FIX: Corrected Part structure for functionCall in model turn
+                // Function Calls
                 const fcParts = response.functionCalls.map((fc: any) => ({ functionCall: fc }));
                 contents.push({ role: 'model', parts: fcParts });
                 
                 const toolResponses = await this.handleToolCalls(response.functionCalls, agent, history, depth, onDelegate);
-                // FIX: Corrected Part structure for functionResponse in user turn
                 const responseParts = toolResponses.map((tr: any) => ({ functionResponse: tr }));
                 contents.push({
                     role: 'user',
@@ -439,7 +458,9 @@ export const MultiAgentService = {
                 });
             }
 
+            // Final fallback check
             if (!finalResponse) {
+                // If we ran out of turns or exited loop without response
                 finalResponse = await provider.generateResponse(contents, { modelConfig: config.modelConfig });
             }
 
@@ -464,7 +485,7 @@ export const MultiAgentService = {
 
             return {
                 agentId: agent.id,
-                text: finalResponse.content || "[No text content returned]",
+                text: finalResponse.content || (finalResponse.isSafetyRefusal ? "[Safety Refusal: No alternative path found]" : "[No content returned]"),
                 cost: finalResponse.usage.estimatedCostUsd,
                 model: finalResponse.model,
             };

@@ -24,6 +24,7 @@ export const LorepackHarness: React.FC<LorepackHarnessProps> = ({ onExit }) => {
     const [eta, setEta] = useState('--:--');
     const [chatInput, setChatInput] = useState('');
     const [isProcessing, setIsProcessing] = useState(false);
+    const [showNukeModal, setShowNukeModal] = useState(false);
 
     const lorepack = useRef(new Lorepack());
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -235,8 +236,39 @@ You are in a technical interface; be concise and factual.`;
         }
     };
 
+    const handleNuke = async () => {
+        setShowNukeModal(false);
+        setState('NUKING');
+        try {
+            await lorepack.current.nuke();
+            addLog('Vault nuked.', 'err');
+            await refreshStats();
+        } catch (e: any) {
+            addLog(`Nuke failed: ${e.message}`, 'err');
+        } finally {
+            setState('IDLE');
+        }
+    };
+
     return (
         <div className="lorepack-harness">
+            {/* NUKE MODAL OVERLAY */}
+            {showNukeModal && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(255,0,0,0.2)', backdropFilter: 'blur(10px)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <div className="section-panel" style={{ maxWidth: '400px', textAlign: 'center', borderColor: '#ff3333', background: '#0a0a0a', padding: '2rem' }}>
+                        <div style={{ color: '#ff3333', fontSize: '3rem', marginBottom: '1rem' }}>⚠</div>
+                        <h2 style={{ color: '#fff', margin: '0 0 1rem 0' }}>CRITICAL WARNING</h2>
+                        <p style={{ color: '#888', fontSize: '0.9rem', lineHeight: '1.5' }}>
+                            This action will permanently vaporize the entire local lore database. This cannot be undone. All agents will lose their grounding.
+                        </p>
+                        <div className="flex-group" style={{ marginTop: '2rem' }}>
+                            <button onClick={() => setShowNukeModal(false)} className="btn btn-secondary" style={{ flex: 1 }}>ABORT</button>
+                            <button onClick={handleNuke} className="btn btn-danger" style={{ flex: 1 }}>CONFIRM NUKE</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             <div className="header">
                 <div className="brand">LOREPACK <span style={{color:'#666'}}>//</span> HARNESS v1.1</div>
                 <div style={{display: 'flex', gap: '1rem', alignItems: 'center'}}>
@@ -281,19 +313,7 @@ You are in a technical interface; be concise and factual.`;
                     <input ref={graphPackRef} type="file" accept=".jsonl,.jsonl.gz,.gz,.json" style={{display:'none'}} onChange={handleGraphPack} />
                     <button
                         className="btn danger"
-                        onClick={async () => {
-                            if (!confirm('Nuke Vault?')) return;
-                            setState('NUKING');
-                            try {
-                                await lorepack.current.nuke();
-                                addLog('Vault nuked.', 'err');
-                                await refreshStats();
-                            } catch (e: any) {
-                                addLog(`Nuke failed: ${e.message}`, 'err');
-                            } finally {
-                                setState('IDLE');
-                            }
-                        }}
+                        onClick={() => setShowNukeModal(true)}
                     >
                         NUKE VAULT
                     </button>

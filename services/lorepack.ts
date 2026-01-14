@@ -1,12 +1,18 @@
 import { GraphEdge, GraphNode, VectorRecord } from '../types';
-import { bulkPutGraphEdges, bulkPutGraphNodes, deleteGraphByAgent } from './db';
+import { 
+    bulkPutGraphEdges, 
+    bulkPutGraphNodes, 
+    deleteGraphByAgent,
+    bulkPutVectors,
+    getAllVectors,
+    clearVectorsStore,
+    putVector
+} from './db';
 import { GoogleGenAI, Type } from "@google/genai";
 
-// LOREPACK™ v1.2 :: Graph & Compression Support
+// LOREPACK™ v1.3 :: Unified Persistence Architecture
 // © 2026 MYTHOS, All Rights Reserved
 
-const DB_NAME = 'mythos_vault';
-const DB_VERSION = 8;
 const GENERATION_MODEL = 'gemini-3-flash-preview';
 const LOREPACK_GRAPH_LABEL = 'CONCEPT';
 const STOP_WORDS = new Set([
@@ -40,72 +46,6 @@ function cosineSimilarity(vecA: number[], vecB: number[]): number {
     }
     const mag = Math.sqrt(magA) * Math.sqrt(magB);
     return mag === 0 ? 0 : dot / mag;
-}
-
-class SimpleDB {
-    private db: IDBDatabase | null = null;
-
-    constructor() {
-        this._init();
-    }
-
-    private async _init() {
-        return new Promise<void>((resolve, reject) => {
-            const req = indexedDB.open(DB_NAME, DB_VERSION);
-            req.onupgradeneeded = e => {
-                const db = (e.target as IDBOpenDBRequest).result;
-                if (!db.objectStoreNames.contains('vectors')) {
-                    db.createObjectStore('vectors', { keyPath: 'id' });
-                }
-            };
-            req.onsuccess = () => { this.db = req.result; resolve(); };
-            req.onerror = () => reject(req.error);
-        });
-    }
-
-    async put(storeName: string, value: any) {
-        if (!this.db) await this._init();
-        return new Promise<void>((resolve, reject) => {
-            const tx = this.db!.transaction(storeName, 'readwrite');
-            tx.oncomplete = () => resolve();
-            tx.onerror = () => reject(tx.error);
-            tx.objectStore(storeName).put(value);
-        });
-    }
-
-    async getAll(storeName: string): Promise<any[]> {
-        if (!this.db) await this._init();
-        return new Promise((resolve, reject) => {
-            const tx = this.db!.transaction(storeName, 'readonly');
-            const req = tx.objectStore(storeName).getAll();
-            req.onsuccess = () => resolve(req.result);
-            req.onerror = () => reject(req.error);
-        });
-    }
-
-    async count(storeName: string): Promise<number> {
-        if (!this.db) await this._init();
-        return new Promise((resolve, reject) => {
-            const tx = this.db!.transaction(storeName, 'readonly');
-            const req = tx.objectStore(storeName).count();
-            req.onsuccess = () => resolve(req.result);
-            req.onerror = () => reject(req.error);
-        });
-    }
-    
-    async clear(storeName: string) {
-        if (!this.db) await this._init();
-        return new Promise<void>((resolve, reject) => {
-            const tx = this.db!.transaction(storeName, 'readwrite');
-            tx.oncomplete = () => resolve();
-            tx.onerror = () => reject(tx.error);
-            tx.objectStore(storeName).clear();
-        });
-    }
-
-    get rawDb(): IDBDatabase | null {
-        return this.db;
-    }
 }
 
 const cyrb53 = (str: string, seed = 0): number => {
@@ -293,7 +233,6 @@ const buildGraphLiteFromNodes = (nodes: any[], agentId: string, maxKeywords: num
 };
 
 export class Lorepack {
-    private db = new SimpleDB();
     private apiKeys: string[] = [];
     private currentKeyIndex = 0;
     private abortController: AbortController | null = null;
@@ -393,21 +332,25 @@ export class Lorepack {
                 if (!Array.isArray(data.embeddings) || data.embeddings.length !== batch.length) {
                     throw new Error("Invalid API response for batch embeddings.");
                 }
+                
+                const dbBatch: VectorRecord[] = [];
                 for (let j = 0; j < batch.length; j++) {
                     if (!data.embeddings[j]?.values) {
                         throw new Error("Embedding response missing vector data.");
                     }
-                    await this.db.put('vectors', {
+                    dbBatch.push({
                         id: crypto.randomUUID(),
                         agent: agentId.toUpperCase(),
                         text: batch[j].text,
                         vector: data.embeddings[j].values,
-                        numMarkId: batch[j].sigil,
+                        // numMarkId: batch[j].sigil, // Not standard VectorRecord but DB allows extra
                         timestamp: Date.now(),
                         source: batch[j].source,
-                        metadata: { source: batch[j].source, timestamp: new Date().toISOString() }
+                        // metadata: { source: batch[j].source, timestamp: new Date().toISOString() }
                     });
                 }
+                await bulkPutVectors(dbBatch);
+                
                 processedCount += batch.length;
                 if (onProgress) onProgress({ processed: processedCount, total: totalVectors });
             } catch (err) {
@@ -420,7 +363,7 @@ export class Lorepack {
     }
 
     async chat(userQuery: string, agentId: string | null, customSystemPrompt?: string) {
-        const allNodes = await this.db.getAll('vectors');
+        const allNodes = await getAllVectors();
         const candidates = agentId ? allNodes.filter(v => v.agent === agentId) : allNodes;
         let context = "";
         let derivation = "General Knowledge";
@@ -462,10 +405,10 @@ export class Lorepack {
         };
     }
 
-    async nuke() { await this.db.clear('vectors'); }
+    async nuke() { await clearVectorsStore(); }
     
     async getStats(): Promise<LorepackStats> { 
-        const all = await this.db.getAll('vectors');
+        const all = await getAllVectors();
         return {
             totalNodes: all.length,
             agents: [...new Set(all.map(v => v.agent))] as string[]
@@ -473,7 +416,7 @@ export class Lorepack {
     }
 
     async export(agentId?: string): Promise<{ nodes: any[], count: number }> { 
-        const all = await this.db.getAll('vectors');
+        const all = await getAllVectors();
         const nodes = agentId ? all.filter(v => v.agent === agentId) : all;
         return { nodes, count: nodes.length };
     }
@@ -531,26 +474,21 @@ export class Lorepack {
 
         let imported = 0;
         const total = nodes.length;
-        const rawDb = this.db.rawDb;
-        if (!rawDb) throw new Error("Database not ready");
-
-        const tx = rawDb.transaction('vectors', 'readwrite');
-        const store = tx.objectStore('vectors');
+        
+        // Ensure IDs exist
+        nodes.forEach(n => { if (!n.id) n.id = crypto.randomUUID(); });
+        
+        // Use unified DB
         const updateEvery = Math.max(1, Math.floor(total / 100));
-
-        await new Promise<void>((resolve, reject) => {
-            tx.oncomplete = () => resolve();
-            tx.onerror = (e) => reject((e.target as IDBRequest).error);
-
-            nodes.forEach(node => {
-                if (!node.id) node.id = crypto.randomUUID();
-                store.put(node);
-                imported++;
-                if (onProgress && (imported % updateEvery === 0 || imported === total)) {
-                    onProgress({ processed: imported, total: total });
-                }
-            });
-        });
+        
+        // Batching for UI responsiveness
+        const BATCH_SIZE = 200;
+        for (let i = 0; i < total; i += BATCH_SIZE) {
+            const batch = nodes.slice(i, i + BATCH_SIZE);
+            await bulkPutVectors(batch);
+            imported += batch.length;
+            if (onProgress) onProgress({ processed: imported, total: total });
+        }
 
         // Import Graph Data if present
         let graphNodesCount = 0;
@@ -612,7 +550,7 @@ export class Lorepack {
 
     async buildGraphLite(agentId: string, maxKeywords = 4, minTermCount = 2) {
         if (!agentId) throw new Error("Agent ID is required to build a graph.");
-        const all = await this.db.getAll('vectors');
+        const all = await getAllVectors();
         const nodes = all.filter(v => v.agent === agentId);
         if (nodes.length === 0) throw new Error("No nodes available to build graph.");
 
@@ -627,7 +565,7 @@ export class Lorepack {
 
     async getNodes(agentId: string) {
         if (!agentId) throw new Error("Agent ID is required to get nodes.");
-        const all = await this.db.getAll('vectors');
+        const all = await getAllVectors();
         if (agentId === 'OPERATOR') return all;
         return all.filter(v => v.agent === agentId);
     }

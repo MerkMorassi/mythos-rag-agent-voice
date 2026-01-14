@@ -28,6 +28,7 @@ import { LorepackHarness } from './components/LorepackHarness';
 import { PromptManager } from './components/PromptManager';
 import {
   saveActiveChat,
+  loadActiveChat,
   getAgentConfig,
   saveAgentConfig,
   getGeneralInstructions,
@@ -38,7 +39,8 @@ import {
   updateCanvas,
   searchMediaAssets,
   getMediaAsset,
-  getAllVectors
+  getAllVectors,
+  getVectorCountByAgent
 } from './services/db';
 import { RetrievalGate } from './services/retrievalGate';
 import { IngestionService } from './services/ingestion';
@@ -461,8 +463,11 @@ ${modeInstruction}
   // --- EFFECTS & HANDLERS ---
   const refreshVectorCount = async () => {
     try {
-        const allVectors = await getAllVectors();
-        setVectorCount(allVectors.length);
+        const agent = AGENTS.find(a => a.id === currentAgentId);
+        if (agent) {
+            const count = await getVectorCountByAgent(agent.handle);
+            setVectorCount(count);
+        }
     } catch (e) {
         console.error("Failed to refresh vector count", e);
     }
@@ -518,6 +523,26 @@ ${modeInstruction}
 
   useEffect(() => { loadAgentConfig(currentAgentId); }, [currentAgentId]);
   useEffect(() => { logEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [logs, layoutMode]);
+
+  // --- ACTIVE CHAT PERSISTENCE ---
+  // 1. Load chat when agent changes
+  useEffect(() => {
+      let active = true;
+      const loadLogs = async () => {
+          const saved = await loadActiveChat(currentAgentId);
+          if (active) setLogs(saved || []);
+          refreshVectorCount();
+      };
+      loadLogs();
+      return () => { active = false; };
+  }, [currentAgentId]);
+
+  // 2. Save chat when logs update
+  useEffect(() => {
+      if (logs.length > 0) {
+          saveActiveChat(currentAgentId, logs);
+      }
+  }, [logs]);
 
   // Sync Video Tracks with State
   useEffect(() => {
@@ -585,8 +610,19 @@ ${modeInstruction}
       setAccessLevel(cfg.accessLevel || agent?.accessLevel || '400');
   };
 
-  const handleAgentChange = (id: string) => {
+  const handleAgentChange = async (id: string) => {
       if (connectionState === ConnectionState.CONNECTED) disconnect();
+      
+      // Check if user needs to be warned about missing Lore
+      const agent = AGENTS.find(a => a.id === id);
+      if (agent) {
+          const count = await getVectorCountByAgent(agent.handle);
+          if (count === 0) {
+              const confirm = window.confirm(`WARNING: ${agent.handle} has no active knowledge nodes loaded. This agent will be ungrounded. Open Lore Archive?`);
+              if (confirm) setActiveSidePanel('KNOWLEDGE');
+          }
+      }
+
       setCurrentAgentId(id);
   };
 

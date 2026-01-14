@@ -24,7 +24,7 @@ export interface SavedPrompt {
 }
 
 const DB_NAME = 'MythOS_DB';
-const DB_VERSION = 8; // Incremented version to migrate to vectors store
+const DB_VERSION = 9; // Incremented version to add agentId index to chat_sessions
 
 // Stores
 export const VECTORS_STORE = 'vectors';
@@ -62,6 +62,7 @@ export const initDB = (): Promise<IDBDatabase> => {
 
         request.onupgradeneeded = (event) => {
             const db = (event.target as IDBOpenDBRequest).result;
+            const transaction = (event.target as IDBOpenDBRequest).transaction!;
             
             const createStore = (name: string, keyPath: string | { autoIncrement: boolean } = 'id', indices: {name: string, unique: boolean}[]) => {
                 if (!db.objectStoreNames.contains(name)) {
@@ -76,7 +77,18 @@ export const initDB = (): Promise<IDBDatabase> => {
             }
 
             createStore(VECTORS_STORE, 'id', [{name: 'agent', unique: false}]);
-            createStore(CHAT_SESSION_STORE, 'id', []);
+            
+            // CHAT SESSIONS STORE & MIGRATION
+            if (!db.objectStoreNames.contains(CHAT_SESSION_STORE)) {
+                const store = db.createObjectStore(CHAT_SESSION_STORE, { keyPath: 'id' });
+                store.createIndex('agentId', 'agentId', { unique: false });
+            } else {
+                const store = transaction.objectStore(CHAT_SESSION_STORE);
+                if (!store.indexNames.contains('agentId')) {
+                    store.createIndex('agentId', 'agentId', { unique: false });
+                }
+            }
+
             createStore(ACTIVE_CHAT_STORE, 'id', []);
             createStore(AGENT_CONFIG_STORE, 'agentId', []);
             createStore(SETTINGS_STORE, 'id', []);
@@ -288,6 +300,7 @@ export const clearGraphStores = async (): Promise<void> => {
 
 export const saveChatSession = (session: ChatSession) => putItem(CHAT_SESSION_STORE, session);
 export const getAllChatSessions = () => getAll<ChatSession>(CHAT_SESSION_STORE);
+export const getChatSessionsByAgentId = (agentId: string) => getByIndex<ChatSession>(CHAT_SESSION_STORE, 'agentId', agentId);
 export const deleteChatSession = (id: string) => deleteItem(CHAT_SESSION_STORE, id);
 
 export const saveActiveChat = (id: string, logs: LogMessage[]) => putItem(ACTIVE_CHAT_STORE, { id, logs });

@@ -216,7 +216,8 @@ export const MultiAgentConsole: React.FC<MultiAgentConsoleProps> = ({ onExit }) 
                 id: crypto.randomUUID(),
                 title: title,
                 timestamp: Date.now(),
-                logs: logs
+                logs: logs,
+                agentId: CONFERENCE_ID
             };
 
             await saveChatSession(session);
