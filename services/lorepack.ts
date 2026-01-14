@@ -123,18 +123,14 @@ const NumMarkX_GenSigil = (text: string): string => {
     return `${prefix}-${hash}`;
 };
 
-const extractKeywords = (text: string, limit = 4): string[] => {
+const tokenize = (text: string, tokenLimit = 200): string[] => {
     const tokens = text
         .toLowerCase()
         .replace(/[^a-z0-9\s]/g, ' ')
         .split(/\s+/)
         .filter(token => token.length > 2 && !STOP_WORDS.has(token));
-    const counts = new Map<string, number>();
-    tokens.forEach(token => counts.set(token, (counts.get(token) ?? 0) + 1));
-    return [...counts.entries()]
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, limit)
-        .map(([token]) => token);
+    if (tokens.length <= tokenLimit) return tokens;
+    return tokens.slice(0, tokenLimit);
 };
 
 const gzipText = async (content: string): Promise<Blob> => {
@@ -424,7 +420,7 @@ export class Lorepack {
         return this.import(nodes, onProgress);
     }
 
-    async buildGraphLite(agentId: string, maxKeywords = 4) {
+    async buildGraphLite(agentId: string, maxKeywords = 4, minTermCount = 2) {
         if (!agentId) throw new Error("Agent ID is required to build a graph.");
         const all = await this.db.getAll('vectors');
         const nodes = all.filter(v => v.agent === agentId);
@@ -432,43 +428,53 @@ export class Lorepack {
 
         const graphNodes = new Map<string, GraphNode>();
         const graphEdges: GraphEdge[] = [];
-        const edgeKeys = new Set<string>();
+        const termCountsBySource = new Map<string, Map<string, number>>();
 
         nodes.forEach(node => {
             const sourceLabel = node.source || 'Unknown Source';
             const sourceId = `source:${agentId}:${sourceLabel}`;
-            if (!graphNodes.has(sourceId)) {
-                graphNodes.set(sourceId, {
-                    id: sourceId,
-                    name: sourceLabel,
-                    label: 'SOURCE',
-                    description: `Source file ${sourceLabel}`,
-                    agentId
-                });
+            if (!termCountsBySource.has(sourceId)) {
+                termCountsBySource.set(sourceId, new Map());
             }
+            const termCounts = termCountsBySource.get(sourceId)!;
+            tokenize(node.text).forEach(token => {
+                termCounts.set(token, (termCounts.get(token) ?? 0) + 1);
+            });
+        });
 
-            const keywords = extractKeywords(node.text, maxKeywords);
-            keywords.forEach(keyword => {
-                const keywordId = `concept:${agentId}:${keyword}`;
+        termCountsBySource.forEach((termCounts, sourceId) => {
+            const sourceLabel = sourceId.replace(`source:${agentId}:`, '');
+            graphNodes.set(sourceId, {
+                id: sourceId,
+                name: sourceLabel,
+                label: 'SOURCE',
+                description: `Source file ${sourceLabel}`,
+                agentId
+            });
+
+            const topTerms = [...termCounts.entries()]
+                .filter(([, count]) => count >= minTermCount)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, maxKeywords)
+                .map(([term]) => term);
+
+            topTerms.forEach(term => {
+                const keywordId = `concept:${agentId}:${term}`;
                 if (!graphNodes.has(keywordId)) {
                     graphNodes.set(keywordId, {
                         id: keywordId,
-                        name: keyword,
+                        name: term,
                         label: LOREPACK_GRAPH_LABEL,
                         description: 'Extracted concept keyword.',
                         agentId
                     });
                 }
-                const edgeKey = `${sourceId}|${keywordId}`;
-                if (!edgeKeys.has(edgeKey)) {
-                    edgeKeys.add(edgeKey);
-                    graphEdges.push({
-                        source: sourceId,
-                        target: keywordId,
-                        label: 'MENTIONS',
-                        agentId
-                    });
-                }
+                graphEdges.push({
+                    source: sourceId,
+                    target: keywordId,
+                    label: 'MENTIONS',
+                    agentId
+                });
             });
         });
 
