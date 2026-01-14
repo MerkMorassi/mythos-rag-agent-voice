@@ -1,8 +1,8 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Agent, SomaActionType } from '../types';
 import { AccessControl } from '../services/accessControl';
 import { Tool } from '@google/genai';
-import { EXTERNAL_MODEL_ENDPOINTS } from '../services/externalRouter';
+import { ExternalRouter, ExternalToolConfig } from '../services/externalRouter';
 
 interface ToolManagerProps {
     isOpen: boolean;
@@ -32,6 +32,21 @@ export const ToolManager: React.FC<ToolManagerProps> = ({
     currentAgent, 
     currentAccessLevel 
 }) => {
+    
+    // External Tools State
+    const [externalTools, setExternalTools] = useState<Record<string, ExternalToolConfig>>({});
+    const [editingId, setEditingId] = useState<string | null>(null);
+    const [editForm, setEditForm] = useState<ExternalToolConfig>({ name: '', description: '', url: '' });
+
+    useEffect(() => {
+        if (isOpen) {
+            refreshTools();
+        }
+    }, [isOpen]);
+
+    const refreshTools = () => {
+        setExternalTools(ExternalRouter.getToolRegistry());
+    };
 
     const handleToggle = (toolId: string) => {
         const newSet = new Set(enabledToolIds);
@@ -51,8 +66,27 @@ export const ToolManager: React.FC<ToolManagerProps> = ({
         if (toolId === 'routeRequest') {
             return AccessControl.canPerform(currentAccessLevel, SomaActionType.ROUTE_REQUEST);
         }
-        // Add more specific permission checks if needed
         return true;
+    };
+
+    // --- TOOL CARD ACTIONS ---
+
+    const handleEditClick = (key: string, config: ExternalToolConfig) => {
+        setEditingId(key);
+        setEditForm({ ...config });
+    };
+
+    const handleSaveEdit = (key: string) => {
+        ExternalRouter.updateToolConfig(key, editForm);
+        setEditingId(null);
+        refreshTools();
+    };
+
+    const handleReset = (key: string) => {
+        if (window.confirm("Reset this tool to factory defaults?")) {
+            ExternalRouter.resetToolConfig(key);
+            refreshTools();
+        }
     };
 
     if (!isOpen) return null;
@@ -70,46 +104,10 @@ export const ToolManager: React.FC<ToolManagerProps> = ({
                 </div>
 
                 <div className="modal-body-area">
+                    {/* STANDARD SYSTEM TOOLS */}
+                    <span className="section-header-title" style={{color: '#eee'}}>SYSTEM TOOLS</span>
                     {Object.keys(allTools).map(toolId => {
-                        if (toolId === 'routeRequest') {
-                            return (
-                                <div key="router-tools" style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid #333' }}>
-                                    <span className="section-header-title" style={{color: '#facc15'}}>EXTERNAL MODELS (via routeRequest)</span>
-                                    <p style={{ margin: '4px 0 1rem', fontSize: '0.8rem', color: '#888' }}>
-                                        These are specialized models, often hosted on HuggingFace, accessed via the `routeRequest` tool. Toggling any of these enables/disables the entire routing tool.
-                                    </p>
-                                    {Object.entries(EXTERNAL_MODEL_ENDPOINTS).map(([targetId, endpoint]) => {
-                                        const isEnabled = enabledToolIds.includes('routeRequest');
-                                        const canUse = isPermitted('routeRequest');
-                                        
-                                        return (
-                                            <div key={targetId} className="section-panel" style={{ opacity: canUse ? 1 : 0.5, marginBottom: '0.75rem', borderColor: canUse ? '#facc15' : '#333' }}>
-                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem' }}>
-                                                    <div style={{ flex: 1 }}>
-                                                        <h4 style={{ margin: 0, color: canUse ? '#eee' : '#888' }}>{endpoint.name}</h4>
-                                                        <p style={{ margin: '4px 0 8px', fontSize: '0.8rem', color: '#888' }}>
-                                                            {endpoint.description}
-                                                        </p>
-                                                        <div style={{ fontSize: '0.7rem', color: '#666', fontFamily: 'monospace', wordBreak: 'break-all' }}>
-                                                            Endpoint: {endpoint.url}
-                                                        </div>
-                                                    </div>
-                                                    <label className="toggle-switch">
-                                                        <input 
-                                                            type="checkbox" 
-                                                            checked={isEnabled} 
-                                                            onChange={() => handleToggle('routeRequest')} 
-                                                            disabled={!canUse} 
-                                                        />
-                                                        <span className="slider"></span>
-                                                    </label>
-                                                </div>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            );
-                        }
+                        if (toolId === 'routeRequest') return null; // Handled separately below
 
                         const isEnabled = enabledToolIds.includes(toolId);
                         const canUse = isPermitted(toolId);
@@ -141,6 +139,124 @@ export const ToolManager: React.FC<ToolManagerProps> = ({
                             </div>
                         );
                     })}
+
+                    {/* EXTERNAL TOOLS CONFIGURATION */}
+                    <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid #333' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                <span className="section-header-title" style={{color: '#facc15', marginBottom: '4px'}}>EXTERNAL TOOL CARDS</span>
+                                <span style={{ fontSize: '0.7rem', color: '#888' }}>Managed via 'routeRequest' tool</span>
+                            </div>
+                            <label className="toggle-switch">
+                                <input 
+                                    type="checkbox" 
+                                    checked={enabledToolIds.includes('routeRequest')} 
+                                    onChange={() => handleToggle('routeRequest')} 
+                                    disabled={!isPermitted('routeRequest')} 
+                                />
+                                <span className="slider"></span>
+                            </label>
+                        </div>
+
+                        {!isPermitted('routeRequest') && (
+                            <div className="status-banner status-error">
+                                ⚠ Agent Access Level Restricted. Cannot use Router.
+                            </div>
+                        )}
+
+                        <div className="flex-col" style={{ gap: '1rem' }}>
+                            {Object.entries(externalTools).map(([key, config]: [string, ExternalToolConfig]) => {
+                                const isEditing = editingId === key;
+                                const isModified = !config.isDefault;
+
+                                return (
+                                    <div 
+                                        key={key} 
+                                        className="section-panel" 
+                                        style={{ 
+                                            borderColor: isModified ? '#facc15' : '#333',
+                                            backgroundColor: isEditing ? '#111' : 'transparent',
+                                            position: 'relative'
+                                        }}
+                                    >
+                                        {/* STATUS INDICATOR DOT */}
+                                        {enabledToolIds.includes('routeRequest') && isPermitted('routeRequest') && (
+                                            <div style={{ position: 'absolute', top: '10px', right: '10px', width: '8px', height: '8px', borderRadius: '50%', background: '#4ade80', boxShadow: '0 0 5px #4ade80' }} title="Router Active" />
+                                        )}
+
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                                            <span style={{ fontSize: '0.7rem', color: '#666', fontFamily: 'monospace' }}>ID: {key}</span>
+                                            {isModified && <span style={{ fontSize: '0.6rem', color: '#facc15', border: '1px solid #facc15', padding: '1px 4px', borderRadius: '2px' }}>CUSTOM</span>}
+                                        </div>
+
+                                        {isEditing ? (
+                                            <div className="flex-col" style={{ gap: '0.5rem' }}>
+                                                <div>
+                                                    <label className="form-label">NAME</label>
+                                                    <input 
+                                                        className="form-input" 
+                                                        value={editForm.name} 
+                                                        onChange={e => setEditForm({...editForm, name: e.target.value})}
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="form-label">ENDPOINT URL</label>
+                                                    <input 
+                                                        className="form-input" 
+                                                        value={editForm.url} 
+                                                        onChange={e => setEditForm({...editForm, url: e.target.value})} 
+                                                        style={{ fontFamily: 'monospace', color: '#facc15' }}
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="form-label">DESCRIPTION</label>
+                                                    <textarea 
+                                                        className="form-input" 
+                                                        value={editForm.description} 
+                                                        onChange={e => setEditForm({...editForm, description: e.target.value})}
+                                                        style={{ height: '4rem', resize: 'vertical' }}
+                                                    />
+                                                </div>
+                                                <div className="flex-group">
+                                                    <button onClick={() => handleSaveEdit(key)} className="btn btn-primary btn-sm" style={{ flex: 1 }}>SAVE CARD</button>
+                                                    <button onClick={() => setEditingId(null)} className="btn btn-secondary btn-sm" style={{ flex: 1 }}>CANCEL</button>
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <>
+                                                <h3 style={{ margin: '0 0 0.5rem', fontSize: '0.9rem', color: '#eee' }}>{config.name}</h3>
+                                                <p style={{ margin: '0 0 0.75rem', fontSize: '0.8rem', color: '#aaa', lineHeight: '1.4' }}>{config.description}</p>
+                                                
+                                                <div style={{ background: '#000', padding: '0.5rem', borderRadius: '4px', border: '1px solid #222', marginBottom: '0.75rem' }}>
+                                                    <div style={{ fontSize: '0.65rem', color: '#444', marginBottom: '2px' }}>ENDPOINT:</div>
+                                                    <div style={{ fontSize: '0.7rem', color: '#facc15', fontFamily: 'monospace', wordBreak: 'break-all' }}>{config.url}</div>
+                                                </div>
+
+                                                <div className="flex-group">
+                                                    <button 
+                                                        onClick={() => handleEditClick(key, config)} 
+                                                        className="btn btn-secondary btn-xs"
+                                                        style={{ flex: 1 }}
+                                                    >
+                                                        EDIT
+                                                    </button>
+                                                    {isModified && (
+                                                        <button 
+                                                            onClick={() => handleReset(key)} 
+                                                            className="btn btn-secondary btn-xs"
+                                                            style={{ color: '#f87171', borderColor: '#f87171' }}
+                                                        >
+                                                            RESET
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            </>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>

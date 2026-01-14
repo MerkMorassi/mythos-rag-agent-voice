@@ -1,8 +1,6 @@
-
 import { saveMediaAsset, getAgentConfig } from "./db";
 import { MediaAsset } from "../types";
 import { NumMarkX_GenerateID } from "../patterns/NumMarkX";
-import { ChatterboxService } from "./chatterbox";
 import { GoogleGenAI, Content } from "@google/genai";
 import { DolphinProvider } from './llmProviders/dolphinProvider';
 import { ModelGate } from "./modelGate";
@@ -12,50 +10,68 @@ import { ModelGate } from "./modelGate";
  * Routes prompts to specialized Hugging Face Spaces for media generation.
  */
 
-export const EXTERNAL_MODEL_ENDPOINTS = {
+export interface ExternalToolConfig {
+    name: string;
+    description: string;
+    url: string;
+    isDefault?: boolean;
+}
+
+export interface RouteResult {
+    success: boolean;
+    type: 'text' | 'image' | 'video' | 'audio';
+    data?: string;
+    error?: string;
+}
+
+const DEFAULT_ENDPOINTS: Record<string, ExternalToolConfig> = {
     SDXL_IMAGE: {
         name: 'Mythos SDXL Engine (Hugging Face)',
         description: 'Primary, high-performance, uncensored SDXL model for all image generation tasks.',
-        url: 'https://merkmorassi-mythos-sdxl.hf.space/run/predict'
+        url: 'https://merkmorassi-mythos-sdxl.hf.space/run/predict',
+        isDefault: true
     },
     NANO_BANANA_IMAGE: {
         name: 'Nano Banana (Gemini Fallback)',
         description: 'Fallback image generation via Gemini 2.5 Flash Image (Nano Banana). Use only if SDXL fails.',
-        url: 'Google Cloud API (gemini-2.5-flash-image)'
+        url: 'Google Cloud API (gemini-2.5-flash-image)',
+        isDefault: true
     },
     WAN_IMAGE: {
         name: 'Wan Image (Sovereign)',
         description: 'Alternative uncensored image generation model.',
-        url: 'https://merkmorassi-wan-image.hf.space/run/predict' 
+        url: 'https://merkmorassi-wan-image.hf.space/run/predict',
+        isDefault: true
     },
     WANIMATE_VIDEO: {
         name: 'Wanimate (Uncensored Video)',
         description: 'Sovereign video generation model. Use for content that Veo might reject.',
-        url: 'https://merkmorassi-wanimate.hf.space/run/predict'
+        url: 'https://merkmorassi-wanimate.hf.space/run/predict',
+        isDefault: true
     },
     DOLPHIN_LLM: {
         name: 'MythOS Dolphin LLM',
         description: 'Uncensored, fine-tuned sovereign model for direct chat and complex reasoning.',
-        url: 'https://merkmorassi-mythos-rag-agent-voice.hf.space/v1'
+        url: 'https://merkmorassi-mythos-rag-agent-voice.hf.space/v1',
+        isDefault: true
     },
     CHATTERBOX_TTS: {
         name: 'Chatterbox',
         description: 'Long-form audio generation based on agent-specific voice samples.',
-        url: 'https://merkmorassi-chatterbox.hf.space/api/generate'
+        url: 'https://merkmorassi-chatterbox.hf.space/api/generate',
+        isDefault: true
     },
     VIDEO_GENERATION: {
         name: 'Google Veo',
         description: 'Google\'s state-of-the-art model for video generation tasks.',
-        url: 'Google Cloud API'
+        url: 'Google Cloud API',
+        isDefault: true
     }
 };
 
-export interface RouteResult {
-    success: boolean;
-    data?: string; // Text response, Base64 image, or Audio URL
-    type: 'text' | 'image' | 'audio' | 'video';
-    error?: string;
-}
+export const EXTERNAL_MODEL_ENDPOINTS = DEFAULT_ENDPOINTS;
+
+const STORAGE_KEY = 'mythos_external_tools_registry_v1';
 
 export const ExternalRouter = {
 
@@ -68,8 +84,68 @@ export const ExternalRouter = {
         return headers;
     },
 
+    /**
+     * Retrieves the active tool configuration, merging defaults with user overrides.
+     */
+    getToolRegistry(): Record<string, ExternalToolConfig> {
+        try {
+            const saved = localStorage.getItem(STORAGE_KEY);
+            const overrides = saved ? JSON.parse(saved) : {};
+            
+            // Merge deep to ensure we don't lose keys if defaults update
+            const registry = { ...DEFAULT_ENDPOINTS };
+            
+            Object.keys(overrides).forEach(key => {
+                if (registry[key]) {
+                    registry[key] = { ...registry[key], ...overrides[key], isDefault: false };
+                }
+            });
+            
+            return registry;
+        } catch (e) {
+            return DEFAULT_ENDPOINTS;
+        }
+    },
+
+    /**
+     * Updates a specific tool's configuration and persists to storage.
+     */
+    updateToolConfig(key: string, config: Partial<ExternalToolConfig>) {
+        const currentRegistry = this.getToolRegistry();
+        if (currentRegistry[key]) {
+            const updated = { ...currentRegistry[key], ...config };
+            
+            // Load raw overrides to save
+            const rawSaved = localStorage.getItem(STORAGE_KEY);
+            const overrides = rawSaved ? JSON.parse(rawSaved) : {};
+            
+            overrides[key] = {
+                name: updated.name,
+                description: updated.description,
+                url: updated.url
+            };
+            
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(overrides));
+        }
+    },
+
+    /**
+     * Resets a specific tool to its default state.
+     */
+    resetToolConfig(key: string) {
+        const rawSaved = localStorage.getItem(STORAGE_KEY);
+        if (rawSaved) {
+            const overrides = JSON.parse(rawSaved);
+            delete overrides[key];
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(overrides));
+        }
+    },
+
     async route(target: string, prompt: string, agent: { id: string, handle: string }, generateAudio: boolean = false): Promise<RouteResult> {
         console.log(`[ROUTER] Routing to ${target}: ${prompt.substring(0, 50)}...`);
+        
+        // Get Dynamic Registry
+        const registry = this.getToolRegistry();
         
         // --- SOVEREIGN HANDOFF ENFORCEMENT ---
         // If content is explicit/NSFW, strictly route to Uncensored Tools.
@@ -93,10 +169,10 @@ export const ExternalRouter = {
         try {
             // --- IMAGE GENERATION ---
             if (target === 'SDXL_IMAGE') {
-                return await this.callSdxlImage(prompt, agent);
+                return await this.callSdxlImage(prompt, agent, registry.SDXL_IMAGE.url);
             }
             else if (target === 'WAN_IMAGE') {
-                return await this.callWanImage(prompt, agent);
+                return await this.callWanImage(prompt, agent, registry.WAN_IMAGE.url);
             }
             else if (target === 'NANO_BANANA_IMAGE') {
                 // Fallback to Gemini Nano Banana (Native)
@@ -109,17 +185,17 @@ export const ExternalRouter = {
                 return await this.callVeoVideo(prompt, agent);
             }
             else if (target === 'WANIMATE_VIDEO') {
-                return await this.callWanimateVideo(prompt, agent);
+                return await this.callWanimateVideo(prompt, agent, registry.WANIMATE_VIDEO.url);
             }
 
             // --- SOVEREIGN LLM FALLBACK ---
             else if (target === 'DOLPHIN_LLM') {
-                 return await this.callDolphin(prompt);
+                 return await this.callDolphin(prompt, registry.DOLPHIN_LLM.url);
             }
             
             // --- TTS ---
             else if (target === 'CHATTERBOX_TTS') {
-                return await this.callChatterboxTTS(prompt, agent);
+                return await this.callChatterboxTTS(prompt, agent, registry.CHATTERBOX_TTS.url);
             }
             
             return { success: false, type: 'text', error: `Unknown Target: ${target}` };
@@ -130,14 +206,14 @@ export const ExternalRouter = {
     },
     
     // --- PRIMARY SDXL ENGINE (HUGGING FACE) ---
-    async callSdxlImage(prompt: string, agent: { id: string, handle: string }): Promise<RouteResult> {
+    async callSdxlImage(prompt: string, agent: { id: string, handle: string }, endpoint: string): Promise<RouteResult> {
         const hfToken = localStorage.getItem('hf_token') || process.env.HF_TOKEN;
         if (!hfToken) {
             return { success: false, type: 'text', error: "Hugging Face Token is required for the SDXL Engine." };
         }
 
         try {
-            const response = await fetch(EXTERNAL_MODEL_ENDPOINTS.SDXL_IMAGE.url, {
+            const response = await fetch(endpoint, {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
@@ -173,13 +249,13 @@ export const ExternalRouter = {
     },
 
     // --- WAN IMAGE ENGINE (SOVEREIGN) ---
-    async callWanImage(prompt: string, agent: { id: string, handle: string }): Promise<RouteResult> {
+    async callWanImage(prompt: string, agent: { id: string, handle: string }, endpoint: string): Promise<RouteResult> {
         const hfToken = localStorage.getItem('hf_token') || process.env.HF_TOKEN;
         if (!hfToken) return { success: false, type: 'text', error: "HF Token required for Wan Image." };
 
         try {
             // Placeholder payload for generic Gradio image space
-            const response = await fetch(EXTERNAL_MODEL_ENDPOINTS.WAN_IMAGE.url, {
+            const response = await fetch(endpoint, {
                 method: "POST",
                 headers: { "Content-Type": "application/json", "Authorization": `Bearer ${hfToken}` },
                 body: JSON.stringify({ data: [ prompt ] }), 
@@ -200,13 +276,13 @@ export const ExternalRouter = {
     },
 
     // --- WANIMATE VIDEO ENGINE (SOVEREIGN) ---
-    async callWanimateVideo(prompt: string, agent: { id: string, handle: string }): Promise<RouteResult> {
+    async callWanimateVideo(prompt: string, agent: { id: string, handle: string }, endpoint: string): Promise<RouteResult> {
         const hfToken = localStorage.getItem('hf_token') || process.env.HF_TOKEN;
         if (!hfToken) return { success: false, type: 'text', error: "HF Token required for Wanimate." };
 
         try {
             // Placeholder payload for generic Gradio video space
-            const response = await fetch(EXTERNAL_MODEL_ENDPOINTS.WANIMATE_VIDEO.url, {
+            const response = await fetch(endpoint, {
                 method: "POST",
                 headers: { "Content-Type": "application/json", "Authorization": `Bearer ${hfToken}` },
                 body: JSON.stringify({ data: [ prompt ] }), 
@@ -236,8 +312,8 @@ export const ExternalRouter = {
     },
 
     // --- SOVEREIGN ENGINE (DOLPHIN) ---
-    async callDolphin(prompt: string): Promise<RouteResult> {
-        const dolphinUrl = EXTERNAL_MODEL_ENDPOINTS.DOLPHIN_LLM.url;
+    async callDolphin(prompt: string, endpoint: string = DEFAULT_ENDPOINTS.DOLPHIN_LLM.url): Promise<RouteResult> {
+        // Use the passed endpoint which might be an override
         const hfToken = localStorage.getItem('hf_token') || process.env.HF_TOKEN;
 
         if (!hfToken) {
@@ -245,7 +321,7 @@ export const ExternalRouter = {
         }
 
         try {
-            const dolphinProvider = new DolphinProvider(dolphinUrl, hfToken);
+            const dolphinProvider = new DolphinProvider(endpoint, hfToken);
             
             // Inject Sovereign Context into the content array
             const sovereignContext: Content[] = [
@@ -365,7 +441,7 @@ export const ExternalRouter = {
         }
     },
 
-    async callChatterboxTTS(text: string, agent: { id: string, handle: string }): Promise<RouteResult> {
+    async callChatterboxTTS(text: string, agent: { id: string, handle: string }, endpoint: string): Promise<RouteResult> {
         try {
             const config = await getAgentConfig(agent.id);
             const voiceRef = config.voiceReference;
@@ -374,26 +450,68 @@ export const ExternalRouter = {
                 return { success: false, type: 'text', error: `No voice reference found for ${agent.handle}.` };
             }
 
-            const audioBuffer = await ChatterboxService.synthesize({
-                text: text,
-                audioRef: voiceRef
+            // We need to pass the dynamic endpoint to the service, or handle it here. 
+            // Since ChatterboxService is a wrapper, we should probably update it or call fetch directly.
+            // For cleaner architecture, we'll implement the fetch here similar to callSdxlImage.
+            
+            const hfToken = localStorage.getItem('hf_token') || process.env.HF_TOKEN;
+            const headers: Record<string, string> = { "Content-Type": "application/json" };
+            if (hfToken) headers["Authorization"] = `Bearer ${hfToken}`;
+
+            const payload = {
+                data: [
+                  text,
+                  {
+                    data: voiceRef.startsWith('data:') ? voiceRef : `data:audio/wav;base64,${voiceRef}`,
+                    name: "reference.wav"
+                  },
+                  0.5, 0.8, 0, 0.5 // Default params
+                ]
+            };
+
+            const response = await fetch(endpoint, {
+                method: "POST",
+                headers: headers,
+                body: JSON.stringify(payload),
             });
 
-            const blob = new Blob([audioBuffer], { type: 'audio/wav' });
-            const base64 = await new Promise<string>((resolve) => {
-                const reader = new FileReader();
-                reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
-                reader.readAsDataURL(blob);
-            });
+            if (!response.ok) {
+                throw new Error(`Chatterbox API Error: ${response.statusText}`);
+            }
 
+            const result = await response.json();
+            const output = result.data?.[0];
+            
+            let audioDataStr = "";
+            if (typeof output === 'string') {
+                audioDataStr = output; 
+            } else if (output && output.data) {
+                audioDataStr = output.data; 
+            }
+
+            if (!audioDataStr || !audioDataStr.startsWith('data:')) {
+                 throw new Error("Invalid audio payload received.");
+            }
+
+            const base64 = audioDataStr.split(',')[1];
             await this.saveGeneratedImage(base64, `Story TTS: ${text.substring(0, 30)}...`, agent, 'AUD', 'CHATTERBOX');
+            
+            // Create Blob URL for immediate playback
+            const binStr = atob(base64);
+            const len = binStr.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) bytes[i] = binStr.charCodeAt(i);
+            const blob = new Blob([bytes.buffer], { type: 'audio/wav' });
             const audioUrl = URL.createObjectURL(blob);
+
             return { success: true, type: 'audio', data: audioUrl };
 
         } catch (e: any) {
             return { success: false, type: 'text', error: `TTS Failed: ${e.message}` };
         }
     },
+
+    exportRouteResult: undefined as RouteResult | undefined, // Type reference for compatibility
 
     async saveGeneratedImage(urlOrBase64: string, prompt: string, agent: { id: string, handle: string }, type: 'IMG' | 'VID' | 'AUD' = 'IMG', tag: string = 'GENERATED') {
         try {
