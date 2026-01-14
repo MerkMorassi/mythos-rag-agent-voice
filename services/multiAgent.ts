@@ -14,8 +14,11 @@ import { NumMarkX_GenerateID } from "../patterns/NumMarkX";
 import { AccessControl } from "./accessControl";
 import { GeminiProvider } from "./llmProviders/geminiProvider";
 import { DolphinProvider } from "./llmProviders/dolphinProvider";
+import { WebLLMProvider } from "./llmProviders/webllmProvider";
+import { WllamaProvider } from "./llmProviders/wllamaProvider";
 import { ILLMProvider, LLMResponse } from "./llmProviders/ILLMProvider";
 import { LLMUsageLogger } from "./llmUsageLogger";
+import { ModelGate } from "./modelGate";
 
 
 export interface AgentResponse {
@@ -347,6 +350,11 @@ export const MultiAgentService = {
 
         const hfToken = localStorage.getItem('hf_token') || process.env.HF_TOKEN;
         const dolphinProvider = hfToken ? new DolphinProvider(EXTERNAL_MODEL_ENDPOINTS.DOLPHIN_LLM.url, hfToken) : null;
+        const webllmModelId = localStorage.getItem('webllm_model_id') || 'Llama-3.2-3B-Instruct-q4f16_1';
+        const wllamaModelUrl = localStorage.getItem('wllama_model_url') || '';
+        const hasWebGPU = typeof navigator !== 'undefined' && !!navigator.gpu;
+        const webllmProvider = hasWebGPU ? new WebLLMProvider(webllmModelId) : null;
+        const wllamaProvider = wllamaModelUrl ? new WllamaProvider(wllamaModelUrl) : null;
         
         let provider: ILLMProvider = geminiProvider;
         let isFallback = false;
@@ -402,20 +410,31 @@ export const MultiAgentService = {
             
             let finalResponse: LLMResponse | null = null;
             let greetingToPrepend: string | null = null;
+            const isSensitiveRequest = ModelGate.isSovereignContentTriggered(userMessage);
+            const fallbackProvider = webllmProvider || wllamaProvider || dolphinProvider;
+
+            const applySovereignGreeting = async () => {
+                const sovereignConfig = await getSovereignConfig();
+                if (sovereignConfig.mode !== 'SILENT') {
+                    greetingToPrepend = sovereignConfig.mode === 'CUSTOM'
+                        ? sovereignConfig.customGreeting
+                        : SOVEREIGN_PRESETS[sovereignConfig.preset] || '';
+                }
+            };
+
+            if (isSensitiveRequest && fallbackProvider) {
+                isFallback = true;
+                provider = fallbackProvider;
+                await applySovereignGreeting();
+            }
             
             for (let i = 0; i < 5; i++) {
                 const response = await provider.generateResponse(contents, { tools, modelConfig: config.modelConfig });
 
-                if (response.isSafetyRefusal && dolphinProvider) {
+                if (response.isSafetyRefusal && fallbackProvider && provider === geminiProvider) {
                     isFallback = true;
-                    provider = dolphinProvider;
-
-                    const sovereignConfig = await getSovereignConfig();
-                    if (sovereignConfig.mode !== 'SILENT') {
-                        greetingToPrepend = sovereignConfig.mode === 'CUSTOM'
-                            ? sovereignConfig.customGreeting
-                            : SOVEREIGN_PRESETS[sovereignConfig.preset] || '';
-                    }
+                    provider = fallbackProvider;
+                    await applySovereignGreeting();
 
                     contents.push({ role: 'user', parts: [{ text: '[SYSTEM]: Request refused due to safety. Retrying with Sovereign model.' }] });
                     continue;

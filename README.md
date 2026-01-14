@@ -36,3 +36,11 @@ npm start
 ```
 
 This command executes the `start` script defined in `package.json`, which launches the Vite server. Your default web browser should open automatically to `http://localhost:4000`.
+
+## 4. WebGPU LLM (Browser-Only) plan
+
+If you want to run **local, offline LLM inference in the browser** (no server, no API keys), see the WebGPU LLM plan:
+
+- [`docs/webgpu-llm.md`](docs/webgpu-llm.md)
+
+That guide outlines how to keep Gemini as the primary model while falling back to a light, uncensored WebGPU (and optional GGUF/WASM) model for sensitive/explicit prompt generation, including the smallest viable GGUF options such as dolphin-phi.
