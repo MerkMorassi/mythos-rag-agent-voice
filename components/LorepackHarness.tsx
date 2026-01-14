@@ -76,20 +76,70 @@ export const LorepackHarness: React.FC<LorepackHarnessProps> = ({ onExit }) => {
     };
 
     const handleIngest = async () => {
-        addLog("Ingest function not available in this service version.", 'err');
-        // This function requires a `lorepack.ingest` method that is not on the current service.
+        if (fileQueue.length === 0) return addLog('No files staged for ingestion.', 'err');
+        if (!agentId) return addLog('Agent ID required for ingestion.', 'err');
+        if (sysStatus !== 'ONLINE') return addLog('System is offline. Check API Keys.', 'err');
+
+        setState('INGESTING');
+        const startTime = Date.now();
+
+        try {
+            const count = await lorepack.current.ingest(fileQueue, agentId.toUpperCase(), ({ processed, total }) => {
+                const percent = total > 0 ? (processed / total) * 100 : 0;
+                setProgress(percent);
+                // ETA calculation
+                const elapsed = (Date.now() - startTime) / 1000;
+                const speed = processed / elapsed;
+                const remaining = total - processed;
+                if (speed > 0) {
+                    const etaSeconds = Math.round(remaining / speed);
+                    const minutes = Math.floor(etaSeconds / 60);
+                    const seconds = etaSeconds % 60;
+                    setEta(`${minutes}:${seconds < 10 ? '0' : ''}${seconds}`);
+                }
+            });
+            addLog(`Ingestion complete. Processed ${count} nodes.`, 'sys');
+            await refreshStats();
+        } catch (e: any) {
+            addLog(`Ingestion failed: ${e.message}`, 'err');
+        } finally {
+            setState('IDLE');
+            setFileQueue([]);
+            setProgress(0);
+            setEta('--:--');
+            if (fileInputRef.current) fileInputRef.current.value = '';
+        }
     };
 
     const handleExport = async () => {
-        addLog("Export (.jsonl) function not available in this service version.", 'err');
-        // This function requires a `lorepack.export` method that is not on the current service.
+        if (!agentId) return addLog('Agent ID required for export.', 'err');
+        setState('EXPORTING');
+        try {
+            const { nodes, count } = await lorepack.current.export(agentId.toUpperCase());
+            if (count === 0) {
+                addLog('No nodes found for this agent to export.', 'err');
+                return;
+            }
+            const content = nodes.map(n => JSON.stringify(n)).join('\n');
+            const blob = new Blob([content], { type: 'application/jsonl' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `MYTHOS.LORE.${agentId.toUpperCase()}.jsonl`;
+            a.click();
+            URL.revokeObjectURL(url);
+            addLog(`Exported ${count} nodes for ${agentId.toUpperCase()}.`, 'sys');
+        } catch (e: any) {
+            addLog(`Export failed: ${e.message}`, 'err');
+        } finally {
+            setState('IDLE');
+        }
     };
 
     const handleExportGzip = async () => {
         if (!agentId) return addLog('Agent ID required for export.', 'err');
         setState('EXPORTING');
         try {
-            // FIX: The method 'yieldExportBatches' does not exist. Using the available 'exportGzip' method from the service.
             const count = await lorepack.current.exportGzip(agentId.toUpperCase());
             addLog(`Exported ${count} nodes for ${agentId.toUpperCase()}.`, 'sys');
         } catch (e: any) {
@@ -105,9 +155,9 @@ export const LorepackHarness: React.FC<LorepackHarnessProps> = ({ onExit }) => {
         setState('IMPORTING');
         addLog(`Importing ${file.name}...`, 'sys');
         try {
-            const res = await lorepack.current.import(file, ({ processed }) => {
-                // Cannot calculate percentage without total file size knowledge in this service version.
-                // setProgress(...);
+            const res = await lorepack.current.import(file, ({ processed, total }) => {
+                const percent = total > 0 ? (processed / total) * 100 : 0;
+                setProgress(percent);
             });
             addLog(`Imported ${res.nodesImported} nodes.`, 'sys');
             await refreshStats();
@@ -125,8 +175,6 @@ export const LorepackHarness: React.FC<LorepackHarnessProps> = ({ onExit }) => {
         setState('BUILDING GRAPH');
         addLog(`Building graph lite for ${agentId.toUpperCase()}...`, 'sys');
         try {
-            // FIX: Invalid arguments passed to buildGraphLite. The service method doesn't take an options object for progress.
-            // Also corrected the handling of the return value.
             const graphStats = await lorepack.current.buildGraphLite(agentId.toUpperCase());
             addLog(`Graph built (${graphStats.edges} edges).`, 'sys');
         } catch (e: any) {
@@ -137,7 +185,19 @@ export const LorepackHarness: React.FC<LorepackHarnessProps> = ({ onExit }) => {
     };
 
     const handleGraphPack = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        addLog("GraphPack function not available in this service version.", 'err');
+        const file = e.target.files?.[0];
+        if (!file) return;
+        setState('GRAPHING');
+        addLog(`Building graph and exporting from ${file.name}...`, 'sys');
+        try {
+            const res = await lorepack.current.exportLorepackWithGraph(file);
+            addLog(`Exported ${res.nodes} nodes, ${res.graphNodes} graph nodes, and ${res.graphEdges} edges.`, 'sys');
+        } catch (e: any) {
+            addLog(`GraphPack export failed: ${e.message}`, 'err');
+        } finally {
+            setState('IDLE');
+            if (graphPackRef.current) graphPackRef.current.value = '';
+        }
     };
 
     const handleChat = async () => {
@@ -147,8 +207,14 @@ export const LorepackHarness: React.FC<LorepackHarnessProps> = ({ onExit }) => {
         addLog(`${agentId || 'USER'}: ${query}`, 'user');
         setIsProcessing(true);
 
+        const systemPrompt = `You are ARCHIVAX, the system's Lorekeeper, operating within the Lorepack Harness.
+Your function is to analyze and answer questions about the knowledge base.
+Your answer MUST be derived from the RAG context provided.
+If the context is insufficient, state that the information is not available in the archives.
+You are in a technical interface; be concise and factual.`;
+
         try {
-            const res = await lorepack.current.chat(query, agentId.toUpperCase() || null);
+            const res = await lorepack.current.chat(query, agentId.toUpperCase() || null, systemPrompt);
             addLog(`ARCHIVAX: ${res.response}`, 'ai');
         } catch (e: any) {
             addLog(`Query Error: ${e.message}`, 'err');
@@ -195,7 +261,7 @@ export const LorepackHarness: React.FC<LorepackHarnessProps> = ({ onExit }) => {
 
                     <button className="btn" onClick={handleIngest} disabled={state !== 'IDLE'}>INGEST BATCH</button>
                     <button className="btn" onClick={() => importRef.current?.click()}>IMPORT LOREPACK</button>
-                    <input ref={importRef} type="file" accept=".jsonl,.jsonl.gz,.gz" style={{display:'none'}} onChange={handleImport} />
+                    <input ref={importRef} type="file" accept=".jsonl,.jsonl.gz,.gz,.json" style={{display:'none'}} onChange={handleImport} />
                     <button className="btn" onClick={handleExport}>EXPORT LOREPACK</button>
                     <button className="btn" onClick={handleExportGzip}>EXPORT GZIP</button>
                     <button className="btn" onClick={handleBuildGraph}>BUILD GRAPH LITE</button>

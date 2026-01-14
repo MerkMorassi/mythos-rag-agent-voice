@@ -149,6 +149,16 @@ const deleteItem = async (storeName: string, id: string): Promise<void> => {
     });
 };
 
+const clearStore = async (storeName: string): Promise<void> => {
+    const db = await initDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction([storeName], 'readwrite');
+        const req = tx.objectStore(storeName).clear();
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(req.error);
+    });
+};
+
 // --- VECTORS (KNOWLEDGE BASE) ---
 
 export const putVector = (vec: VectorRecord) => putItem(VECTORS_STORE, vec);
@@ -178,17 +188,6 @@ export const deleteVectorsByAgent = async (agentHandle: string) => {
     });
 };
 
-export const clearVectorsStore = async (): Promise<void> => {
-    const db = await initDB();
-    return new Promise((resolve, reject) => {
-        const tx = db.transaction([VECTORS_STORE], 'readwrite');
-        const store = tx.objectStore(VECTORS_STORE);
-        store.clear();
-        tx.oncomplete = () => resolve();
-        tx.onerror = (e) => reject(tx.error);
-    });
-};
-
 export const bulkDeleteVectors = async (ids: string[]) => {
     const db = await initDB();
     return new Promise<void>((resolve, reject) => {
@@ -204,6 +203,8 @@ export const getVectorCountByAgent = async (agentHandle: string): Promise<number
     const vectors = await getVectorsByAgent(agentHandle);
     return vectors.length;
 };
+
+export const clearVectorsStore = async (): Promise<void> => clearStore(VECTORS_STORE);
 
 // This is required for ensureVectorIndex call in App.tsx
 export const ensureVectorIndex = async () => { /* No-op for IndexedDB */ };
@@ -223,80 +224,11 @@ export const updateDocumentPermissions = async (id: string, permissions: string)
     }
 };
 
-// --- GRAPH (RE-ARCHITECTED TO READ FROM VAULT) ---
-const normalizeId = (name: string) => (name || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '_');
+// --- GRAPH (DEPRECATED - VISUALIZER ONLY) ---
+export const getGraphNodesByAgent = (agentId: string) => getByIndex<GraphNode>(GRAPH_NODE_STORE, 'agentId', agentId);
+export const getGraphEdges = () => getAll<GraphEdge>(GRAPH_EDGE_STORE);
 
-export const getGraphNodesByAgent = async (agentId: string): Promise<GraphNode[]> => {
-    try {
-        const vault = await connectToVault();
-        const edges: any[] = await new Promise(r => vault.transaction('edges').objectStore('edges').getAll().onsuccess = e => r((e.target as any).result));
-        const agentEdges = edges.filter(e => e.agentId === agentId.toUpperCase());
-
-        if (agentEdges.length === 0) return [];
-        
-        const entitySet = new Set<string>();
-        agentEdges.forEach(e => {
-            if (e.s) entitySet.add(e.s);
-            if (e.o) entitySet.add(e.o);
-        });
-
-        const entities = Array.from(entitySet);
-        const apiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY;
-        let classifications: Record<string, string> = {};
-
-        if (apiKey && entities.length > 0) {
-            try {
-                const ai = new GoogleGenAI({ apiKey });
-                const prompt = `Classify the following named entities. Return ONLY a JSON object where keys are the entity names and values are one of 'PERSON', 'LOCATION', 'CONCEPT', or 'EVENT'.
-
-Entities: ${JSON.stringify(entities)}`;
-
-                const response = await ai.models.generateContent({
-                    model: 'gemini-3-flash-preview',
-                    contents: prompt,
-                    config: { responseMimeType: "application/json" }
-                });
-                
-                classifications = JSON.parse(response.text || '{}');
-            } catch (e) {
-                console.warn("Graph node classification failed, defaulting to CONCEPT:", e);
-            }
-        }
-        
-        return entities.map(name => ({
-            id: normalizeId(name),
-            name: name,
-            label: classifications[name] || 'CONCEPT',
-            description: `Entity: ${name}`,
-            agentId: agentId.toUpperCase()
-        }));
-    } catch (e) {
-        console.error("Failed to get graph nodes:", e);
-        return [];
-    }
-};
-
-export const getGraphEdges = async (agentId: string): Promise<GraphEdge[]> => {
-    try {
-        const vault = await connectToVault();
-        const edges: any[] = await new Promise(r => vault.transaction('edges').objectStore('edges').getAll().onsuccess = e => r((e.target as any).result));
-        const agentEdges = edges.filter(e => e.agentId === agentId.toUpperCase());
-        
-        return agentEdges.map(e => ({
-            source: normalizeId(e.s),
-            target: normalizeId(e.o),
-            label: e.r,
-            agentId: e.agentId
-        }));
-    } catch (e) {
-        console.error("Failed to get graph edges:", e);
-        return [];
-    }
-};
-
-// --- GRAPH WRITE OPERATIONS (for Lorepack Harness) ---
-
-export const bulkPutGraphNodes = async (nodes: GraphNode[]): Promise<void> => {
+export const bulkPutGraphNodes = async (nodes: GraphNode[]) => {
     const db = await initDB();
     return new Promise<void>((resolve, reject) => {
         const tx = db.transaction([GRAPH_NODE_STORE], 'readwrite');
@@ -307,7 +239,7 @@ export const bulkPutGraphNodes = async (nodes: GraphNode[]): Promise<void> => {
     });
 };
 
-export const bulkPutGraphEdges = async (edges: GraphEdge[]): Promise<void> => {
+export const bulkPutGraphEdges = async (edges: GraphEdge[]) => {
     const db = await initDB();
     return new Promise<void>((resolve, reject) => {
         const tx = db.transaction([GRAPH_EDGE_STORE], 'readwrite');
@@ -320,41 +252,35 @@ export const bulkPutGraphEdges = async (edges: GraphEdge[]): Promise<void> => {
 
 export const deleteGraphByAgent = async (agentId: string): Promise<void> => {
     const db = await initDB();
-    const upperAgentId = agentId.toUpperCase();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction([GRAPH_NODE_STORE, GRAPH_EDGE_STORE], 'readwrite');
+        const nodeStore = tx.objectStore(GRAPH_NODE_STORE);
+        const edgeStore = tx.objectStore(GRAPH_EDGE_STORE);
+        const nodeIndex = nodeStore.index('agentId');
+        const nodeReq = nodeIndex.getAllKeys(agentId);
 
-    // Delete nodes
-    const nodeTx = db.transaction([GRAPH_NODE_STORE], 'readwrite');
-    const nodeStore = nodeTx.objectStore(GRAPH_NODE_STORE);
-    const nodeIndex = nodeStore.index('agentId');
-    const nodeKeysReq = nodeIndex.getAllKeys(upperAgentId);
-    
-    await new Promise<void>((resolve, reject) => {
-        nodeKeysReq.onsuccess = () => {
-            const keysToDelete = nodeKeysReq.result;
-            keysToDelete.forEach(key => nodeStore.delete(key));
+        nodeReq.onsuccess = () => {
+            (nodeReq.result as IDBValidKey[]).forEach(key => nodeStore.delete(key));
         };
-        nodeTx.oncomplete = () => resolve();
-        nodeTx.onerror = () => reject(nodeTx.error);
-    });
-    
-    // Delete edges (must iterate with cursor as there is no index)
-    const edgeTx = db.transaction([GRAPH_EDGE_STORE], 'readwrite');
-    const edgeStore = edgeTx.objectStore(GRAPH_EDGE_STORE);
-    const cursorReq = edgeStore.openCursor();
+        nodeReq.onerror = () => reject(nodeReq.error);
 
-    await new Promise<void>((resolve, reject) => {
-        cursorReq.onsuccess = () => {
-            const cursor = cursorReq.result;
-            if (cursor) {
-                if (cursor.value.agentId === upperAgentId) {
-                    cursor.delete();
-                }
-                cursor.continue();
+        edgeStore.openCursor().onsuccess = (event) => {
+            const cursor = (event.target as IDBRequest<IDBCursorWithValue | null>).result;
+            if (!cursor) return;
+            if (cursor.value.agentId === agentId) {
+                cursor.delete();
             }
+            cursor.continue();
         };
-        edgeTx.oncomplete = () => resolve();
-        edgeTx.onerror = () => reject(edgeTx.error);
+
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
     });
+};
+
+export const clearGraphStores = async (): Promise<void> => {
+    await clearStore(GRAPH_NODE_STORE);
+    await clearStore(GRAPH_EDGE_STORE);
 };
 
 

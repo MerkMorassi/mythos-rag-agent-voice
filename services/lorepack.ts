@@ -267,7 +267,7 @@ export class Lorepack {
             const ai = new GoogleGenAI({apiKey: key});
             const response = await ai.models.generateContent({
                 model: model,
-                contents: `CONTEXT:\n${payload.context || 'No context available.'}\n\nUSER QUERY: ${payload.prompt}\n\nRESPONSE:`,
+                contents: payload.prompt,
                 config: {
                     systemInstruction: payload.systemInstruction
                 }
@@ -397,9 +397,9 @@ export class Lorepack {
 
         const defaultSystemInstruction = "You are a neutral, factual AI assistant. Your task is to answer the user's query based *only* on the provided context. If the context does not contain the answer, state that the information is not available in the provided documents.";
         const systemInstruction = customSystemPrompt || defaultSystemInstruction;
-        const modelPrompt = userQuery;
+        const modelPrompt = `CONTEXT:\n${context || 'No context available.'}\n\nUSER QUERY: ${userQuery}\n\nRESPONSE:`;
 
-        const genData = await this._geminiApiCall('generateContent', { prompt: modelPrompt, context, systemInstruction });
+        const genData = await this._geminiApiCall('generateContent', { prompt: modelPrompt, systemInstruction });
 
         if (!genData.candidates || genData.candidates.length === 0) {
             throw new Error("Model returned no response.");

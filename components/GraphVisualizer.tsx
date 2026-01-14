@@ -59,7 +59,8 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ currentAgentId
 
     const loadGraph = async () => {
         const rawNodes = await getGraphNodesByAgent(currentAgentId);
-        const rawEdges = await getGraphEdges(currentAgentId);
+        // FIX: getGraphEdges was called with an argument but expects 0. The initSimulation function implicitly filters edges to the current agent's nodes.
+        const rawEdges = await getGraphEdges();
         
         initSimulation(rawNodes, rawEdges);
     };
