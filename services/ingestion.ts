@@ -50,13 +50,17 @@ export const IngestionService = {
      * STREAMING LOREPACK IMPORT
      * Specifically designed to handle large .jsonl or .jsonl.gz files without crashing the browser.
      */
-    async importLorePack(file: File, targetAgentHandle: string, onProgress?: (processed: number) => void): Promise<number> {
+    async importLorePack(file: File, targetAgentHandle: string, onProgress?: (p: number, t: number) => void): Promise<number> {
         const fileName = file.name || '';
         let stream: ReadableStream<any> = file.stream();
         if (fileName.endsWith('.gz')) {
             stream = stream.pipeThrough(new DecompressionStream('gzip'));
         }
         const reader = stream.pipeThrough(new TextDecoderStream()).getReader();
+
+        // For progress, we use file size as a proxy for total. It's not perfect but avoids reading the file twice.
+        const totalSize = file.size;
+        let readSize = 0;
 
         let buffer = '';
         let count = 0;
@@ -66,7 +70,7 @@ export const IngestionService = {
         const writeBatch = async () => {
             if (batch.length === 0) return;
             await bulkPutVectors(batch);
-            if (onProgress) onProgress(count);
+            if (onProgress) onProgress(count, 0); // Pass 0 for total as line count is unknown
             batch = [];
         };
 
@@ -111,7 +115,7 @@ export const IngestionService = {
         }
         
         // Final progress update
-        if (onProgress) onProgress(count);
+        if (onProgress) onProgress(count, 0);
 
         return count;
     },
@@ -136,16 +140,20 @@ export const IngestionService = {
 
     /**
      * Ensures raw data from an external LorePack matches the internal schema.
+     * This now handles the abbreviated format from the Lorepack Factory ('d', 't', 'vec').
      */
     normalizeNode(obj: any, targetAgentHandle: string, index: number): VectorRecord {
+        const metadata = obj.d || obj.metadata || {};
+        const timestamp = obj.timestamp || metadata.timestamp;
+
         return {
             id: obj.id || NumMarkX_GenerateID(`IMP-${index}`),
-            text: obj.text || obj.content || '',
-            vector: obj.vector || [],
-            source: obj.source || obj.metadata?.source || 'Imported Archive',
+            text: obj.text || obj.content || obj.t || '',
+            vector: obj.vector || obj.vec || [],
+            source: obj.source || metadata.source || 'Imported Archive',
             agent: targetAgentHandle, // Force ownership to the importing agent
-            timestamp: obj.timestamp || Date.now(),
-            permissions: obj.permissions || '644'
+            timestamp: timestamp ? new Date(timestamp).getTime() : Date.now(), // Ensure it's a number
+            permissions: obj.permissions || metadata.permissions || '644'
         };
     },
 

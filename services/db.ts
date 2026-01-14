@@ -178,6 +178,17 @@ export const deleteVectorsByAgent = async (agentHandle: string) => {
     });
 };
 
+export const clearVectorsStore = async (): Promise<void> => {
+    const db = await initDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction([VECTORS_STORE], 'readwrite');
+        const store = tx.objectStore(VECTORS_STORE);
+        store.clear();
+        tx.oncomplete = () => resolve();
+        tx.onerror = (e) => reject(tx.error);
+    });
+};
+
 export const bulkDeleteVectors = async (ids: string[]) => {
     const db = await initDB();
     return new Promise<void>((resolve, reject) => {
@@ -281,6 +292,69 @@ export const getGraphEdges = async (agentId: string): Promise<GraphEdge[]> => {
         console.error("Failed to get graph edges:", e);
         return [];
     }
+};
+
+// --- GRAPH WRITE OPERATIONS (for Lorepack Harness) ---
+
+export const bulkPutGraphNodes = async (nodes: GraphNode[]): Promise<void> => {
+    const db = await initDB();
+    return new Promise<void>((resolve, reject) => {
+        const tx = db.transaction([GRAPH_NODE_STORE], 'readwrite');
+        const store = tx.objectStore(GRAPH_NODE_STORE);
+        nodes.forEach(node => store.put(node));
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+    });
+};
+
+export const bulkPutGraphEdges = async (edges: GraphEdge[]): Promise<void> => {
+    const db = await initDB();
+    return new Promise<void>((resolve, reject) => {
+        const tx = db.transaction([GRAPH_EDGE_STORE], 'readwrite');
+        const store = tx.objectStore(GRAPH_EDGE_STORE);
+        edges.forEach(edge => store.put(edge));
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+    });
+};
+
+export const deleteGraphByAgent = async (agentId: string): Promise<void> => {
+    const db = await initDB();
+    const upperAgentId = agentId.toUpperCase();
+
+    // Delete nodes
+    const nodeTx = db.transaction([GRAPH_NODE_STORE], 'readwrite');
+    const nodeStore = nodeTx.objectStore(GRAPH_NODE_STORE);
+    const nodeIndex = nodeStore.index('agentId');
+    const nodeKeysReq = nodeIndex.getAllKeys(upperAgentId);
+    
+    await new Promise<void>((resolve, reject) => {
+        nodeKeysReq.onsuccess = () => {
+            const keysToDelete = nodeKeysReq.result;
+            keysToDelete.forEach(key => nodeStore.delete(key));
+        };
+        nodeTx.oncomplete = () => resolve();
+        nodeTx.onerror = () => reject(nodeTx.error);
+    });
+    
+    // Delete edges (must iterate with cursor as there is no index)
+    const edgeTx = db.transaction([GRAPH_EDGE_STORE], 'readwrite');
+    const edgeStore = edgeTx.objectStore(GRAPH_EDGE_STORE);
+    const cursorReq = edgeStore.openCursor();
+
+    await new Promise<void>((resolve, reject) => {
+        cursorReq.onsuccess = () => {
+            const cursor = cursorReq.result;
+            if (cursor) {
+                if (cursor.value.agentId === upperAgentId) {
+                    cursor.delete();
+                }
+                cursor.continue();
+            }
+        };
+        edgeTx.oncomplete = () => resolve();
+        edgeTx.onerror = () => reject(edgeTx.error);
+    });
 };
 
 

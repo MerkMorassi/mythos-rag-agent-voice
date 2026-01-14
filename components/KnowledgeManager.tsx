@@ -7,8 +7,7 @@ import {
   getLorePacksByAgentId,
   deleteLorePack,
   bulkDeleteVectors,
-  initDB,
-  deleteVector
+  clearVectorsStore
 } from '../services/db';
 import { IngestionService } from '../services/ingestion';
 import { AGENTS } from '../agents';
@@ -27,15 +26,12 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
     isOpen,
     onClose
 }) => {
+  const [activeTab, setActiveTab] = useState<'local' | 'library'>('local');
   const [vectors, setVectors] = useState<VectorRecord[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [showNukeModal, setShowNukeModal] = useState(false);
-  const [importProgress, setImportProgress] = useState({ processed: 0, active: false });
+  const [importProgress, setImportProgress] = useState({ p: 0, t: 0 });
   
-  // Pagination State
-  const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 10;
-
   const importInputRef = useRef<HTMLInputElement>(null);
   const agentHandle = AGENTS.find(a => a.id === currentAgentId)?.handle || currentAgentId;
 
@@ -48,27 +44,16 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
   };
 
   useEffect(() => {
-    if (isOpen) {
-        setCurrentPage(1); // Reset to first page on open
-        fetchVectors();
-    }
-  }, [isOpen, currentAgentId]);
-
-  const handleDeleteVector = async (id: string) => {
-    if (window.confirm("Permanently delete this knowledge node?")) {
-        await deleteVector(id);
-        fetchVectors(); // This will re-fetch, update state, and update the parent count.
-    }
-  };
+    if (isOpen) fetchVectors();
+  }, [isOpen, currentAgentId, activeTab]);
 
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       if (!file) return;
       setIsLoading(true);
-      setImportProgress({ processed: 0, active: true });
       try {
-          await IngestionService.importLorePack(file, agentHandle, (processed) => {
-              setImportProgress({ processed, active: true });
+          await IngestionService.importLorePack(file, agentHandle, (p, t) => {
+              setImportProgress({ p, t });
           });
           await fetchVectors();
           alert(`Import Success: Knowledge base synchronized for ${agentHandle}.`);
@@ -76,27 +61,23 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
           alert(`Import Failed: ${err.message}`);
       } finally {
           setIsLoading(false);
-          setImportProgress({ processed: 0, active: false });
+          setImportProgress({ p: 0, t: 0 });
           if (importInputRef.current) importInputRef.current.value = '';
       }
   };
 
   const handleNuke = async () => {
       setIsLoading(true);
-      const db = await initDB();
-      const tx = db.transaction(['vectors'], 'readwrite');
-      tx.objectStore('vectors').clear();
-      await new Promise(r => tx.oncomplete = r);
-      await fetchVectors();
-      setIsLoading(false);
-      setShowNukeModal(false);
+      try {
+          await clearVectorsStore();
+          await fetchVectors();
+      } catch (err: any) {
+          alert(`Nuke failed: ${err?.message || err}`);
+      } finally {
+          setIsLoading(false);
+          setShowNukeModal(false);
+      }
   };
-
-  // Pagination Logic
-  const totalPages = Math.ceil(vectors.length / itemsPerPage);
-  const startIndex = (currentPage - 1) * itemsPerPage;
-  const endIndex = startIndex + itemsPerPage;
-  const currentVectors = vectors.slice(startIndex, endIndex);
 
   if (!isOpen) return null;
 
@@ -127,50 +108,29 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
           )}
 
           <div className="flex-group" style={{ marginBottom: '1rem' }}>
-              <button onClick={() => importInputRef.current?.click()} className="btn btn-primary" style={{ flex: 2 }}>IMPORT LOREPACK (.jsonl / .gz)</button>
+              <button onClick={() => importInputRef.current?.click()} className="btn btn-primary" style={{ flex: 2 }}>IMPORT LOREPACK (.jsonl)</button>
               <button onClick={() => IngestionService.exportLorePack(agentHandle)} className="btn btn-secondary" style={{ flex: 1 }}>EXPORT</button>
               <button onClick={() => setShowNukeModal(true)} className="btn btn-danger" style={{ width: 'auto' }}>NUKE VAULT</button>
-              <input type="file" ref={importInputRef} className="hidden" onChange={handleImport} accept=".jsonl,.gz" />
+              <input type="file" ref={importInputRef} className="hidden" onChange={handleImport} accept=".jsonl" />
           </div>
 
-          {importProgress.active && (
+          {isLoading && (
               <div className="status-banner status-info">
-                  Syncing Lattice: {importProgress.processed} nodes...
+                  {importProgress.t > 0 ? `Syncing Lattice: ${importProgress.p} / ${importProgress.t}` : 'Accessing Vault...'}
               </div>
           )}
 
           <div className="flex-col">
               <span className="section-header-title">ACTIVE KNOWLEDGE NODES ({vectors.length})</span>
-               <div style={{color: '#666', fontSize: '0.7rem', marginBottom: '0.5rem'}}>
-                  Displaying {currentVectors.length > 0 ? startIndex + 1 : 0} - {Math.min(endIndex, vectors.length)} of {vectors.length} nodes.
+              <div className="flex-col" style={{ gap: '0.5rem' }}>
+                  {vectors.slice(0, 20).map(v => (
+                      <div key={v.id} className="section-panel" style={{ fontSize: '0.75rem', opacity: 0.8 }}>
+                          <div style={{ color: '#4ade80', marginBottom: '4px' }}>[{v.source}]</div>
+                          <div style={{ color: '#ccc' }}>{v.text.substring(0, 200)}...</div>
+                      </div>
+                  ))}
+                  {vectors.length > 20 && <div style={{ textAlign: 'center', color: '#666', fontSize: '0.7rem' }}>+ {vectors.length - 20} additional nodes stored in lattice</div>}
               </div>
-              <div className="flex-col" style={{ gap: '0.75rem' }}>
-                  {isLoading ? (
-                      <div className="status-banner status-info">Accessing Vault...</div>
-                  ) : currentVectors.length === 0 && !importProgress.active ? (
-                      <div className="section-panel" style={{textAlign: 'center', color: '#666', padding: '2rem'}}>No nodes found for this agent.</div>
-                  ) : (
-                      currentVectors.map(v => (
-                          <div key={v.id} className="section-panel vector-item">
-                              <div className="vector-item-header">
-                                  <span className="vector-item-source">{v.source}</span>
-                                  <div className="vector-item-meta">
-                                      <span className="vector-item-timestamp">{new Date(v.timestamp).toLocaleString()}</span>
-                                      <button onClick={() => handleDeleteVector(v.id)} className="btn btn-danger btn-xs vector-item-delete" title="Delete Node">×</button>
-                                  </div>
-                              </div>
-                              <p className="vector-item-text">{v.text}</p>
-                          </div>
-                      ))
-                  )}
-              </div>
-              {totalPages > 1 && (
-                  <div className="pagination-controls">
-                      <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className="btn btn-secondary btn-sm">PREV</button>
-                      <span>Page {currentPage} of {totalPages}</span>
-                      <button onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages} className="btn btn-secondary btn-sm">NEXT</button>
-                  </div>
-              )}
           </div>
         </div>
       </div>
