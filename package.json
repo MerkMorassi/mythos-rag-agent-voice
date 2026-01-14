@@ -12,8 +12,10 @@
   },
   "dependencies": {
     "@google/genai": "^1.34.0",
+    "@mlc-ai/web-llm": "^0.2.47",
     "react": "^19.2.3",
-    "react-dom": "^19.2.3"
+    "react-dom": "^19.2.3",
+    "wllama": "^0.2.4"
   },
   "devDependencies": {
     "@types/react": "^19.0.0",
