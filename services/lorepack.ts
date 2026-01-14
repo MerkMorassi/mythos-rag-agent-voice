@@ -441,33 +441,9 @@ export class Lorepack {
 
         if (fileOrData instanceof File) {
             const text = await fileOrData.text();
-            try {
-                const data = JSON.parse(text);
-                if (data.schema === 'MYTHOS.LOREPACK.v1' && Array.isArray(data.sacred_archive)) {
-                    nodes = data.sacred_archive;
-                    agentId = data.agentId;
-                } else if (Array.isArray(data)) {
-                    nodes = data;
-                } else {
-                    nodes = [data]; 
-                }
-            } catch (e) {
-                console.log("JSON Parse failed, attempting JSONL stream parsing...");
-                const lines = text.split(/\r?\n/);
-                for (const line of lines) {
-                    if (line.trim()) {
-                        try {
-                            const node = JSON.parse(line);
-                            if (node && node.vector && node.text) {
-                                nodes.push(node);
-                                if (!agentId && node.agent) agentId = node.agent;
-                            }
-                        } catch (lineErr) {
-                            console.warn("Skipping malformed JSONL line:", lineErr);
-                        }
-                    }
-                }
-            }
+            const parsed = parseLorepackText(text);
+            nodes = parsed.nodes;
+            agentId = parsed.agentId;
         } else {
             nodes = Array.isArray(fileOrData) ? fileOrData : 
                    (fileOrData.sacred_archive ? fileOrData.sacred_archive : [fileOrData]);
