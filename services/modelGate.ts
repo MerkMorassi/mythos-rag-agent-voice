@@ -49,5 +49,31 @@ export const ModelGate = {
         ];
         
         return triggerWords.some(word => lowQuery.includes(word));
+    },
+
+    /**
+     * Checks if content may be flagged by standard safety filters, requiring a sovereign model.
+     * @param query The user's input text or prompt
+     * @returns boolean - True if sensitive creative content is detected
+     */
+    isSovereignContentTriggered(query: string): boolean {
+        const lowQuery = query.toLowerCase();
+
+        const sovereignTriggerWords = [
+            'nsfw',
+            'graphic violence',
+            'blood',
+            'gore',
+            'explicit',
+            'erotic',
+            'mature themes',
+            'dark fantasy',
+            'horror',
+            'psychological thriller',
+            'intense',
+            'adult content'
+        ];
+
+        return sovereignTriggerWords.some(word => lowQuery.includes(word));
     }
 };
