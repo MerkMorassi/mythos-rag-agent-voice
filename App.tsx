@@ -688,10 +688,15 @@ const App: React.FC = () => {
     setInputText('');
 
     setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'user', text: text, timestamp: Date.now() }]);
+    setLogs(prev => [...prev, {
+        id: crypto.randomUUID(),
+        type: 'system',
+        text: `[ARCHIVAX LOG] User sent a text message: "${text}".`,
+        timestamp: Date.now()
+    }]);
 
     if (connectionState === ConnectionState.CONNECTED) {
-        stopPlayback();
-        const injectionPrompt = `[SYSTEM INTERRUPT: User has sent a text message while you were speaking. Stop your current response, read this new text, and respond to it directly.]\n\nUSER MESSAGE: "${text}"`;
+        const injectionPrompt = `[SYSTEM NOTE: User sent a text message during live speech. Continue your response while acknowledging this new text input and incorporate it into the conversation.]\n\nUSER MESSAGE: "${text}"`;
         sendText(injectionPrompt);
     }
   };
@@ -760,17 +765,15 @@ const App: React.FC = () => {
 
           // Live Session Interactions
           if (connectionState === ConnectionState.CONNECTED) {
-              stopPlayback();
-
               if (type === 'image') {
                   sendRealtimeInput({ media: { mimeType: file.type, data } });
-                  sendText(`[SYSTEM INTERRUPT: User has just uploaded an image named "${file.name}". Stop your current response, analyze this new image, and acknowledge it immediately.]`);
+                  sendText(`[SYSTEM NOTE: User uploaded an image named "${file.name}" during live speech. Acknowledge the image and incorporate it into your response.]`);
               } else if (type === 'text') {
                   const agentHandle = AGENTS.find(a => a.id === currentAgentId)?.handle || 'system';
                   IngestionService.ingestText(data, file.name, agentHandle, apiKey);
-                  sendText(`[SYSTEM INTERRUPT: User has just uploaded a text file named "${file.name}". Stop your current response and acknowledge receipt of this file. Here is a preview of its content.]\n\nFILE PREVIEW:\n${data.substring(0, 3000)}...`);
+                  sendText(`[SYSTEM NOTE: User uploaded a text file named "${file.name}" during live speech. Acknowledge receipt and incorporate its contents.]\n\nFILE PREVIEW:\n${data.substring(0, 3000)}...`);
               } else if (type === 'video' || type === 'audio') {
-                  sendText(`[SYSTEM INTERRUPT: User has just uploaded a ${type} file named "${file.name}". Stop your current response, acknowledge you've received it, and inform them it has been saved to the Media Library for later review.]`);
+                  sendText(`[SYSTEM NOTE: User uploaded a ${type} file named "${file.name}" during live speech. Acknowledge receipt and note it has been saved to the Media Library.]`);
               }
           }
       };
