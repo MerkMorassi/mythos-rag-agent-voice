@@ -1,3 +1,4 @@
+
 // The standard LorePack vector definition.
 export interface VectorRecord {
   id: string;
@@ -82,6 +83,8 @@ export interface AgentConfig {
   voiceSpeed?: number;     // Playback Rate (default 1.0)
   voicePitch?: number;     // Detune in Semitones (default 0)
   accessLevel?: string; // "777", "755", etc.
+  // FIX: Added bio for overrides
+  bio?: string;
 }
 
 export interface CloudFile {

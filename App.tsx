@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { GoogleGenAI, Tool, Type } from "@google/genai";
 import { AGENTS } from './agents';
@@ -26,6 +27,7 @@ import { ToolManager } from './components/ToolManager';
 import { GraphVisualizer } from './components/GraphVisualizer';
 import { LorepackHarness } from './components/LorepackHarness';
 import { PromptManager } from './components/PromptManager';
+import { AgentRoster } from './components/AgentRoster'; // IMPORT ADDED
 import {
   saveActiveChat,
   loadActiveChat,
@@ -54,7 +56,7 @@ import { AccessControl } from './services/accessControl';
 import { GeminiProvider } from './services/llmProviders/geminiProvider';
 
 type ViewMode = 'ORCHESTRATOR' | 'COUNCIL' | 'LORE_HARNESS';
-type CognitionEngine = 'gemini-flash' | 'gemini-pro' | 'dolphin';
+type CognitionEngine = 'gemini-flash' | 'gemini-pro' | 'dolphin' | 'ollama';
 type ToolOverride = 'auto' | 'image' | 'video' | 'speech';
 
 function cosineSimilarity(a: number[], b: number[]): number {
@@ -185,7 +187,7 @@ ${modeInstruction}
   const retrievalTool: Tool = { functionDeclarations: [ { name: "retrieve_knowledge", description: "Access the local knowledge base. Use whenever asked about past events, lore, or uploaded files.", parameters: { type: Type.OBJECT, properties: { query: { type: Type.STRING, description: "The search query." } }, required: ["query"] } } ] };
   const mediaGalleryTool: Tool = { functionDeclarations: [ { name: "search_media_gallery", description: "Search for existing files in the Media Gallery (Images, Videos, Documents).", parameters: { type: Type.OBJECT, properties: { query: { type: Type.STRING, description: "Keywords to search for (filename, description, tags)." } }, required: ["query"] } }, { name: "show_media_asset", description: "Display a specific media asset from the Gallery to the user.", parameters: { type: Type.OBJECT, properties: { assetId: { type: Type.STRING, description: "The ID of the asset to display (obtained from search)." } }, required: ["assetId"] } } ] };
   const googleMapsTool: Tool = { functionDeclarations: [ { name: "maps_search_places", description: "Search for places using Google Maps.", parameters: { type: Type.OBJECT, properties: { query: { type: Type.STRING, description: "Search term" }, radius: { type: Type.NUMBER, description: "Radius in meters" } }, required: ["query"] } }, { name: "maps_distancematrix", description: "Calculate travel distance/time.", parameters: { type: Type.OBJECT, properties: { origin: { type: Type.STRING }, destination: { type: Type.STRING }, mode: { type: Type.STRING } }, required: ["origin", "destination"] } } ] };
-  const routeRequestTool: Tool = { functionDeclarations: [ { name: "routeRequest", description: "Generate images, videos, or route complex requests to external models.", parameters: { type: Type.OBJECT, properties: { target: { type: Type.STRING, enum: ["SDXL_IMAGE", "NANO_BANANA_IMAGE", "VIDEO_GENERATION", "DOLPHIN_LLM", "CHATTERBOX_TTS"], description: "Use SDXL_IMAGE for all image generation. Use NANO_BANANA_IMAGE as a backup. Use VIDEO_GENERATION for video clips." }, prompt: { type: Type.STRING, description: "The visual prompt or request text." } }, required: ["target", "prompt"] } } ] };
+  const routeRequestTool: Tool = { functionDeclarations: [ { name: "routeRequest", description: "Generate images, videos, or route complex requests to external models.", parameters: { type: Type.OBJECT, properties: { target: { type: Type.STRING, enum: ["SDXL_IMAGE", "NANO_BANANA_IMAGE", "VIDEO_GENERATION", "DOLPHIN_LLM", "CHATTERBOX_TTS", "OLLAMA_LOCAL"], description: "Use SDXL_IMAGE for all image generation. Use NANO_BANANA_IMAGE as a backup. Use VIDEO_GENERATION for video clips." }, prompt: { type: Type.STRING, description: "The visual prompt or request text." } }, required: ["target", "prompt"] } } ] };
   const holodeckTools: Tool = { functionDeclarations: [ readCanvasTool, updateCanvasTool ] };
   const pythonTool: Tool = { functionDeclarations: [ { name: "execute_python", description: "Execute Python code in a sandboxed environment. Use for calculations, data analysis, or logic.", parameters: { type: Type.OBJECT, properties: { code: { type: Type.STRING, description: "The Python code to execute." } }, required: ["code"] } } ] };
   const filesystemTool: Tool = { functionDeclarations: [ { name: "read_file", description: "Read contents of a file from the host filesystem.", parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING } }, required: ["path"] } }, { name: "list_directory", description: "List files and directories at a path.", parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING } }, required: ["path"] } }, { name: "write_file", description: "Write content to a file.", parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING }, content: { type: Type.STRING } }, required: ["path", "content"] } }, { name: "get_file_info", description: "Get metadata for a file.", parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING } }, required: ["path"] } }, { name: "search_files", description: "Recursively search for files.", parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING }, pattern: { type: Type.STRING } }, required: ["path", "pattern"] } } ] };
@@ -848,21 +850,20 @@ ${modeInstruction}
       return;
     }
 
-    // --- SOVEREIGN ENGINE OVERRIDE ---
-    if (cognitionEngine === 'dolphin') {
-        setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[COGNITION] Routing to Sovereign (Dolphin)...`, timestamp: Date.now() }]);
-        const routerRes = await ExternalRouter.route('DOLPHIN_LLM', text, { id: currentAgentId, handle: currentAgent.handle });
+    // --- SOVEREIGN / OLLAMA ENGINE OVERRIDE ---
+    if (cognitionEngine === 'dolphin' || cognitionEngine === 'ollama') {
+        const target = cognitionEngine === 'dolphin' ? 'DOLPHIN_LLM' : 'OLLAMA_LOCAL';
+        setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[COGNITION] Routing to ${target === 'DOLPHIN_LLM' ? 'Sovereign' : 'Local Ollama'}...`, timestamp: Date.now() }]);
+        const routerRes = await ExternalRouter.route(target, text, { id: currentAgentId, handle: currentAgent.handle });
 
         if (routerRes.success && routerRes.data) {
             setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'model', sender: currentAgent.handle.toUpperCase(), text: routerRes.data, timestamp: Date.now() }]);
             
-            // Also generate speech for the response
-            const ttsRes = await ExternalRouter.route('CHATTERBOX_TTS', routerRes.data, { id: currentAgentId, handle: currentAgent.handle });
-            if (ttsRes.success && ttsRes.data) {
-                setStoryAudioUrl(ttsRes.data);
-            }
+            // Auto-speech for local models if desired (optional)
+            // const ttsRes = await ExternalRouter.route('CHATTERBOX_TTS', routerRes.data, { id: currentAgentId, handle: currentAgent.handle });
+            // if (ttsRes.success && ttsRes.data) setStoryAudioUrl(ttsRes.data);
         } else {
-            setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[SOVEREIGN FAILED] ${routerRes.error}`, timestamp: Date.now() }]);
+            setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[ENGINE FAILED] ${routerRes.error}`, timestamp: Date.now() }]);
         }
         return;
     }
@@ -950,7 +951,7 @@ ${modeInstruction}
           setLogs(prev => [...prev, { 
               id: crypto.randomUUID(), 
               type: 'user', 
-              sender: 'USER',
+              sender: 'USER', 
               text: logText,
               timestamp: Date.now(), 
               attachment: data, 
@@ -1019,9 +1020,14 @@ ${modeInstruction}
             <span className="logo-text">MYTHOS</span>
             <span className="divider">|</span>
             {currentView === 'ORCHESTRATOR' ? (
-                <select value={currentAgentId} onChange={(e) => handleAgentChange(e.target.value)} className="agent-selector" title="Select Active Agent Persona">
-                    {AGENTS.map(agent => <option key={agent.id} value={agent.id}>{agent.handle.toUpperCase()}</option>)}
-                </select>
+                <>
+                    <select value={currentAgentId} onChange={(e) => handleAgentChange(e.target.value)} className="agent-selector" title="Select Active Agent Persona">
+                        {AGENTS.map(agent => <option key={agent.id} value={agent.id}>{agent.handle.toUpperCase()}</option>)}
+                    </select>
+                    <button onClick={() => setActiveSidePanel('ROSTER')} className="btn btn-secondary btn-sm" title="Open Agent Roster Cards">
+                        ROSTER
+                    </button>
+                </>
             ) : ( <span className="status-indicator" style={{ color: '#38bdf8', borderColor: '#38bdf8' }}>{currentView}</span> )}
         </div>
         <div className="flex-group">
@@ -1081,6 +1087,7 @@ ${modeInstruction}
         {activeSidePanel === 'PROMPTS' && <PromptManager isOpen={true} onClose={()=>setActiveSidePanel(null)} currentAgentId={currentAgentId} onLoadPrompt={handleLoadPrompt} />}
         {activeSidePanel === 'HISTORY' && <ChatHistoryManager isOpen={true} onOpen={()=>{}} onClose={()=>setActiveSidePanel(null)} currentLogs={logs} onLoadSession={setLogs} currentAgentId={currentAgentId} onUpdateKnowledge={refreshVectorCount} />}
         {activeSidePanel === 'SETTINGS' && <SettingsManager isOpen={true} onClose={()=>setActiveSidePanel(null)} modelConfig={modelConfig} setModelConfig={setModelConfig} disabled={connectionState === ConnectionState.CONNECTED} generalInstruction={generalInstructions} setGeneralInstruction={setGeneralInstructions} agentInstruction={agentInstructions} setAgentInstruction={setAgentInstructions} agentName={currentAgent?.handle || 'Unknown'} agentId={currentAgentId} agentAccessLevel={accessLevel} selectedVoice={selectedVoice} onVoiceChange={setSelectedVoice} onSave={handleSettingsSave} apiKey={apiKey} setApiKey={setApiKey} hfToken={hfToken} setHfToken={setHfToken} voiceReference={voiceRef} voiceSpeed={voiceSpeed} voicePitch={voicePitch} />}
+        {activeSidePanel === 'ROSTER' && <AgentRoster isOpen={true} onClose={() => setActiveSidePanel(null)} currentAgentId={currentAgentId} onSelectAgent={handleAgentChange} />}
 
         <MediaPlayer audioUrl={storyAudioUrl} title="Narrative Playback" onClose={() => setStoryAudioUrl(null)} interruptSignal={interruptSignal} />
 
@@ -1326,6 +1333,7 @@ ${modeInstruction}
                       <option value="gemini-flash">Flash (Fast)</option>
                       <option value="gemini-pro">Pro (Deep)</option>
                       <option value="dolphin">Sovereign (Uncensored)</option>
+                      <option value="ollama">Ollama (Local)</option>
                   </select>
               </div>
 

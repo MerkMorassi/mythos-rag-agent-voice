@@ -1,7 +1,16 @@
+
 import { VectorRecord } from '../types';
 import { NumMarkX_GenerateID } from '../patterns/NumMarkX';
 import { GeminiProvider } from './llmProviders/geminiProvider';
-import { bulkPutVectors, getAllVectors, putVector } from "./db";
+import { OllamaProvider } from './llmProviders/ollamaProvider';
+import { 
+    bulkPutVectors, 
+    getAllVectors, 
+    putVector,
+    bulkPutGraphNodes,
+    bulkPutGraphEdges,
+    deleteGraphByAgent
+} from "./db";
 
 export const IngestionService = {
 
@@ -22,7 +31,17 @@ export const IngestionService = {
 
         if (onProgress) onProgress(0, chunks.length);
 
-        const provider = new GeminiProvider(apiKey);
+        // --- OFFLINE / ONLINE SWITCH ---
+        // If apiKey is empty, we assume Local Mode (Ollama)
+        let provider: { embed: (t: string) => Promise<number[]> };
+        
+        if (!apiKey) {
+            console.log("[Ingestion] No API Key found. Switching to Local Embeddings (Ollama/Nomic).");
+            provider = new OllamaProvider(); 
+        } else {
+            provider = new GeminiProvider(apiKey);
+        }
+
         let savedCount = 0;
 
         for (const chunk of chunks) {
@@ -47,20 +66,65 @@ export const IngestionService = {
     },
 
     /**
-     * STREAMING LOREPACK IMPORT
-     * Specifically designed to handle large .jsonl or .jsonl.gz files without crashing the browser.
+     * IMPORT LOREPACK
+     * Handles both .json (Standard Container with Graph) and .jsonl / .gz (Streaming Large Datasets)
      */
     async importLorePack(file: File, targetAgentHandle: string, onProgress?: (p: number, t: number) => void): Promise<number> {
-        const fileName = file.name || '';
+        const fileName = file.name.toLowerCase();
+        
+        // STRATEGY A: Standard JSON Container (Supports Graph)
+        // We read this fully into memory as it allows for the structured 'graph' property.
+        if (fileName.endsWith('.json') && !fileName.endsWith('.jsonl')) {
+            try {
+                const text = await file.text();
+                const data = JSON.parse(text);
+                
+                // 1. Graph Handling
+                if (data.graph) {
+                    console.log(`[Ingestion] Found Graph for ${targetAgentHandle}`);
+                    await deleteGraphByAgent(targetAgentHandle);
+                    
+                    if (data.graph.nodes && Array.isArray(data.graph.nodes)) {
+                        const nodes = data.graph.nodes.map((n: any) => ({ ...n, agentId: targetAgentHandle }));
+                        await bulkPutGraphNodes(nodes);
+                    }
+                    if (data.graph.edges && Array.isArray(data.graph.edges)) {
+                        const edges = data.graph.edges.map((e: any) => ({ ...e, agentId: targetAgentHandle }));
+                        await bulkPutGraphEdges(edges);
+                    }
+                }
+
+                // 2. Vector Handling
+                let nodes: VectorRecord[] = [];
+                if (Array.isArray(data.sacred_archive)) {
+                    nodes = data.sacred_archive.map((n: any, i: number) => this.normalizeNode(n, targetAgentHandle, i));
+                } else if (Array.isArray(data)) {
+                    nodes = data.map((n: any, i: number) => this.normalizeNode(n, targetAgentHandle, i));
+                } else if (data.id && data.vector) {
+                    // Single node
+                    nodes = [this.normalizeNode(data, targetAgentHandle, 0)];
+                }
+
+                if (nodes.length > 0) {
+                    await bulkPutVectors(nodes);
+                }
+                
+                if (onProgress) onProgress(nodes.length, nodes.length);
+                return nodes.length;
+
+            } catch (e) {
+                console.warn("[Ingestion] JSON parse failed, falling back to stream strategy.", e);
+            }
+        }
+
+        // STRATEGY B: Streaming (JSONL or GZIP)
+        // Designed for massive datasets where memory is a constraint.
+        // NOTE: Streaming typically does NOT support Graph data unless encoded as special lines.
         let stream: ReadableStream<any> = file.stream();
         if (fileName.endsWith('.gz')) {
             stream = stream.pipeThrough(new DecompressionStream('gzip'));
         }
         const reader = stream.pipeThrough(new TextDecoderStream()).getReader();
-
-        // For progress, we use file size as a proxy for total. It's not perfect but avoids reading the file twice.
-        const totalSize = file.size;
-        let readSize = 0;
 
         let buffer = '';
         let count = 0;
@@ -70,7 +134,7 @@ export const IngestionService = {
         const writeBatch = async () => {
             if (batch.length === 0) return;
             await bulkPutVectors(batch);
-            if (onProgress) onProgress(count, 0); // Pass 0 for total as line count is unknown
+            if (onProgress) onProgress(count, 0); 
             batch = [];
         };
 
@@ -87,9 +151,27 @@ export const IngestionService = {
                 if (!s) continue;
                 try {
                     const rawNode = JSON.parse(s);
-                    const normalized = this.normalizeNode(rawNode, targetAgentHandle, count);
-                    batch.push(normalized);
-                    count++;
+                    
+                    // Special case: If user streams a file containing a single huge JSON object on one line
+                    if (rawNode.schema === 'MYTHOS.LOREPACK.v1' || rawNode.sacred_archive) {
+                         // Recurse into the array
+                         const archive = rawNode.sacred_archive || [];
+                         for (const item of archive) {
+                             batch.push(this.normalizeNode(item, targetAgentHandle, count++));
+                         }
+                         // Also check graph in this line-object
+                         if (rawNode.graph) {
+                            await deleteGraphByAgent(targetAgentHandle);
+                            if (rawNode.graph.nodes) await bulkPutGraphNodes(rawNode.graph.nodes.map((n:any) => ({...n, agentId: targetAgentHandle})));
+                            if (rawNode.graph.edges) await bulkPutGraphEdges(rawNode.graph.edges.map((e:any) => ({...e, agentId: targetAgentHandle})));
+                         }
+                    } else {
+                        // Standard Vector Line
+                        const normalized = this.normalizeNode(rawNode, targetAgentHandle, count);
+                        batch.push(normalized);
+                        count++;
+                    }
+
                     if (batch.length >= BATCH_SIZE) {
                         await writeBatch();
                     }
@@ -114,7 +196,6 @@ export const IngestionService = {
             await writeBatch();
         }
         
-        // Final progress update
         if (onProgress) onProgress(count, 0);
 
         return count;

@@ -51,12 +51,12 @@ const routeRequestTool: FunctionDeclaration = {
         properties: {
             target: {
                 type: Type.STRING,
-                description: "The target ID: 'SDXL_IMAGE' (Primary Visuals), 'NANO_BANANA_IMAGE' (Backup Visuals), 'WAN_IMAGE' (Uncensored Image), 'WANIMATE_VIDEO' (Uncensored Video), 'DOLPHIN_LLM' (Uncensored Text), 'CHATTERBOX_TTS' (Audio). Use SDXL_IMAGE for all image generation.",
-                enum: ["SDXL_IMAGE", "NANO_BANANA_IMAGE", "VIDEO_GENERATION", "DOLPHIN_LLM", "CHATTERBOX_TTS", "WAN_IMAGE", "WANIMATE_VIDEO"]
+                description: "The target ID: 'SDXL_IMAGE' (Primary Visuals), 'NANO_BANANA_IMAGE' (Backup Visuals), 'WAN_IMAGE' (Uncensored Image), 'WANIMATE_VIDEO' (Uncensored Video), 'DOLPHIN_LLM' (Uncensored Text), 'CHATTERBOX_TTS' (Audio), 'LIP_SYNC' (Talking Head Video). Use SDXL_IMAGE for all image generation.",
+                enum: ["SDXL_IMAGE", "NANO_BANANA_IMAGE", "VIDEO_GENERATION", "DOLPHIN_LLM", "CHATTERBOX_TTS", "WAN_IMAGE", "WANIMATE_VIDEO", "LIP_SYNC"]
             },
             prompt: {
                 type: Type.STRING,
-                description: "The specific prompt or text content to send."
+                description: "The specific prompt or text content to send. For LIP_SYNC, this is the text the agent will speak."
             },
             generate_audio: {
                 type: Type.BOOLEAN,
