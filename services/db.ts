@@ -110,6 +110,22 @@ const connectToVault = (): Promise<IDBDatabase> => {
     if (vaultInstance) return Promise.resolve(vaultInstance);
     return new Promise((resolve, reject) => {
         const req = indexedDB.open('mythos_vault', 10);
+        
+        req.onupgradeneeded = (e) => {
+            const db = (e.target as IDBOpenDBRequest).result;
+            if (!db.objectStoreNames.contains('vectors')) {
+                const store = db.createObjectStore('vectors', { keyPath: 'id' });
+                store.createIndex('agentId', 'agentId', { unique: false });
+                store.createIndex('numMarkId', 'numMarkId', { unique: false });
+            }
+            if (!db.objectStoreNames.contains('edges')) {
+                const edgeStore = db.createObjectStore('edges', { keyPath: 'id' });
+                edgeStore.createIndex('sourceId', 'sourceId', { unique: false });
+                edgeStore.createIndex('agentId', 'agentId', { unique: false });
+                edgeStore.createIndex('type', 'type', { unique: false });
+            }
+        };
+
         req.onsuccess = () => {
             vaultInstance = req.result;
             resolve(vaultInstance);
@@ -177,6 +193,46 @@ export const putVector = (vec: VectorRecord) => putItem(VECTORS_STORE, vec);
 export const deleteVector = (id: string) => deleteItem(VECTORS_STORE, id);
 export const getVectorsByAgent = (agentHandle: string) => getByIndex<VectorRecord>(VECTORS_STORE, 'agent', agentHandle);
 export const getAllVectors = () => getAll<VectorRecord>(VECTORS_STORE);
+
+// --- LOREPACK VAULT ACCESS ---
+export const getAllVectorsFromVault = async (): Promise<any[]> => {
+    const db = await connectToVault();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction(['vectors'], 'readonly');
+        const req = tx.objectStore('vectors').getAll();
+        req.onsuccess = () => resolve(req.result || []);
+        req.onerror = () => reject(req.error);
+    });
+};
+
+export const getVaultStats = async (): Promise<{ totalNodes: number, totalEdges: number }> => {
+    const db = await connectToVault();
+    return new Promise(async (resolve, reject) => {
+        try {
+            const tx = db.transaction(['vectors', 'edges'], 'readonly');
+            const nodesReq = tx.objectStore('vectors').count();
+            const edgesReq = tx.objectStore('edges').count();
+            
+            let totalNodes = 0;
+            let totalEdges = 0;
+
+            nodesReq.onsuccess = () => {
+                totalNodes = nodesReq.result;
+            };
+            edgesReq.onsuccess = () => {
+                totalEdges = edgesReq.result;
+            };
+
+            tx.oncomplete = () => {
+                resolve({ totalNodes, totalEdges });
+            };
+            tx.onerror = () => reject(tx.error);
+        } catch (e) {
+            reject(e);
+        }
+    });
+};
+
 
 export const bulkPutVectors = async (vectors: VectorRecord[]) => {
     const db = await initDB();

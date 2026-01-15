@@ -27,7 +27,7 @@ import { ToolManager } from './components/ToolManager';
 import { GraphVisualizer } from './components/GraphVisualizer';
 import { LorepackHarness } from './components/LorepackHarness';
 import { PromptManager } from './components/PromptManager';
-import { AgentRoster } from './components/AgentRoster'; // IMPORT ADDED
+import { AgentRoster } from './components/AgentRoster';
 import {
   saveActiveChat,
   loadActiveChat,
@@ -41,7 +41,8 @@ import {
   updateCanvas,
   searchMediaAssets,
   getMediaAsset,
-  getAllVectors,
+  getAllVectorsFromVault,
+  getVaultStats,
   getVectorCountByAgent
 } from './services/db';
 import { RetrievalGate } from './services/retrievalGate';
@@ -50,7 +51,7 @@ import { NumMarkX_GenerateID } from './patterns/NumMarkX';
 import { useGeminiLive } from './hooks/useGeminiLive';
 import { McpClient } from './services/mcpClient';
 import { ExternalRouter } from './services/externalRouter';
-import { readCanvasTool, updateCanvasTool, MultiAgentService } from './services/multiAgent';
+import { readCanvasTool, updateCanvasTool, MultiAgentService, analyzeFileTool } from './services/multiAgent';
 import { PythonSandbox } from './services/pythonSandbox';
 import { AccessControl } from './services/accessControl';
 import { GeminiProvider } from './services/llmProviders/geminiProvider';
@@ -79,6 +80,7 @@ const App: React.FC = () => {
   
   // Input State
   const [inputText, setInputText] = useState('');
+  const [pendingAttachment, setPendingAttachment] = useState<{ mimeType: string, data: string, name: string } | null>(null);
   
   // Config
   const [modelConfig, setModelConfig] = useState<ModelConfig>(DEFAULT_MODEL_CONFIG);
@@ -93,6 +95,7 @@ const App: React.FC = () => {
   const [toolOverride, setToolOverride] = useState<ToolOverride>('auto');
   const [hasGreeted, setHasGreeted] = useState(false);
   const [vectorCount, setVectorCount] = useState(0);
+  const [isAgentMuted, setIsAgentMuted] = useState(false);
 
   // Layout & View Modes
   const [layoutMode, setLayoutMode] = useState<'CHAT' | 'VIDEO'>('CHAT');
@@ -124,6 +127,7 @@ const App: React.FC = () => {
   
   // Inputs
   const paperclipInputRef = useRef<HTMLInputElement>(null);
+  const analysisFileInputRef = useRef<HTMLInputElement>(null);
   const mediaFileInputRef = useRef<HTMLInputElement>(null);
   const mainInputRef = useRef<HTMLInputElement>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
@@ -133,11 +137,10 @@ const App: React.FC = () => {
   const [interruptSignal, setInterruptSignal] = useState(false);
 
   // Message Queue for non-interrupting updates
-  const messageQueueRef = useRef<string[]>([]);
+  const messageQueueRef = useRef<{ text: string, attachment?: { mimeType: string, data: string } }[]>([]);
 
   // Helper to determine if video interface should be shown
   const isVideoActive = isCameraOn || (videoSource === 'media' && !!streamFileUrl);
-  const showVideoInterface = isVideoActive;
 
   // --- PREPARE LIVE CONFIG ---
   const currentAgent = AGENTS.find(a => a.id === currentAgentId);
@@ -168,6 +171,7 @@ const App: React.FC = () => {
 4. MEMORY & VISION: 
    - You are grounded in a persistent RAG memory system. Use 'retrieve_knowledge' for lore or past events.
    - Maintain active analysis of the Live Video feed (Webcam or Dailies) to provide visually-grounded spoken commentary.
+   - If the user provides a file (image, video, code), you MUST use 'analyze_file' to understand it deeply if their question relates to it.
 `;
 
   const systemInstruction = `
@@ -191,6 +195,7 @@ ${modeInstruction}
   const holodeckTools: Tool = { functionDeclarations: [ readCanvasTool, updateCanvasTool ] };
   const pythonTool: Tool = { functionDeclarations: [ { name: "execute_python", description: "Execute Python code in a sandboxed environment. Use for calculations, data analysis, or logic.", parameters: { type: Type.OBJECT, properties: { code: { type: Type.STRING, description: "The Python code to execute." } }, required: ["code"] } } ] };
   const filesystemTool: Tool = { functionDeclarations: [ { name: "read_file", description: "Read contents of a file from the host filesystem.", parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING } }, required: ["path"] } }, { name: "list_directory", description: "List files and directories at a path.", parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING } }, required: ["path"] } }, { name: "write_file", description: "Write content to a file.", parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING }, content: { type: Type.STRING } }, required: ["path", "content"] } }, { name: "get_file_info", description: "Get metadata for a file.", parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING } }, required: ["path"] } }, { name: "search_files", description: "Recursively search for files.", parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING }, pattern: { type: Type.STRING } }, required: ["path", "pattern"] } } ] };
+  const analyzeTool: Tool = { functionDeclarations: [ analyzeFileTool ] };
 
   const allTools: Record<string, Tool> = {
     retrieval: retrievalTool,
@@ -199,11 +204,12 @@ ${modeInstruction}
     routeRequest: routeRequestTool,
     holodeck: holodeckTools,
     python: pythonTool,
-    filesystem: filesystemTool
+    filesystem: filesystemTool,
+    analyzeFile: analyzeTool
   };
 
   const [enabledToolIds, setEnabledToolIds] = useState<string[]>([
-    'retrieval', 'mediaGallery', 'googleMaps', 'routeRequest', 'holodeck'
+    'retrieval', 'mediaGallery', 'googleMaps', 'routeRequest', 'holodeck', 'analyzeFile'
   ]);
 
   const getPermittedTools = (): Tool[] => {
@@ -328,6 +334,17 @@ ${modeInstruction}
                   responses.push({ id: fc.id, name: fc.name, response: { error: e.message } });
               }
           }
+          else if (fc.name === 'analyze_file') {
+              const mediaId = (fc.args as any).mediaId;
+              const question = (fc.args as any).question;
+              setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[ANALYSIS] Gemini 3 Pro analyzing file ${mediaId}...`, timestamp: Date.now() }]);
+              try {
+                  const result = await MultiAgentService.analyzeFile(mediaId, question, apiKey);
+                  responses.push({ id: fc.id, name: fc.name, response: { result: result } });
+              } catch (e: any) {
+                  responses.push({ id: fc.id, name: fc.name, response: { error: e.message } });
+              }
+          }
           else if (fc.name === 'execute_python') {
               const code = (fc.args as any).code;
               setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[PYTHON] Executing code...`, timestamp: Date.now() }]);
@@ -402,6 +419,7 @@ ${modeInstruction}
       systemInstruction,
       voiceName: selectedVoice,
       tools: getPermittedTools(),
+      isMuted: isAgentMuted,
       onLog: (log) => {
           // Enriched log with sender info
           const enrichedLog = { ...log };
@@ -436,7 +454,7 @@ ${modeInstruction}
               // Dequeue one message
               const msg = messageQueueRef.current.shift();
               if (msg) {
-                  await sendText(msg);
+                  await sendText(msg.text, msg.attachment);
                   // Add a small delay to prevent rapid-fire sending if multiple are queued, allowing isThinking/isPlaying to latch
                   await new Promise(r => setTimeout(r, 500));
               }
@@ -448,7 +466,8 @@ ${modeInstruction}
   }, [connectionState, isPlaying, isThinking, sendText]);
 
   // Safe Send Wrapper
-  const safeSend = (msg: string) => {
+  const safeSend = (text: string, attachment?: { mimeType: string, data: string }) => {
+      const msg = { text, attachment };
       if (connectionState !== ConnectionState.CONNECTED) {
           // Auto-start session
           connect();
@@ -457,21 +476,18 @@ ${modeInstruction}
           // Queue to avoid interruption
           messageQueueRef.current.push(msg);
       } else {
-          // Immediate send
-          sendText(msg);
+          sendText(text, attachment);
       }
   };
 
   // --- EFFECTS & HANDLERS ---
   const refreshVectorCount = async () => {
     try {
-        const agent = AGENTS.find(a => a.id === currentAgentId);
-        if (agent) {
-            const count = await getVectorCountByAgent(agent.handle);
-            setVectorCount(count);
-        }
+        const stats = await getVaultStats();
+        setVectorCount(stats.totalNodes);
     } catch (e) {
-        console.error("Failed to refresh vector count", e);
+        console.error("Failed to refresh vault vector count", e);
+        setVectorCount(0); // Fallback on error
     }
   };
 
@@ -524,7 +540,7 @@ ${modeInstruction}
   }, [connectionState]);
 
   useEffect(() => { loadAgentConfig(currentAgentId); }, [currentAgentId]);
-  useEffect(() => { logEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [logs, layoutMode]);
+  useEffect(() => { logEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [logs]);
 
   // --- ACTIVE CHAT PERSISTENCE ---
   // 1. Load chat when agent changes
@@ -802,23 +818,28 @@ ${modeInstruction}
   };
 
   const handleSendText = async () => {
-    if (!inputText.trim()) return;
+    if (!inputText.trim() && !pendingAttachment) return;
+    
     const text = inputText;
-    setInputText('');
+    const attachmentToSend = pendingAttachment;
 
-    setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'user', sender: 'USER', text: text, timestamp: Date.now() }]);
-    setLogs(prev => [...prev, {
-        id: crypto.randomUUID(),
-        type: 'system',
-        sender: 'SYSTEM',
-        text: `[ARCHIVAX LOG] User sent a text message: "${text}".`,
-        timestamp: Date.now()
+    setInputText('');
+    setPendingAttachment(null);
+
+    setLogs(prev => [...prev, { 
+        id: crypto.randomUUID(), 
+        type: 'user', 
+        sender: 'USER', 
+        text: text || `[Sent Attachment: ${attachmentToSend?.name}]`, 
+        timestamp: Date.now(),
+        attachment: attachmentToSend?.data,
+        attachmentType: attachmentToSend?.mimeType.startsWith('image') ? 'image' : 'video'
     }]);
 
     const currentAgent = AGENTS.find(a => a.id === currentAgentId)!;
 
     // --- EXPLICIT TOOL/MODEL OVERRIDE ---
-    if (toolOverride !== 'auto') {
+    if (toolOverride !== 'auto' && !attachmentToSend) {
       const targetMap: Record<ToolOverride, string> = {
         image: 'SDXL_IMAGE',
         video: 'VIDEO_GENERATION',
@@ -851,17 +872,13 @@ ${modeInstruction}
     }
 
     // --- SOVEREIGN / OLLAMA ENGINE OVERRIDE ---
-    if (cognitionEngine === 'dolphin' || cognitionEngine === 'ollama') {
+    if (cognitionEngine !== 'gemini-flash' && cognitionEngine !== 'gemini-pro' && !attachmentToSend) {
         const target = cognitionEngine === 'dolphin' ? 'DOLPHIN_LLM' : 'OLLAMA_LOCAL';
         setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[COGNITION] Routing to ${target === 'DOLPHIN_LLM' ? 'Sovereign' : 'Local Ollama'}...`, timestamp: Date.now() }]);
         const routerRes = await ExternalRouter.route(target, text, { id: currentAgentId, handle: currentAgent.handle });
 
         if (routerRes.success && routerRes.data) {
             setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'model', sender: currentAgent.handle.toUpperCase(), text: routerRes.data, timestamp: Date.now() }]);
-            
-            // Auto-speech for local models if desired (optional)
-            // const ttsRes = await ExternalRouter.route('CHATTERBOX_TTS', routerRes.data, { id: currentAgentId, handle: currentAgent.handle });
-            // if (ttsRes.success && ttsRes.data) setStoryAudioUrl(ttsRes.data);
         } else {
             setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[ENGINE FAILED] ${routerRes.error}`, timestamp: Date.now() }]);
         }
@@ -869,49 +886,81 @@ ${modeInstruction}
     }
 
     // --- STANDARD GEMINI LIVE SESSION ---
-    
-    // --- MANUAL RAG FOR TEXT INPUT ---
-    // If user is typing, we do a quick RAG lookup to provide context
-    let context = "No relevant context found in archives.";
-    try {
-        const provider = new GeminiProvider(apiKey);
-        const queryVector = await provider.embed(text);
-        const allDocs = await getAllVectors();
-        
-        const agentHandle = AGENTS.find(a => a.id === currentAgentId)?.handle;
-        const agentDocs = agentHandle ? allDocs.filter(d => d.agent === agentHandle) : allDocs;
-
-        if (agentDocs.length > 0) {
-            const scored = agentDocs.map(doc => ({
-                ...doc,
-                score: cosineSimilarity(queryVector, doc.vector)
-            })).sort((a, b) => b.score - a.score).slice(0, 5);
+    let promptToSend = text;
+    // --- MANUAL RAG FOR TEXT INPUT (Only if no attachment is present) ---
+    if (!attachmentToSend) {
+        let context = "No relevant context found in archives.";
+        try {
+            const provider = new GeminiProvider(apiKey);
+            const queryVector = await provider.embed(text);
+            const allDocs: any[] = await getAllVectorsFromVault();
             
-            if (scored.length > 0 && scored[0].score > 0.45) {
-                context = scored.map(s => `[SOURCE: ${s.source || 'Unknown'}]\n${s.text}`).join('\n\n');
-            }
-        }
-    } catch (e: any) {
-        console.error("Manual RAG failed:", e);
-        context = `[RAG ERROR: ${e.message}]`;
-    }
+            const agentHandle = AGENTS.find(a => a.id === currentAgentId)?.handle.toUpperCase();
+            const agentDocs = agentHandle ? allDocs.filter(d => (d.agentId || d.agent)?.toUpperCase() === agentHandle) : allDocs;
 
-    const bimodalPrompt = `[INPUT_SHIFT: TEXT] The user is responding via text. Process the query based on the provided context and respond via speech.\n\nCONTEXT:\n${context}\n\nUSER QUERY: "${text}"`;
+            if (agentDocs.length > 0) {
+                const scored = agentDocs.map(doc => ({
+                    ...doc,
+                    score: cosineSimilarity(queryVector, doc.vector)
+                })).sort((a, b) => b.score - a.score).slice(0, 5);
+                
+                if (scored.length > 0 && scored[0].score > 0.45) {
+                    context = scored.map(s => `[SOURCE: ${s.source || s.metadata?.source || 'Unknown'}]\n${s.text}`).join('\n\n');
+                }
+            }
+        } catch (e: any) {
+            console.error("Manual RAG failed:", e);
+            context = `[RAG ERROR: ${e.message}]`;
+        }
+        
+        if (context.length > 30) {
+           promptToSend = `[INPUT_SHIFT: TEXT] The user is responding via text. Process the query based on the provided context and respond via speech.\n\nCONTEXT:\n${context}\n\nUSER QUERY: "${text}"`;
+        }
+    }
     
     // Use SafeSend to queue if speaking/disconnected
-    safeSend(bimodalPrompt);
+    safeSend(promptToSend, attachmentToSend || undefined);
   };
 
   const handlePaperclipClick = () => {
       paperclipInputRef.current?.click();
   };
 
+  const handleAnalysisToolClick = () => {
+      analysisFileInputRef.current?.click();
+  };
+
+  const handleAnalysisFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const files = e.target.files;
+      if (!files || files.length === 0) return;
+      const file = files[0];
+      
+      let type: MediaAsset['type'] = 'image';
+      if (file.type.startsWith('video/')) type = 'video';
+      else if (!file.type.startsWith('image/')) {
+          alert('This tool only supports image and video files for analysis.');
+          return;
+      }
+
+      const reader = new FileReader();
+      
+      reader.onload = async (evt) => {
+          const res = evt.target?.result as string;
+          const data = res.split(',')[1];
+          setPendingAttachment({ mimeType: file.type, data, name: file.name });
+      };
+
+      reader.readAsDataURL(file);
+      
+      if(analysisFileInputRef.current) analysisFileInputRef.current.value = '';
+  };
+
+
   const handlePaperclipUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
       const files = e.target.files;
       if (!files || files.length === 0) return;
       const file = files[0];
       
-      // Determine Type
       let type: MediaAsset['type'] = 'text'; 
       if (file.type.startsWith('image/')) type = 'image';
       else if (file.type.startsWith('video/')) type = 'video';
@@ -920,70 +969,24 @@ ${modeInstruction}
 
       const reader = new FileReader();
       
-      reader.onload = async (evt) => {
-          const res = evt.target?.result as string;
-          let data = res;
-          
-          // Clean Base64 for media types
-          if ((type !== 'text') && res.includes('base64,')) {
-              data = res.split(',')[1];
-          }
-
-          const idPrefix = type === 'image' ? 'IMG' : (type === 'video' ? 'VID' : (type === 'audio' ? 'AUD' : (type === 'pdf' ? 'PDF' : 'DOC')));
-          const asset: MediaAsset = { 
-              id: NumMarkX_GenerateID(idPrefix), 
-              type, 
-              data, 
-              prompt: file.name, 
-              agentId: 'USER', 
-              timestamp: Date.now(), 
-              tags: ['CHAT_UPLOAD'] 
-          };
-          
-          await saveMediaAsset(asset);
-
-          // Build log message based on type
-          let logText = `[Attached ${type.toUpperCase()}: ${file.name}]`;
-          if (type === 'video' || type === 'audio') {
-              logText += `\n(Saved to Media Gallery)`;
-          }
-
-          setLogs(prev => [...prev, { 
-              id: crypto.randomUUID(), 
-              type: 'user', 
-              sender: 'USER', 
-              text: logText,
-              timestamp: Date.now(), 
-              attachment: data, 
-              attachmentType: type 
-          }]);
-          
-          setLogs(prev => [...prev, {
-              id: crypto.randomUUID(),
-              type: 'system',
-              sender: 'SYSTEM',
-              text: `[ARCHIVAX LOG] User sent a ${type} file: "${file.name}".`,
-              timestamp: Date.now()
-          }]);
-
-          // Live Session Interactions
-          if (type === 'image') {
-              // Images must be sent via real-time input directly
-              if (connectionState === ConnectionState.CONNECTED) {
-                  sendRealtimeInput({ media: { mimeType: file.type, data } });
-              }
-              safeSend(`[SYSTEM NOTE: User uploaded an image named "${file.name}". Acknowledge the image and incorporate it into your response.]`);
-          } else if (type === 'text') {
+      if (type === 'text') {
+          reader.onload = async (evt) => {
+              const textContent = evt.target?.result as string;
               const agentHandle = AGENTS.find(a => a.id === currentAgentId)?.handle || 'system';
-              IngestionService.ingestText(data, file.name, agentHandle, apiKey);
-              safeSend(`[SYSTEM NOTE: User uploaded a text file named "${file.name}". Acknowledge receipt and incorporate its contents.]\n\nFILE PREVIEW:\n${data.substring(0, 3000)}...`);
-          } else if (type === 'video' || type === 'audio') {
-              safeSend(`[SYSTEM NOTE: User uploaded a ${type} file named "${file.name}". Acknowledge receipt and note it has been saved to the Media Library.]`);
-          }
-      };
-
-      if (type === 'text') reader.readAsText(file);
-      else reader.readAsDataURL(file);
+              setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[INGESTING] ${file.name} to RAG...`, timestamp: Date.now() }]);
+              await IngestionService.ingestText(textContent, file.name, agentHandle, apiKey);
+              setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[INGESTION COMPLETE] ${file.name} is now available in memory.`, timestamp: Date.now() }]);
+              safeSend(`[SYSTEM NOTE: User uploaded a text file named "${file.name}". I have ingested it into the knowledge base. Acknowledge receipt and ask what they would like to know about it.]`);
+          };
+          reader.readAsText(file);
+      } else {
+          reader.onload = async (evt) => {
+              const res = evt.target?.result as string;
+              const data = res.split(',')[1];
+              setPendingAttachment({ mimeType: file.type, data, name: file.name });
+          };
+          reader.readAsDataURL(file);
+      }
       
       if(paperclipInputRef.current) paperclipInputRef.current.value = '';
   };
@@ -993,17 +996,13 @@ ${modeInstruction}
     mainInputRef.current?.focus();
   };
 
-  // Styles
-  const visualizerStyle: React.CSSProperties = {
-      flex: layoutMode === 'VIDEO' ? '1 1 0' : '0 0 auto',
-      height: layoutMode === 'CHAT' ? '0px' : 'auto',
-      display: layoutMode === 'CHAT' ? 'none' : 'flex',
-      flexDirection: 'column',
-      overflow: 'hidden',
-      position: 'relative',
-      transition: 'flex 0.3s ease',
-      boxShadow: isThinking ? '0 0 50px rgba(255, 165, 0, 0.5)' : 'none',
-      borderColor: isThinking ? '#f59e0b' : '#333'
+  const getAgentStatusText = () => {
+    if (isThinking) return 'THINKING...';
+    if (isPlaying) return 'SPEAKING...';
+    if (isVideoActive) {
+        return videoSource === 'media' ? 'MEDIA STREAM' : 'LIVE CAM';
+    }
+    return 'OFFLINE';
   };
 
   const renderTriggerBtn = (panelId: string, icon: React.ReactNode, title: string) => (
@@ -1011,6 +1010,111 @@ ${modeInstruction}
           {icon}
       </button>
   );
+
+  const renderOrchestratorView = () => {
+      // THE "BEAUTIFUL SPLASH SCREEN"
+      if (layoutMode === 'VIDEO' && !isVideoActive) {
+          const agentColor = currentAgent?.studioConfig?.color || '#a78bfa';
+          return (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', background: '#000', flexDirection: 'column', gap: '1rem', animation: 'fadeIn 0.5s ease' }}>
+                  <div className="section-panel" style={{ maxWidth: '800px', width: '90%', padding: '2rem', background: '#0a0a0a', border: '1px solid #333' }}>
+                      <h2 style={{ textAlign: 'center', color: '#eee', letterSpacing: '2px', marginTop: 0 }}>SCREENING ROOM</h2>
+                      <p style={{ textAlign: 'center', color: '#666', fontSize: '0.8rem', marginTop: '-1rem', marginBottom: '2rem' }}>Initiate Visual Session</p>
+                      
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                          {/* AGENT CARD */}
+                          <div className="btn-file-input purple" onClick={toggleCamera} style={{ borderColor: agentColor, color: agentColor, background: `rgba(0,0,0,0.2)` }}>
+                              <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" style={{marginBottom: '0.5rem'}}><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
+                              <div style={{fontWeight:'bold'}}>{currentAgent?.handle}</div>
+                              <div style={{fontSize:'0.7rem', opacity: 0.7}}>Live Feed / Visual Analysis</div>
+                          </div>
+                          {/* OPERATOR CARD */}
+                          <div className="btn-file-input" onClick={() => mediaFileInputRef.current?.click()}>
+                              <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" style={{marginBottom: '0.5rem'}}><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect><line x1="7" y1="2" x2="7" y2="22"></line><line x1="17" y1="2" x2="17" y2="22"></line><line x1="2" y1="12" x2="22" y2="12"></line><line x1="2" y1="7" x2="7" y2="7"></line><line x1="2" y1="17" x2="7" y2="17"></line><line x1="17" y1="17" x2="22" y2="17"></line><line x1="17" y1="7" x2="22" y2="7"></line></svg>
+                              <div style={{fontWeight:'bold'}}>OPERATOR</div>
+                              <div style={{fontSize:'0.7rem', opacity: 0.7}}>Review Session Dailies</div>
+                          </div>
+                      </div>
+                  </div>
+                  <button onClick={() => setLayoutMode('CHAT')} className="btn btn-secondary">RETURN TO CHAT</button>
+              </div>
+          );
+      }
+
+      // STANDARD SPLIT VIEW
+      const visualizerStyle: React.CSSProperties = {
+          flex: isVideoActive ? '1 1 0' : '0 0 0',
+          display: isVideoActive ? 'flex' : 'none',
+          flexDirection: 'column',
+          overflow: 'hidden',
+          position: 'relative',
+          transition: 'flex 0.3s ease',
+          boxShadow: isThinking ? '0 0 50px rgba(255, 165, 0, 0.5)' : 'none',
+          borderColor: isThinking ? '#f59e0b' : '#333',
+          minHeight: 0
+      };
+
+      return (
+          <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                  <div style={visualizerStyle}>
+                      <div className="panel-overlay top-left">
+                          <span className="overlay-label">
+                              {selectedVoice.toUpperCase()} // {getAgentStatusText()}
+                          </span>
+                      </div>
+                      <canvas ref={canvasRef} className="hidden" />
+                      <div className="screening-room">
+                          {videoSource === 'camera' && isCameraOn ? (
+                              <video ref={videoRef} autoPlay playsInline muted style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                          ) : streamFileUrl ? (
+                              <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+                                  <video ref={mediaVideoRef} src={streamFileUrl} autoPlay playsInline controls loop={isLooping} style={{ width: '100%', height: '100%', objectFit: 'contain' }}>
+                                      {captionsTrackUrl && <track kind="captions" src={captionsTrackUrl} srcLang="en" label="AI Generated" default />}
+                                  </video>
+                                  <div style={{ position: 'absolute', top: '20px', right: '20px', display: 'flex', gap: '0.5rem', zIndex: 25, flexDirection: 'column' }}>
+                                      <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+                                          <button onClick={handleDeepAnalyze} className="btn btn-xs btn-accent" style={{ fontWeight: 'bold', minWidth: '3rem', borderColor: '#a78bfa', color: '#a78bfa' }} title="Deep Analyze with Gemini 3 Pro">👁 ANALYZE</button>
+                                          <button onClick={handleGenerateCC} className={`btn btn-xs ${captionsTrackUrl ? 'active-green' : 'btn-accent'}`} style={{ fontWeight: 'bold', minWidth: '3rem', borderColor: captionsTrackUrl ? '#4ade80' : '#facc15', color: captionsTrackUrl ? '#4ade80' : '#facc15' }} title="Generate AI Closed Captions (WebVTT)" disabled={isGeneratingCC}>{isGeneratingCC ? 'GENERATING...' : (captionsTrackUrl ? '✓ CC READY' : '✨ AI CAPTIONS')}</button>
+                                      </div>
+                                      <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+                                          <button onClick={handleUnmountMedia} className="btn btn-xs btn-danger" style={{ fontWeight: 'bold', minWidth: '3rem' }} title="Unmount / Eject Video">⏏ EJECT</button>
+                                          <button onClick={() => setIsLooping(!isLooping)} className={`btn btn-xs ${isLooping ? 'active-green' : 'btn-secondary'}`} style={{ fontWeight: 'bold', minWidth: '3rem' }} title="Toggle Video Loop">{isLooping ? 'LOOP ON' : 'LOOP'}</button>
+                                          <button onClick={() => setShowCaptions(!showCaptions)} className={`btn btn-xs ${showCaptions ? 'active-green' : 'btn-secondary'}`} style={{ fontWeight: 'bold', minWidth: '3rem' }} title="Toggle Native Video Captions (if available)">CC</button>
+                                      </div>
+                                  </div>
+                              </div>
+                          ) : null}
+                      </div>
+                  </div>
+                  <div style={{ flex: '1 1 0', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                      <div className={`logs-container ${logs.length === 1 && logs[0].type === 'system' ? 'centered-single' : ''}`}>
+                          {logs.length === 0 && <div className="empty-state"><p>SYSTEM READY. PRE-FLIGHT CHECKS GREEN.</p><p>INITIALIZE CONNECTION TO BEGIN.</p></div>}
+                          {logs.map(log => (
+                              <div key={log.id} className={`log-entry ${log.type}`}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                      <span className="log-sender">{log.sender || log.type.toUpperCase()} <span style={{ fontWeight: 'normal', opacity: 0.6, marginLeft: '8px' }}>[{new Date(log.timestamp).toLocaleTimeString()}]</span></span>
+                                  </div>
+                                  {log.attachment && (
+                                      <div style={{ margin: '0.5rem 0', borderRadius: '4px', overflow: 'hidden', border: '1px solid #333', maxWidth: '300px' }}>
+                                          {log.attachmentType === 'image' ? <img src={`data:image/jpeg;base64,${log.attachment}`} style={{ width: '100%', display: 'block' }} /> :
+                                           log.attachmentType === 'video' ? <video controls src={`data:video/mp4;base64,${log.attachment}`} style={{ width: '100%', display: 'block' }} /> :
+                                           <div style={{ padding: '1rem', fontSize: '0.8rem', background: '#111', color: '#eee' }}>File Attached</div>}
+                                      </div>
+                                  )}
+                                  <span className="log-text">{log.text}</span>
+                                  {log.isStreaming && <span className="animate-pulse">_</span>}
+                              </div>
+                          ))}
+                          <div ref={logEndRef} />
+                      </div>
+                  </div>
+              </div>
+              <Holodeck isOpen={isHolodeckOpen} refreshTrigger={holodeckRefresh} />
+          </div>
+      );
+  };
+
 
   return (
     <div className="app-container">
@@ -1101,196 +1205,7 @@ ${modeInstruction}
                 <LorepackHarness onExit={() => setCurrentView('ORCHESTRATOR')} />
             </div>
         ) : (
-            <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-                {/* ORCHESTRATOR LEFT PANE */}
-                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                    <div style={visualizerStyle}>
-                        <div className="panel-overlay top-left">
-                            <span className="overlay-label">
-                                VISUALIZER // {selectedVoice.toUpperCase()} // {isThinking ? 'THINKING...' : (isVideoActive ? (videoSource === 'media' ? 'MEDIA STREAM' : 'LIVE CAM') : 'OFFLINE')}
-                            </span>
-                        </div>
-                        
-                        {isThinking && (
-                            <div className="thinking-indicator" style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', color: '#f59e0b', fontSize: '0.8rem', letterSpacing: '2px', fontWeight: 'bold', zIndex: 10, textShadow: '0 0 10px rgba(245, 158, 11, 0.8)', background: 'rgba(0,0,0,0.6)', padding: '0.5rem 1rem', borderRadius: '4px', border: '1px solid #f59e0b' }}>
-                                ACCESSING NEURAL LATTICE...
-                            </div>
-                        )}
-
-                        <canvas ref={canvasRef} className="hidden" />
-                        
-                        {showVideoInterface ? (
-                            <div className="screening-room">
-                                {videoSource === 'camera' && isCameraOn ? (
-                                    <>
-                                        <video 
-                                            ref={videoRef} 
-                                            autoPlay 
-                                            playsInline 
-                                            muted 
-                                            style={{ width: '100%', height: '100%', objectFit: 'cover' }} 
-                                        />
-                                        <div className="screening-overlay">
-                                            {logs.slice(-3).map(log => (
-                                                <div key={log.id} className={`screening-log ${log.type}`}>
-                                                    <span style={{fontWeight:'bold', marginRight:'0.5rem'}}>{log.type.toUpperCase()}:</span>
-                                                    {log.text}
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </>
-                                ) : streamFileUrl ? (
-                                    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
-                                        <video 
-                                            ref={mediaVideoRef} 
-                                            src={streamFileUrl} 
-                                            autoPlay 
-                                            playsInline 
-                                            controls 
-                                            loop={isLooping}
-                                            style={{ width: '100%', height: '100%', objectFit: 'contain' }} 
-                                        >
-                                            {captionsTrackUrl && <track kind="captions" src={captionsTrackUrl} srcLang="en" label="AI Generated" default />}
-                                        </video>
-                                        
-                                        {/* VIDEO CONTROLS OVERLAY (Loop / CC / Eject) */}
-                                        <div style={{ position: 'absolute', top: '20px', right: '20px', display: 'flex', gap: '0.5rem', zIndex: 25, flexDirection: 'column' }}>
-                                             <div style={{display:'flex', gap:'0.5rem', justifyContent: 'flex-end'}}>
-                                                <button 
-                                                    onClick={handleDeepAnalyze}
-                                                    className="btn btn-xs btn-accent"
-                                                    style={{ fontWeight: 'bold', minWidth: '3rem', borderColor: '#a78bfa', color: '#a78bfa' }}
-                                                    title="Deep Analyze with Gemini 3 Pro"
-                                                >
-                                                    👁 ANALYZE
-                                                </button>
-                                                <button 
-                                                    onClick={handleGenerateCC}
-                                                    className={`btn btn-xs ${captionsTrackUrl ? 'active-green' : 'btn-accent'}`}
-                                                    style={{ fontWeight: 'bold', minWidth: '3rem', borderColor: captionsTrackUrl ? '#4ade80' : '#facc15', color: captionsTrackUrl ? '#4ade80' : '#facc15' }}
-                                                    title="Generate AI Closed Captions (WebVTT)"
-                                                    disabled={isGeneratingCC}
-                                                >
-                                                    {isGeneratingCC ? 'GENERATING...' : (captionsTrackUrl ? '✓ CC READY' : '✨ AI CAPTIONS')}
-                                                </button>
-                                             </div>
-                                             
-                                             <div style={{display:'flex', gap:'0.5rem', justifyContent: 'flex-end'}}>
-                                                <button 
-                                                    onClick={handleUnmountMedia}
-                                                    className="btn btn-xs btn-danger"
-                                                    style={{ fontWeight: 'bold', minWidth: '3rem' }}
-                                                    title="Unmount / Eject Video"
-                                                >
-                                                    ⏏ EJECT
-                                                </button>
-                                                <button 
-                                                    onClick={() => setIsLooping(!isLooping)}
-                                                    className={`btn btn-xs ${isLooping ? 'active-green' : 'btn-secondary'}`}
-                                                    style={{ fontWeight: 'bold', minWidth: '3rem' }}
-                                                    title="Toggle Video Loop"
-                                                >
-                                                    {isLooping ? 'LOOP ON' : 'LOOP'}
-                                                </button>
-                                                <button 
-                                                    onClick={() => setShowCaptions(!showCaptions)}
-                                                    className={`btn btn-xs ${showCaptions ? 'active-green' : 'btn-secondary'}`}
-                                                    style={{ fontWeight: 'bold', minWidth: '3rem' }}
-                                                    title="Toggle Native Video Captions (if available)"
-                                                >
-                                                    CC
-                                                </button>
-                                             </div>
-                                        </div>
-
-                                        <div className="screening-overlay">
-                                            {logs.slice(-3).map(log => (
-                                                <div key={log.id} className={`screening-log ${log.type}`}>
-                                                    <span style={{fontWeight:'bold', marginRight:'0.5rem'}}>{log.type.toUpperCase()}:</span>
-                                                    {log.text}
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
-                                ) : (
-                                    <div className="screening-placeholder" onClick={() => mediaFileInputRef.current?.click()} title="Click to Select Movie File">
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#333" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" style={{marginBottom: '1rem'}}>
-                                            <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect>
-                                            <line x1="7" y1="2" x2="7" y2="22"></line>
-                                            <line x1="17" y1="2" x2="17" y2="22"></line>
-                                            <line x1="2" y1="12" x2="22" y2="12"></line>
-                                            <line x1="2" y1="7" x2="7" y2="7"></line>
-                                            <line x1="2" y1="17" x2="7" y2="17"></line>
-                                            <line x1="17" y1="17" x2="22" y2="17"></line>
-                                            <line x1="17" y1="7" x2="22" y2="7"></line>
-                                        </svg>
-                                        <div style={{fontSize:'1.2rem', fontWeight:'bold', letterSpacing:'2px', color:'#444'}}>LOAD DAILIES</div>
-                                        <div style={{fontSize:'0.8rem', color:'#666'}}>CLICK TO OPEN FILE PICKER</div>
-                                    </div>
-                                )}
-                            </div>
-                        ) : (
-                            <div style={{ width: '100%', height: '100%', background: '#050505', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '1rem' }}>
-                                <div style={{ 
-                                    width: '60px', 
-                                    height: '60px', 
-                                    borderRadius: '50%', 
-                                    border: `2px solid ${connectionState === ConnectionState.CONNECTED ? '#4ade80' : '#333'}`,
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    boxShadow: connectionState === ConnectionState.CONNECTED ? '0 0 20px rgba(74, 222, 128, 0.2)' : 'none',
-                                    transition: 'all 0.3s ease'
-                                }}>
-                                    <div style={{
-                                        width: '10px',
-                                        height: '10px',
-                                        borderRadius: '50%',
-                                        background: connectionState === ConnectionState.CONNECTED ? '#4ade80' : '#333'
-                                    }} />
-                                </div>
-                                <div style={{ color: '#444', fontSize: '0.7rem', letterSpacing: '1px' }}>
-                                    {connectionState === ConnectionState.CONNECTED ? 'AUDIO LINK ESTABLISHED' : 'STANDBY'}
-                                </div>
-                            </div>
-                        )}
-
-                        {/* WEBCAM PREVIEW - HIDDEN IF MAIN INTERFACE SHOWS VIDEO */}
-                        <div style={{ position: 'absolute', bottom: '10px', right: '10px', width: '160px', height: '120px', background: '#000', border: '1px solid #4ade80', display: (isCameraOn && videoSource === 'camera' && !showVideoInterface) ? 'block' : 'none', zIndex: 30, boxShadow: '0 0 10px rgba(0,0,0,0.5)' }}>
-                            <video ref={videoRef} autoPlay playsInline muted style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                        </div>
-                    </div>
-
-                    <div style={layoutMode === 'CHAT' ? { flex: '1 1 0', display: 'flex', flexDirection: 'column', overflow: 'hidden' } : { display: 'none' }}>
-                        <div className={`logs-container ${logs.length === 1 && logs[0].type === 'system' ? 'centered-single' : ''}`}>
-                            {logs.length === 0 && <div className="empty-state"><p>SYSTEM READY. PRE-FLIGHT CHECKS GREEN.</p><p>INITIALIZE CONNECTION TO BEGIN.</p></div>}
-                            {logs.map(log => (
-                                <div key={log.id} className={`log-entry ${log.type}`}>
-                                    <div style={{display:'flex', justifyContent:'space-between'}}>
-                                        <span className="log-sender">
-                                            {log.sender || log.type.toUpperCase()} 
-                                            <span style={{fontWeight:'normal', opacity:0.6, marginLeft:'8px'}}>
-                                                [{new Date(log.timestamp).toLocaleTimeString()}]
-                                            </span>
-                                        </span>
-                                    </div>
-                                    {log.attachment && (
-                                        <div style={{ margin: '0.5rem 0', borderRadius: '4px', overflow: 'hidden', border: '1px solid #333', maxWidth: '300px' }}>
-                                            {log.attachmentType === 'image' ? <img src={`data:image/jpeg;base64,${log.attachment}`} style={{ width: '100%', display: 'block' }} /> : 
-                                             log.attachmentType === 'video' ? <video controls src={`data:video/mp4;base64,${log.attachment}`} style={{ width: '100%', display: 'block' }} /> :
-                                             <div style={{ padding: '1rem', fontSize: '0.8rem', background: '#111', color: '#eee' }}>File Attached</div>}
-                                        </div>
-                                    )}
-                                    <span className="log-text">{log.text}</span>
-                                    {log.isStreaming && <span className="animate-pulse">_</span>}
-                                </div>
-                            ))}
-                            <div ref={logEndRef} />
-                        </div>
-                    </div>
-                </div>
-                <Holodeck isOpen={isHolodeckOpen} refreshTrigger={holodeckRefresh} />
-            </div>
+            renderOrchestratorView()
         )}
       </main>
 
@@ -1302,6 +1217,10 @@ ${modeInstruction}
                   <button onClick={() => setIsMicOn(!isMicOn)} className={`btn btn-icon ${isMicOn ? 'active-green' : 'btn-danger'}`} title={isMicOn ? "Mute Microphone" : "Unmute Microphone"}>
                       {isMicOn ? <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg> : <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="1" y1="1" x2="23" y2="23"></line><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"></path><path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>}
                   </button>
+                  {/* AGENT MUTE */}
+                   <button onClick={() => setIsAgentMuted(!isAgentMuted)} className={`btn btn-icon ${!isAgentMuted ? '' : 'btn-danger'}`} title={isAgentMuted ? "Unmute Agent's Voice" : "Mute Agent's Voice"}>
+                       {isAgentMuted ? <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg> : <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>}
+                   </button>
                   {/* CAMERA */}
                   <button onClick={toggleCamera} className={`btn btn-icon ${isCameraOn && videoSource === 'camera' ? 'active-green' : ''}`} title="Toggle Webcam Feed">
                       <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
@@ -1354,12 +1273,25 @@ ${modeInstruction}
           </div>
           <div className="input-bar">
               <input type="file" accept="image/*,video/*,audio/*,.pdf,.txt,.md,.json,.js,.ts,.tsx" ref={paperclipInputRef} className="hidden" onChange={handlePaperclipUpload} />
-              <button onClick={handlePaperclipClick} className="btn btn-icon btn-lg" style={{ marginRight: '0.5rem' }} title="Insert files (text, images, audio, video) into your prompt">
+              <input type="file" accept="image/*,video/*" ref={analysisFileInputRef} className="hidden" onChange={handleAnalysisFileUpload} />
+
+              <button onClick={handlePaperclipClick} className="btn btn-icon btn-lg" style={{ marginRight: '0.5rem' }} title="Ingest files (text) or attach media">
                   <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>
               </button>
-              <input ref={mainInputRef} type="text" className="main-input unified-input" placeholder="Type message..." value={inputText} onChange={(e) => setInputText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendText()} />
+              <button onClick={handleAnalysisToolClick} className="btn btn-icon btn-lg" style={{ marginRight: '0.5rem' }} title="Upload Image/Video for Analysis">
+                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg>
+              </button>
+
+              {pendingAttachment && (
+                  <div className="pending-attachment">
+                      <span>{pendingAttachment.name}</span>
+                      <button onClick={() => setPendingAttachment(null)} title="Remove Attachment">×</button>
+                  </div>
+              )}
+
+              <input ref={mainInputRef} type="text" className="main-input unified-input" placeholder={isThinking ? "Processing..." : (isPlaying ? "Speaking..." : "Enter command or message...")} value={inputText} onChange={(e) => setInputText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendText()} disabled={connectionState !== ConnectionState.CONNECTED}/>
               {connectionState === ConnectionState.CONNECTED ? <button onClick={disconnect} className="btn btn-danger btn-lg" title="Disconnect Session">STOP</button> : <button onClick={handleStartSession} className="btn btn-primary btn-lg" disabled={connectionState === ConnectionState.CONNECTING} title="Connect Live Session">{connectionState === ConnectionState.CONNECTING ? '...' : 'START'}</button>}
-              <button onClick={handleSendText} className="btn btn-secondary btn-lg" title="Send Message">SEND</button>
+              <button onClick={handleSendText} className="btn btn-secondary btn-lg" title="Send Message" disabled={!inputText.trim() && !pendingAttachment}>SEND</button>
           </div>
       </footer>
 

@@ -1,3 +1,4 @@
+
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { GoogleGenAI, LiveServerMessage, Modality, Tool } from "@google/genai";
 import { LogMessage, ConnectionState } from '../types';
@@ -9,6 +10,7 @@ interface UseGeminiLiveProps {
     systemInstruction: string;
     voiceName: string;
     tools?: Tool[];
+    isMuted?: boolean;
     onLog: (log: LogMessage) => void;
     onToolCall?: (toolCall: any) => Promise<any[]>; // Returns tool responses
 }
@@ -19,6 +21,7 @@ export function useGeminiLive({
     systemInstruction, 
     voiceName, 
     tools,
+    isMuted,
     onLog,
     onToolCall 
 }: UseGeminiLiveProps) {
@@ -40,10 +43,10 @@ export function useGeminiLive({
     const isIntentionalDisconnect = useRef(false);
 
     // Config Refs to prevent stale closures in callbacks
-    const configRef = useRef({ apiKey, modelName, systemInstruction, voiceName, tools, isMicOn });
+    const configRef = useRef({ apiKey, modelName, systemInstruction, voiceName, tools, isMicOn, isMuted });
     useEffect(() => {
-        configRef.current = { apiKey, modelName, systemInstruction, voiceName, tools, isMicOn };
-    }, [apiKey, modelName, systemInstruction, voiceName, tools, isMicOn]);
+        configRef.current = { apiKey, modelName, systemInstruction, voiceName, tools, isMicOn, isMuted };
+    }, [apiKey, modelName, systemInstruction, voiceName, tools, isMicOn, isMuted]);
 
     // Callback Ref to prevent stale closures
     const callbackRef = useRef({ onLog, onToolCall });
@@ -139,7 +142,7 @@ export function useGeminiLive({
 
                         // B. Audio Output
                         const audioData = msg.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
-                        if (audioData && audioContextRef.current && analyserRef.current) {
+                        if (audioData && audioContextRef.current && analyserRef.current && !configRef.current.isMuted) {
                             const ctx = audioContextRef.current;
                             nextStartTimeRef.current = Math.max(nextStartTimeRef.current, ctx.currentTime);
                             const audioBuffer = await decodeAudioData(base64ToUint8Array(audioData), ctx, 24000);
@@ -249,13 +252,24 @@ export function useGeminiLive({
         setIsPlaying(false);
     }, []);
 
-    const sendText = useCallback(async (text: string) => {
+    const sendText = useCallback(async (text: string, attachment?: { mimeType: string, data: string }) => {
         if (sessionPromiseRef.current && !isIntentionalDisconnect.current) {
             try {
                 const session = await sessionPromiseRef.current;
-                session.sendRealtimeInput({
-                    turns: [{ role: 'user', parts: [{ text }] }]
-                });
+                
+                const parts: any[] = [];
+                if (attachment) {
+                    parts.push({ inlineData: { mimeType: attachment.mimeType, data: attachment.data } });
+                }
+                if (text) {
+                    parts.push({ text });
+                }
+
+                if (parts.length > 0) {
+                    session.sendRealtimeInput({
+                        turns: [{ role: 'user', parts: parts }]
+                    });
+                }
             } catch(e) {
                 if(!isIntentionalDisconnect.current) console.error("Send Text Error:", e);
             }

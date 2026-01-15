@@ -1,9 +1,8 @@
 
 import { GoogleGenAI, FunctionDeclaration, Type, Tool, FinishReason, Content } from "@google/genai";
-import { Agent, MultiAgentMessage, SomaActionType } from "../types";
+import { Agent, MultiAgentMessage, SomaActionType, MediaAsset } from "../types";
 import { AGENTS } from "../agents";
-// FIX: Removed searchDocuments as it's a deprecated feature. It will be replaced with RetrievalGate.query
-import { getAgentConfig, getCanvas, updateCanvas, getSovereignConfig } from "./db";
+import { getAgentConfig, getCanvas, updateCanvas, getSovereignConfig, getMediaAsset } from "./db";
 import { RetrievalGate } from "./retrievalGate";
 import { EXTERNAL_MODEL_ENDPOINTS, ExternalRouter } from "./externalRouter";
 import { SomaKernel } from "./soma";
@@ -43,6 +42,20 @@ const SOVEREIGN_PRESETS: Record<string, string> = {
 
 
 // --- TOOL DEFINITIONS ---
+
+export const analyzeFileTool: FunctionDeclaration = {
+    name: "analyze_file",
+    description: "Deeply analyze the contents of an uploaded media file (image, video, PDF, text) by its ID to answer a specific question.",
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            mediaId: { type: Type.STRING, description: "The ID of the media asset from the gallery (e.g., IMG-..., VID-..., etc.)." },
+            question: { type: Type.STRING, description: "The specific question to answer about the file's content." }
+        },
+        required: ["mediaId", "question"]
+    }
+};
+
 const routeRequestTool: FunctionDeclaration = {
     name: "routeRequest",
     description: "Route a complex request or image generation task to a specialized external model.",
@@ -315,6 +328,49 @@ export const MultiAgentService = {
             throw new Error(`Video Analysis Failed: ${e.message}`);
         }
     },
+    
+    /**
+     * Deep File Analysis using Gemini 3 Pro
+     */
+    async analyzeFile(mediaId: string, question: string, apiKey: string): Promise<string> {
+        try {
+            const asset = await getMediaAsset(mediaId);
+            if (!asset) throw new Error(`Media asset with ID ${mediaId} not found in the gallery.`);
+            
+            const ai = new GoogleGenAI({ apiKey });
+            
+            const model = asset.type === 'video' ? 'gemini-3-pro-preview' : 'gemini-3-pro-preview';
+            let parts: any[] = [];
+            
+            if (asset.type === 'text') {
+                parts = [{ text: `FILE CONTENT:\n${asset.data}\n\nQUESTION: ${question}` }];
+            } else {
+                let mimeType = '';
+                if(asset.type === 'image') mimeType = 'image/jpeg';
+                else if (asset.type === 'video') mimeType = 'video/mp4';
+                else if (asset.type === 'audio') mimeType = 'audio/wav';
+                else if (asset.type === 'pdf') mimeType = 'application/pdf';
+
+                if (!mimeType) throw new Error(`Unsupported asset type for analysis: ${asset.type}`);
+                
+                parts = [
+                    { inlineData: { mimeType, data: asset.data } },
+                    { text: question }
+                ];
+            }
+
+            const response = await ai.models.generateContent({
+                model,
+                contents: [{ role: 'user', parts }]
+            });
+
+            return response.text || "No analysis was returned.";
+        } catch (e: any) {
+            console.error("File Analysis Error", e);
+            throw new Error(`File Analysis Failed: ${e.message}`);
+        }
+    },
+
 
     /**
      * Executes a single turn for a specific agent.
@@ -390,6 +446,7 @@ export const MultiAgentService = {
             const canRoute = AccessControl.canPerform(agent.accessLevel, SomaActionType.ROUTE_REQUEST);
             
             const functionDeclarations = [
+                analyzeFileTool,
                 consultAgentTool, readCanvasTool, updateCanvasTool,
                 ...googleMapsTool.functionDeclarations,
                 ...(canRoute ? [routeRequestTool] : []),
