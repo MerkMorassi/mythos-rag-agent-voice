@@ -57,7 +57,7 @@ import { AccessControl } from './services/accessControl';
 import { GeminiProvider } from './services/llmProviders/geminiProvider';
 
 type ViewMode = 'ORCHESTRATOR' | 'COUNCIL' | 'LORE_HARNESS';
-type CognitionEngine = 'gemini-flash' | 'gemini-pro' | 'dolphin' | 'ollama';
+type CognitionEngine = 'gemini-flash' | 'gemini-pro' | 'dolphin-hf' | 'ollama-gemma' | 'ollama-dolphin';
 type ToolOverride = 'auto' | 'image' | 'video' | 'speech';
 
 function cosineSimilarity(a: number[], b: number[]): number {
@@ -873,8 +873,25 @@ ${modeInstruction}
 
     // --- SOVEREIGN / OLLAMA ENGINE OVERRIDE ---
     if (cognitionEngine !== 'gemini-flash' && cognitionEngine !== 'gemini-pro' && !attachmentToSend) {
-        const target = cognitionEngine === 'dolphin' ? 'DOLPHIN_LLM' : 'OLLAMA_LOCAL';
-        setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[COGNITION] Routing to ${target === 'DOLPHIN_LLM' ? 'Sovereign' : 'Local Ollama'}...`, timestamp: Date.now() }]);
+        const targetMap: Record<string, string> = {
+            'dolphin-hf': 'DOLPHIN_LLM',
+            'ollama-gemma': 'OLLAMA_GEMMA',
+            'ollama-dolphin': 'OLLAMA_DOLPHIN'
+        };
+        const target = targetMap[cognitionEngine];
+
+        if (!target) {
+            setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[ENGINE FAILED] Unknown cognition engine: ${cognitionEngine}`, timestamp: Date.now() }]);
+            return;
+        }
+
+        const targetName = {
+            'dolphin-hf': 'Sovereign (HF)',
+            'ollama-gemma': 'Gemma (Local)',
+            'ollama-dolphin': 'Dolphin (Local)'
+        }[cognitionEngine];
+        
+        setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[COGNITION] Routing to ${targetName}...`, timestamp: Date.now() }]);
         const routerRes = await ExternalRouter.route(target, text, { id: currentAgentId, handle: currentAgent.handle });
 
         if (routerRes.success && routerRes.data) {
@@ -1231,7 +1248,7 @@ ${modeInstruction}
                   </button>
                   {/* DOLPHIN INDICATOR */}
                   <button
-                    className={`btn btn-icon ${cognitionEngine === 'dolphin' ? 'active-cyan' : ''}`}
+                    className={`btn btn-icon ${cognitionEngine === 'dolphin-hf' ? 'active-cyan' : ''}`}
                     title={`Sovereign Model Indicator (Dolphin) - Active when selected.`}
                     disabled
                   >
@@ -1251,8 +1268,9 @@ ${modeInstruction}
                   <select value={cognitionEngine} onChange={e => setCognitionEngine(e.target.value as CognitionEngine)} className="tray-selector" title="Select Cognition Engine">
                       <option value="gemini-flash">Flash (Fast)</option>
                       <option value="gemini-pro">Pro (Deep)</option>
-                      <option value="dolphin">Sovereign (Uncensored)</option>
-                      <option value="ollama">Ollama (Local)</option>
+                      <option value="dolphin-hf">Sovereign (HF)</option>
+                      <option value="ollama-gemma">Gemma (Local)</option>
+                      <option value="ollama-dolphin">Dolphin (Local)</option>
                   </select>
               </div>
 

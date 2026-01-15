@@ -57,9 +57,15 @@ const DEFAULT_ENDPOINTS: Record<string, ExternalToolConfig> = {
         url: 'https://merkmorassi-mythos-rag-agent-voice.hf.space/v1',
         isDefault: true
     },
-    OLLAMA_LOCAL: {
+    OLLAMA_GEMMA: {
         name: 'Localhost Ollama (Gemma)',
-        description: 'Local CPU inference via Ollama. Default model: gemma:2b.',
+        description: 'Local inference via Ollama with a Gemma model.',
+        url: 'http://localhost:11434',
+        isDefault: true
+    },
+    OLLAMA_DOLPHIN: {
+        name: 'Localhost Ollama (Dolphin)',
+        description: 'Local inference via Ollama with an uncensored Dolphin model.',
         url: 'http://localhost:11434',
         isDefault: true
     },
@@ -175,7 +181,7 @@ export const ExternalRouter = {
                 target = 'WANIMATE_VIDEO';
             }
             // Text/Logic Redirect (if not targeting a specific tool)
-            else if (target !== 'SDXL_IMAGE' && target !== 'WAN_IMAGE' && target !== 'WANIMATE_VIDEO' && target !== 'CHATTERBOX_TTS' && target !== 'OLLAMA_LOCAL') {
+            else if (target !== 'SDXL_IMAGE' && target !== 'WAN_IMAGE' && target !== 'WANIMATE_VIDEO' && target !== 'CHATTERBOX_TTS' && target !== 'OLLAMA_DOLPHIN') {
                 return await this.callDolphin(prompt);
             }
         }
@@ -209,8 +215,11 @@ export const ExternalRouter = {
             else if (target === 'DOLPHIN_LLM') {
                  return await this.callDolphin(prompt, registry.DOLPHIN_LLM.url);
             }
-            else if (target === 'OLLAMA_LOCAL') {
-                 return await this.callOllama(prompt, registry.OLLAMA_LOCAL.url);
+            else if (target === 'OLLAMA_GEMMA') {
+                 return await this.callOllama(prompt, registry.OLLAMA_GEMMA.url, 'gemma2');
+            }
+            else if (target === 'OLLAMA_DOLPHIN') {
+                 return await this.callOllama(prompt, registry.OLLAMA_DOLPHIN.url, 'dolphin-phi');
             }
             
             // --- TTS ---
@@ -422,9 +431,9 @@ export const ExternalRouter = {
     },
 
     // --- OLLAMA ENGINE (LOCAL) ---
-    async callOllama(prompt: string, endpoint: string = DEFAULT_ENDPOINTS.OLLAMA_LOCAL.url): Promise<RouteResult> {
+    async callOllama(prompt: string, endpoint: string, model: string): Promise<RouteResult> {
         try {
-            const ollamaProvider = new OllamaProvider(endpoint, "gemma:2b");
+            const ollamaProvider = new OllamaProvider(endpoint, model);
             const context: Content[] = [
                 { role: 'user', parts: [{ text: prompt }] }
             ];
