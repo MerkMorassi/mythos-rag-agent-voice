@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { Lorepack } from '../services/lorepack';
 import './../css/lorepack-harness.css';
@@ -173,6 +174,16 @@ export const LorepackHarness: React.FC<LorepackHarnessProps> = ({ onExit }) => {
             msg += `.`;
             
             addLog(msg, 'sys');
+
+            // Show preview of imported nodes
+            if (res.importedNodes && res.importedNodes.length > 0) {
+                addLog('--- IMPORT PREVIEW (First 5 Nodes) ---', 'sys');
+                res.importedNodes.forEach((node: any, index: number) => {
+                    const previewText = node.text.substring(0, 100);
+                    addLog(`[${index+1}] ${previewText}...`, 'info');
+                });
+            }
+
             await refreshStats();
         } catch (e: any) {
             addLog(`Import failed: ${e.message}`, 'err');

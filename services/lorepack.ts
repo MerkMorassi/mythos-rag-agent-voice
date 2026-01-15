@@ -1,3 +1,4 @@
+
 import { GraphEdge, GraphNode, VectorRecord } from '../types';
 import { 
     bulkPutGraphEdges, 
@@ -499,7 +500,7 @@ export class Lorepack {
             graphNodesCount = graph.nodes.length;
         }
 
-        return { success: true, nodesImported: imported, graphNodesImported: graphNodesCount, agentId };
+        return { success: true, nodesImported: imported, graphNodesImported: graphNodesCount, agentId, importedNodes: nodes.slice(0, 5) };
     }
 
     async importGzip(file: File, onProgress?: (p: {processed: number, total: number}) => void) {
