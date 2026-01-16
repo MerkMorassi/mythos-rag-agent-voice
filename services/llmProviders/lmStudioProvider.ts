@@ -15,7 +15,7 @@ export class LmStudioProvider implements ILLMProvider {
   private model: string;
   private baseURL: string;
 
-  constructor(baseURL: string = "http://127.0.0.1:1234", model: string = "local-model") {
+  constructor(baseURL: string = "http://192.168.56.1:1234", model: string = "local-model") {
     this.baseURL = baseURL;
     this.openai = new OpenAI({
       baseURL: `${baseURL}/v1`,

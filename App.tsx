@@ -549,24 +549,27 @@ ${agentInstructions || currentAgent?.system_instruction}
   useEffect(() => { logEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [logs]);
 
   // --- ACTIVE CHAT PERSISTENCE ---
-  // 1. Load chat when agent changes
+  // Load chat history when the agent changes
   useEffect(() => {
       let active = true;
       const loadLogs = async () => {
           const saved = await loadActiveChat(currentAgentId);
-          if (active) setLogs(saved || []);
+          if (active) {
+              setLogs(saved || []);
+          }
           refreshVectorCount();
       };
       loadLogs();
       return () => { active = false; };
   }, [currentAgentId]);
 
-  // 2. Save chat when logs update
+  // Save chat history whenever logs or the current agent change
   useEffect(() => {
-      if (logs.length > 0) {
-          saveActiveChat(currentAgentId, logs);
-      }
-  }, [logs]);
+      // Persist the current log state for the active agent whenever it changes.
+      // This ensures that even an empty chat (e.g., after being cleared) is saved correctly.
+      saveActiveChat(currentAgentId, logs);
+  }, [logs, currentAgentId]);
+
 
   // Sync Video Tracks with State
   useEffect(() => {
@@ -839,7 +842,7 @@ ${agentInstructions || currentAgent?.system_instruction}
         text: text || `[Sent Attachment: ${attachmentToSend?.name}]`, 
         timestamp: Date.now(),
         attachment: attachmentToSend?.data,
-        attachmentType: attachmentToSend?.mimeType.startsWith('image') ? 'image' : 'video'
+        attachmentType: attachmentToSend?.mimeType?.startsWith('image') ? 'image' : 'video'
     }]);
 
     if (!currentAgent) return;
@@ -864,30 +867,24 @@ ${agentInstructions || currentAgent?.system_instruction}
       return;
     }
 
-    // --- MULTIMODAL (Attachment) => GO TO GEMINI LIVE ---
-    if (attachmentToSend) {
+    // --- MULTIMODAL OR LIVE SESSION ACTIVE ---
+    if (attachmentToSend || connectionState === ConnectionState.CONNECTED) {
         safeSend(text, attachmentToSend);
         return;
     }
-
-    // --- TEXT-ONLY LOGIC ---
-    if (connectionState === ConnectionState.CONNECTED) {
-        safeSend(text);
-        return;
-    }
     
-    // IF NOT CONNECTED, decide between Gemini HTTP and Local Model Fallback.
+    // --- TEXT-ONLY, DISCONNECTED SESSION LOGIC ---
     if (apiKey) {
-        // --- GEMINI HTTP FALLBACK ---
+        // PRIORITY 2: Gemini HTTP Fallback
         setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[COGNITION] Routing text to Gemini (HTTP)...`, timestamp: Date.now() }]);
         try {
             const ai = new GoogleGenAI({ apiKey });
             
             const history: Content[] = logs
-                .filter(log => log.type === 'user' || log.type === 'model')
+                .filter(log => (log.type === 'user' || log.type === 'model') && log.text)
                 .map(log => ({
                     role: log.type === 'user' ? 'user' : 'model',
-                    parts: [{ text: log.text || '' }]
+                    parts: [{ text: log.text! }]
                 }));
 
             const modelToUse = ModelGate.selectModel(text);
@@ -915,7 +912,7 @@ ${agentInstructions || currentAgent?.system_instruction}
             setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[ENGINE FAILED] Gemini HTTP Error: ${e.message}`, timestamp: Date.now() }]);
         }
     } else {
-        // --- LOCAL MODEL (LM STUDIO) OFFLINE FALLBACK ---
+        // PRIORITY 3: Local Model (LM Studio) Offline Fallback
         const agentModelMap: Record<string, string> = {
             'agent-noesis': 'LM_STUDIO_CODER',
             'agent-urania': 'LM_STUDIO_CODER',
@@ -933,7 +930,6 @@ ${agentInstructions || currentAgent?.system_instruction}
         setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[COGNITION] Routing text to ${targetName} for ${currentAgent.handle}...`, timestamp: Date.now() }]);
         
         let textWithContext = text;
-        let context = "No relevant context found in archives.";
         try {
             const registry = ExternalRouter.getToolRegistry();
             const lmStudioUrl = registry.LM_STUDIO_CHAT.url;
@@ -945,17 +941,14 @@ ${agentInstructions || currentAgent?.system_instruction}
             if (agentDocs.length > 0) {
                 const scored = agentDocs.map(doc => ({ ...doc, score: cosineSimilarity(queryVector, doc.vector) })).sort((a, b) => b.score - a.score).slice(0, 5);
                 if (scored.length > 0 && scored[0].score > 0.45) {
-                    context = scored.map(s => `[SOURCE: ${s.source || s.metadata?.source || 'Unknown'}]\n${s.text}`).join('\n\n');
+                    const context = scored.map(s => `[SOURCE: ${s.source || s.metadata?.source || 'Unknown'}]\n${s.text}`).join('\n\n');
+                    textWithContext = `CONTEXT:\n${context}\n\nUSER QUERY: "${text}"`;
                 }
             }
         } catch (e: any) {
             setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[RAG FAILED] ${e.message}`, timestamp: Date.now() }]);
         }
         
-        if (context.length > 30) {
-           textWithContext = `CONTEXT:\n${context}\n\nUSER QUERY: "${text}"`;
-        }
-
         const routerRes = await ExternalRouter.route(targetModel, textWithContext, { id: currentAgentId, handle: currentAgent.handle });
 
         if (routerRes.success && routerRes.data) {

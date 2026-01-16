@@ -60,19 +60,19 @@ const DEFAULT_ENDPOINTS: Record<string, ExternalToolConfig> = {
     LM_STUDIO_CODER: {
         name: 'Local Coder (LM Studio)',
         description: 'Local code generation model served via LM Studio.',
-        url: 'http://127.0.0.1:1234',
+        url: 'http://192.168.56.1:1234',
         isDefault: true
     },
     LM_STUDIO_CHAT: {
         name: 'Local Chat (LM Studio)',
         description: 'Local general-purpose chat model served via LM Studio.',
-        url: 'http://127.0.0.1:1234',
+        url: 'http://192.168.56.1:1234',
         isDefault: true
     },
     LM_STUDIO_UNCENSORED: {
         name: 'Local Uncensored (LM Studio)',
         description: 'Local uncensored model (e.g., Dolphin) served via LM Studio.',
-        url: 'http://127.0.0.1:1234',
+        url: 'http://192.168.56.1:1234',
         isDefault: true
     },
     CHATTERBOX_TTS: {
