@@ -1,3 +1,5 @@
+
+
 import React, { useState, useEffect } from 'react';
 import { Agent, SomaActionType } from '../types';
 import { AccessControl } from '../services/accessControl';
@@ -20,7 +22,8 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
     googleMaps: "Access Google Maps for location search and directions.",
     holodeck: "Read from and write to the shared visual canvas.",
     python: "Execute sandboxed Python code for calculations and logic.",
-    filesystem: "Read, write, and list files on the host system."
+    filesystem: "Read, write, and list files on the host system.",
+    analyzeFile: "Perform deep analysis on media files (images, video)."
 };
 
 export const ToolManager: React.FC<ToolManagerProps> = ({ 
@@ -60,13 +63,19 @@ export const ToolManager: React.FC<ToolManagerProps> = ({
 
     const isPermitted = (toolId: string): boolean => {
         if (!currentAgent) return false;
-        if (toolId === 'python' || toolId === 'filesystem') {
-            return AccessControl.canPerform(currentAccessLevel, SomaActionType.EXEC_CODE);
+        
+        const actionMap: Record<string, SomaActionType> = {
+            python: SomaActionType.EXEC_CODE,
+            filesystem: SomaActionType.EXEC_CODE,
+            routeRequest: SomaActionType.ROUTE_REQUEST,
+            googleMaps: SomaActionType.ROUTE_REQUEST, // Also a form of routing
+        };
+
+        const action = actionMap[toolId];
+        if (action) {
+            return AccessControl.canPerform(currentAccessLevel, action);
         }
-        if (toolId === 'routeRequest') {
-            return AccessControl.canPerform(currentAccessLevel, SomaActionType.ROUTE_REQUEST);
-        }
-        return true;
+        return true; // Assume permitted if not in map
     };
 
     // --- TOOL CARD ACTIONS ---
@@ -106,18 +115,21 @@ export const ToolManager: React.FC<ToolManagerProps> = ({
                 <div className="modal-body-area">
                     {/* STANDARD SYSTEM TOOLS */}
                     <span className="section-header-title" style={{color: '#eee'}}>SYSTEM TOOLS</span>
-                    {Object.keys(allTools).map(toolId => {
-                        if (toolId === 'routeRequest') return null; // Handled separately below
-
+                    {Object.keys(allTools).filter(id => id !== 'routeRequest').map(toolId => {
                         const isEnabled = enabledToolIds.includes(toolId);
                         const canUse = isPermitted(toolId);
 
                         return (
-                            <div key={toolId} className="section-panel" style={{ opacity: canUse ? 1 : 0.5, transition: 'opacity 0.3s', marginBottom: '0.75rem' }}>
+                            <div key={toolId} className="section-panel" style={{ transition: 'opacity 0.3s', marginBottom: '0.75rem', padding: '0.75rem' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem' }}>
-                                    <div style={{ flex: 1 }}>
-                                        <h4 style={{ margin: 0, color: canUse ? '#eee' : '#888', textTransform: 'uppercase' }}>{toolId}</h4>
-                                        <p style={{ margin: '4px 0 0', fontSize: '0.8rem', color: '#888' }}>
+                                    <div style={{ flex: 1, opacity: canUse ? 1 : 0.5 }}>
+                                        <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '4px'}}>
+                                            <h4 style={{ margin: 0, color: '#eee', textTransform: 'uppercase' }}>{toolId}</h4>
+                                            <span style={{ fontSize: '0.6rem', padding: '1px 5px', borderRadius: '4px', border: `1px solid ${canUse ? '#4ade80' : '#f87171'}`, color: canUse ? '#4ade80' : '#f87171', fontWeight: 'bold' }}>
+                                                {canUse ? 'PERMITTED' : 'DENIED'}
+                                            </span>
+                                        </div>
+                                        <p style={{ margin: 0, fontSize: '0.8rem', color: '#888' }}>
                                             {TOOL_DESCRIPTIONS[toolId] || "No description available."}
                                         </p>
                                     </div>
@@ -131,11 +143,6 @@ export const ToolManager: React.FC<ToolManagerProps> = ({
                                         <span className="slider"></span>
                                     </label>
                                 </div>
-                                {!canUse && (
-                                    <div style={{ fontSize: '0.7rem', color: '#f87171', marginTop: '0.5rem', borderTop: '1px dashed #333', paddingTop: '0.5rem' }}>
-                                        Permission Denied (Requires Access Level: {toolId === 'python' || toolId === 'filesystem' ? '7xx' : 'x7x'})
-                                    </div>
-                                )}
                             </div>
                         );
                     })}

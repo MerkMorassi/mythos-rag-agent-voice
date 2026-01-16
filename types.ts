@@ -78,6 +78,7 @@ export interface AgentConfig {
   agentId: string;
   systemInstruction: string;
   modelConfig: ModelConfig;
+  modelName?: string;      // Persisted Model Selection
   voiceName?: string;      // Persisted Voice Selection
   voiceReference?: string; // Base64 audio string for Voice Cloning
   voiceSpeed?: number;     // Playback Rate (default 1.0)

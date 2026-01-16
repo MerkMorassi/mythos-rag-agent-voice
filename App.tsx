@@ -1,4 +1,5 @@
 
+
 import React, { useState, useEffect, useRef } from 'react';
 import { GoogleGenAI, Tool, Type, Content } from "@google/genai";
 import { AGENTS } from './agents';
@@ -88,6 +89,8 @@ const App: React.FC = () => {
   const [modelConfig, setModelConfig] = useState<ModelConfig>(DEFAULT_MODEL_CONFIG);
   const [generalInstructions, setGeneralInstructions] = useState('');
   const [agentInstructions, setAgentInstructions] = useState('');
+  // FIX: Added selectedModel state to manage model selection from settings.
+  const [selectedModel, setSelectedModel] = useState('gemini-3-flash-preview');
   const [selectedVoice, setSelectedVoice] = useState(AGENTS[0].voice);
   const [voiceRef, setVoiceRef] = useState('');
   const [voiceSpeed, setVoiceSpeed] = useState(1.0);
@@ -643,6 +646,7 @@ ${agentInstructions || currentAgent?.system_instruction}
       const agent = AGENTS.find(a => a.id === id);
       setAgentInstructions(cfg.systemInstruction || agent?.system_instruction || '');
       setModelConfig(cfg.modelConfig || DEFAULT_MODEL_CONFIG);
+      setSelectedModel(cfg.modelName || 'gemini-3-flash-preview');
       setSelectedVoice(cfg.voiceName || agent?.voice || 'Puck');
       setVoiceRef(cfg.voiceReference || '');
       setVoiceSpeed(cfg.voiceSpeed || 1.0);
@@ -666,7 +670,8 @@ ${agentInstructions || currentAgent?.system_instruction}
       setCurrentAgentId(id);
   };
 
-  const handleSettingsSave = async (newVoiceRef?: string, newAccessLevel?: string, speed?: number, pitch?: number) => {
+  // FIX: Updated function signature to match the `onSave` prop, adding `modelName` and fixing parameter order.
+  const handleSettingsSave = async (modelName: string, newVoiceRef?: string, newAccessLevel?: string, speed?: number, pitch?: number) => {
       if (speed !== undefined) setVoiceSpeed(speed);
       if (pitch !== undefined) setVoicePitch(pitch);
       if (newVoiceRef !== undefined) setVoiceRef(newVoiceRef);
@@ -676,6 +681,7 @@ ${agentInstructions || currentAgent?.system_instruction}
           systemInstruction: agentInstructions, 
           modelConfig, 
           voiceName: selectedVoice, 
+          modelName: modelName,
           voiceReference: newVoiceRef ?? voiceRef, 
           accessLevel: newAccessLevel ?? accessLevel, 
           voiceSpeed: speed ?? voiceSpeed, 
@@ -1242,7 +1248,7 @@ ${agentInstructions || currentAgent?.system_instruction}
         {activeSidePanel === 'KNOWLEDGE' && <KnowledgeManager isOpen={true} onClose={()=>setActiveSidePanel(null)} onUpdate={refreshVectorCount} currentAgentId={currentAgentId} />}
         {activeSidePanel === 'PROMPTS' && <PromptManager isOpen={true} onClose={()=>setActiveSidePanel(null)} currentAgentId={currentAgentId} onLoadPrompt={handleLoadPrompt} />}
         {activeSidePanel === 'HISTORY' && <ChatHistoryManager isOpen={true} onOpen={()=>{}} onClose={()=>setActiveSidePanel(null)} currentLogs={logs} onLoadSession={setLogs} currentAgentId={currentAgentId} onUpdateKnowledge={refreshVectorCount} />}
-        {activeSidePanel === 'SETTINGS' && <SettingsManager isOpen={true} onClose={()=>setActiveSidePanel(null)} modelConfig={modelConfig} setModelConfig={setModelConfig} disabled={connectionState === ConnectionState.CONNECTED} generalInstruction={generalInstructions} setGeneralInstruction={setGeneralInstructions} agentInstruction={agentInstructions} setAgentInstruction={setAgentInstructions} agentName={currentAgent?.handle || 'Unknown'} agentId={currentAgentId} agentAccessLevel={accessLevel} selectedVoice={selectedVoice} onVoiceChange={setSelectedVoice} onSave={handleSettingsSave} apiKey={apiKey} setApiKey={setApiKey} hfToken={hfToken} setHfToken={setHfToken} voiceReference={voiceRef} voiceSpeed={voiceSpeed} voicePitch={voicePitch} />}
+        {activeSidePanel === 'SETTINGS' && <SettingsManager isOpen={true} onClose={()=>setActiveSidePanel(null)} modelConfig={modelConfig} setModelConfig={setModelConfig} selectedModel={selectedModel} setSelectedModel={setSelectedModel} disabled={connectionState === ConnectionState.CONNECTED} generalInstruction={generalInstructions} setGeneralInstruction={setGeneralInstructions} agentInstruction={agentInstructions} setAgentInstruction={setAgentInstructions} agentName={currentAgent?.handle || 'Unknown'} agentId={currentAgentId} agentAccessLevel={accessLevel} selectedVoice={selectedVoice} onVoiceChange={setSelectedVoice} onSave={handleSettingsSave} apiKey={apiKey} setApiKey={setApiKey} hfToken={hfToken} setHfToken={setHfToken} voiceReference={voiceRef} voiceSpeed={voiceSpeed} voicePitch={voicePitch} />}
         {activeSidePanel === 'ROSTER' && <AgentRoster isOpen={true} onClose={() => setActiveSidePanel(null)} currentAgentId={currentAgentId} onSelectAgent={handleAgentChange} />}
 
         <MediaPlayer audioUrl={storyAudioUrl} title="Narrative Playback" onClose={() => setStoryAudioUrl(null)} interruptSignal={interruptSignal} />

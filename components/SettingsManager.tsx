@@ -1,9 +1,12 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { ModelConfig } from '../types';
 
 interface SettingsManagerProps {
   modelConfig: ModelConfig;
   setModelConfig: (config: ModelConfig) => void;
+  selectedModel: string;
+  setSelectedModel: (model: string) => void;
   disabled: boolean;
   generalInstruction: string;
   setGeneralInstruction: (val: string) => void;
@@ -14,7 +17,7 @@ interface SettingsManagerProps {
   agentAccessLevel: string;
   selectedVoice: string;
   onVoiceChange: (voice: string) => void;
-  onSave: (voiceRef?: string, accessLevel?: string, voiceSpeed?: number, voicePitch?: number) => Promise<void>;
+  onSave: (modelName: string, voiceRef?: string, accessLevel?: string, voiceSpeed?: number, voicePitch?: number) => Promise<void>;
   isOpen: boolean;
   onClose: () => void;
   apiKey: string;
@@ -53,7 +56,7 @@ const SettingsManager: React.FC<SettingsManagerProps> = (props) => {
     if (props.apiKey) localStorage.setItem('gemini_api_key', props.apiKey);
     if (props.hfToken) localStorage.setItem('hf_token', props.hfToken);
     
-    await props.onSave(voiceRef, accessLevel, speed, pitch);
+    await props.onSave(props.selectedModel, voiceRef, accessLevel, speed, pitch);
     
     setIsSaving(false);
     alert("NEURAL SYNC: System parameters updated.");
@@ -133,6 +136,32 @@ const SettingsManager: React.FC<SettingsManagerProps> = (props) => {
                     style={{ height: '4rem' }}
                     placeholder="Traits for this agent..."
                 />
+            </div>
+            
+            {/* MODEL CONFIGURATION */}
+            <div className="section-panel" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', borderColor: '#38bdf8' }}>
+                <span className="section-header-title" style={{ fontSize: '0.7rem', color: '#38bdf8' }}>MODEL CONFIGURATION</span>
+                <div className="flex-col">
+                    <label className="form-label">COGNITIVE ENGINE (TEXT)</label>
+                    <select value={props.selectedModel} onChange={(e) => props.setSelectedModel(e.target.value)} className="form-select">
+                        <option value="gemini-3-flash-preview">Gemini 3 Flash (Fast)</option>
+                        <option value="gemini-3-pro-preview">Gemini 3 Pro (Complex)</option>
+                    </select>
+                </div>
+                 <div className="flex-group" style={{ gap: '1rem' }}>
+                    <div style={{ flex: 1 }}>
+                        <label className="form-label">TEMPERATURE</label>
+                        <input type="number" min="0" max="2" step="0.1" className="form-input" value={props.modelConfig.temperature} onChange={(e) => props.setModelConfig({ ...props.modelConfig, temperature: parseFloat(e.target.value) })} />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                        <label className="form-label">TOP P</label>
+                        <input type="number" min="0" max="1" step="0.05" className="form-input" value={props.modelConfig.topP} onChange={(e) => props.setModelConfig({ ...props.modelConfig, topP: parseFloat(e.target.value) })} />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                        <label className="form-label">TOP K</label>
+                        <input type="number" min="1" max="100" step="1" className="form-input" value={props.modelConfig.topK} onChange={(e) => props.setModelConfig({ ...props.modelConfig, topK: parseInt(e.target.value) })} />
+                    </div>
+                </div>
             </div>
 
             {/* LIVE INTERFACE VOICE (GEMINI) */}
