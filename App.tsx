@@ -60,6 +60,7 @@ import { ModelGate } from './services/modelGate';
 
 type ViewMode = 'ORCHESTRATOR' | 'COUNCIL' | 'LORE_HARNESS';
 type ToolOverride = 'auto' | 'image' | 'video' | 'speech';
+type LayoutMode = 'CHAT' | 'VIDEO';
 
 function cosineSimilarity(a: number[], b: number[]): number {
     if (!a || !b || a.length !== b.length) return 0;
@@ -98,7 +99,7 @@ const App: React.FC = () => {
   const [isAgentMuted, setIsAgentMuted] = useState(false);
 
   // Layout & View Modes
-  const [layoutMode, setLayoutMode] = useState<'CHAT' | 'VIDEO'>('CHAT');
+  const [layoutMode, setLayoutMode] = useState<LayoutMode>('CHAT');
   const [currentView, setCurrentView] = useState<ViewMode>('ORCHESTRATOR');
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
   const [activeSidePanel, setActiveSidePanel] = useState<string | null>(null);
@@ -565,8 +566,6 @@ ${agentInstructions || currentAgent?.system_instruction}
 
   // Save chat history whenever logs or the current agent change
   useEffect(() => {
-      // Persist the current log state for the active agent whenever it changes.
-      // This ensures that even an empty chat (e.g., after being cleared) is saved correctly.
       saveActiveChat(currentAgentId, logs);
   }, [logs, currentAgentId]);
 
@@ -625,6 +624,20 @@ ${agentInstructions || currentAgent?.system_instruction}
       return () => { if (frameIntervalRef.current) clearInterval(frameIntervalRef.current); };
   }, [isCameraOn, connectionState, sendRealtimeInput, videoSource, streamFileUrl]); 
 
+  // Enforce Text-Only Mode when Agent is Muted
+  useEffect(() => {
+    if (isAgentMuted && connectionState === ConnectionState.CONNECTED) {
+      disconnect();
+      setLogs(prev => [...prev, {
+        id: crypto.randomUUID(),
+        type: 'system',
+        sender: 'SYSTEM',
+        text: 'Agent audio muted. Live session terminated to switch to text-only responses.',
+        timestamp: Date.now()
+      }]);
+    }
+  }, [isAgentMuted, connectionState, disconnect]);
+
   const loadAgentConfig = async (id: string) => {
       const cfg = await getAgentConfig(id);
       const agent = AGENTS.find(a => a.id === id);
@@ -677,7 +690,6 @@ ${agentInstructions || currentAgent?.system_instruction}
           setActiveSidePanel('SETTINGS');
           return;
       }
-      setLayoutMode('CHAT');
       setHasGreeted(false);
       connect();
   };
@@ -688,9 +700,6 @@ ${agentInstructions || currentAgent?.system_instruction}
           if (videoRef.current?.srcObject) (videoRef.current.srcObject as MediaStream).getTracks().forEach(t => t.stop());
       } else {
           setVideoSource('camera');
-          // Auto-switch to VIDEO layout
-          if (layoutMode === 'CHAT') setLayoutMode('VIDEO');
-          
           try {
               const stream = await navigator.mediaDevices.getUserMedia({ video: true });
               if (videoRef.current) videoRef.current.srcObject = stream;
@@ -706,8 +715,6 @@ ${agentInstructions || currentAgent?.system_instruction}
           const url = URL.createObjectURL(file);
           setStreamFileUrl(url);
           setVideoSource('media');
-          // Auto-switch to VIDEO layout
-          if (layoutMode === 'CHAT') setLayoutMode('VIDEO');
           
           // Reset previous captions
           if (captionsTrackUrl) {
@@ -867,13 +874,18 @@ ${agentInstructions || currentAgent?.system_instruction}
       return;
     }
 
-    // --- MULTIMODAL OR LIVE SESSION ACTIVE ---
-    if (attachmentToSend || connectionState === ConnectionState.CONNECTED) {
+    // --- ROUTING LOGIC ---
+    const useLiveSession = !isAgentMuted && (connectionState === ConnectionState.CONNECTED || !!attachmentToSend);
+
+    if (useLiveSession) {
         safeSend(text, attachmentToSend);
-        return;
+        return; // Live session handler takes over.
     }
     
-    // --- TEXT-ONLY, DISCONNECTED SESSION LOGIC ---
+    // --- FALLBACK (HTTP/LM Studio) LOGIC ---
+    // This path is taken if:
+    // 1. Agent is muted.
+    // 2. Agent is not muted, but we are disconnected AND have no attachment to trigger a connection.
     if (apiKey) {
         // PRIORITY 2: Gemini HTTP Fallback
         setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[COGNITION] Routing text to Gemini (HTTP)...`, timestamp: Date.now() }]);
@@ -1043,7 +1055,7 @@ ${agentInstructions || currentAgent?.system_instruction}
   };
 
   const renderTriggerBtn = (panelId: string, icon: React.ReactNode, title: string) => (
-      <button onClick={() => setActiveSidePanel(panelId)} className={`btn btn-secondary btn-icon ${activeSidePanel === panelId ? 'active' : ''}`} title={title} style={activeSidePanel === panelId ? {borderColor: '#facc15', color: '#facc15'} : {}}>
+      <button onClick={() => setActiveSidePanel(panelId === activeSidePanel ? null : panelId)} className={`btn btn-secondary btn-icon ${activeSidePanel === panelId ? 'active' : ''}`} title={title} style={activeSidePanel === panelId ? {borderColor: '#facc15', color: '#facc15'} : {}}>
           {icon}
       </button>
   );
@@ -1079,8 +1091,11 @@ ${agentInstructions || currentAgent?.system_instruction}
       }
 
       // STANDARD SPLIT VIEW
+      const videoFlex = isVideoActive ? (layoutMode === 'VIDEO' ? '3 1 0px' : '1 1 0px') : '0 0 0px';
+      const chatFlex = isVideoActive ? (layoutMode === 'CHAT' ? '3 1 0px' : '1 1 0px') : '1 1 0px';
+
       const visualizerStyle: React.CSSProperties = {
-          flex: isVideoActive ? '1 1 0' : '0 0 0',
+          flex: videoFlex,
           display: isVideoActive ? 'flex' : 'none',
           flexDirection: 'column',
           overflow: 'hidden',
@@ -1124,7 +1139,7 @@ ${agentInstructions || currentAgent?.system_instruction}
                           ) : null}
                       </div>
                   </div>
-                  <div style={{ flex: '1 1 0', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                  <div style={{ flex: chatFlex, display: 'flex', flexDirection: 'column', overflow: 'hidden', transition: 'flex 0.3s ease' }}>
                       <div className={`logs-container ${logs.length === 1 && logs[0].type === 'system' ? 'centered-single' : ''}`}>
                           {logs.length === 0 && <div className="empty-state"><p>SYSTEM READY. PRE-FLIGHT CHECKS GREEN.</p><p>INITIALIZE CONNECTION TO BEGIN.</p></div>}
                           {logs.map(log => (
@@ -1187,7 +1202,7 @@ ${agentInstructions || currentAgent?.system_instruction}
             {renderTriggerBtn('FOCUS', <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>, "Room Focus")}
             {renderTriggerBtn('MEDIA', <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect><line x1="7" y1="2" x2="7" y2="22"></line><line x1="17" y1="2" x2="17" y2="22"></line><line x1="2" y1="12" x2="22" y2="12"></line><line x1="2" y1="7" x2="7" y2="7"></line><line x1="2" y1="17" x2="7" y2="17"></line><line x1="17" y1="17" x2="22" y2="17"></line><line x1="17" y1="7" x2="22" y2="7"></line></svg>, "Media Gallery")}
             {renderTriggerBtn('MCP', <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>, "MCP Tools")}
-            <button onClick={() => setActiveSidePanel('KNOWLEDGE')} className={`btn btn-secondary btn-icon ${activeSidePanel === 'KNOWLEDGE' ? 'active' : ''}`} title={`Knowledge Base (${vectorCount} vectors)`} style={{position: 'relative', ...(activeSidePanel === 'KNOWLEDGE' ? {borderColor: '#facc15', color: '#facc15'} : {})}}>
+            <button onClick={() => setActiveSidePanel(activeSidePanel === 'KNOWLEDGE' ? null : 'KNOWLEDGE')} className={`btn btn-secondary btn-icon ${activeSidePanel === 'KNOWLEDGE' ? 'active' : ''}`} title={`Knowledge Base (${vectorCount} vectors)`} style={{position: 'relative', ...(activeSidePanel === 'KNOWLEDGE' ? {borderColor: '#facc15', color: '#facc15'} : {})}}>
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>
                 {vectorCount > 0 && (
                     <span style={{ position: 'absolute', top: '2px', right: '2px', background: '#f87171', color: 'white', fontSize: '0.6rem', padding: '0px 4px', borderRadius: '50%', border: '1px solid #0a0a0a' }}>
@@ -1256,7 +1271,7 @@ ${agentInstructions || currentAgent?.system_instruction}
                   </button>
                   {/* AGENT MUTE */}
                    <button onClick={() => setIsAgentMuted(!isAgentMuted)} className={`btn btn-icon ${!isAgentMuted ? '' : 'btn-danger'}`} title={isAgentMuted ? "Unmute Agent's Voice" : "Mute Agent's Voice"}>
-                       {isAgentMuted ? <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg> : <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>}
+                       {isAgentMuted ? <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg> : <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>}
                    </button>
                   {/* CAMERA */}
                   <button onClick={toggleCamera} className={`btn btn-icon ${isCameraOn && videoSource === 'camera' ? 'active-green' : ''}`} title="Toggle Webcam Feed">
@@ -1298,7 +1313,7 @@ ${agentInstructions || currentAgent?.system_instruction}
                   <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>
               </button>
               <button onClick={handleAnalysisToolClick} className="btn btn-icon btn-lg" style={{ marginRight: '0.5rem' }} title="Upload Image/Video for Analysis">
-                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg>
+                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg>
               </button>
 
               {pendingAttachment && (
@@ -1309,7 +1324,7 @@ ${agentInstructions || currentAgent?.system_instruction}
               )}
 
               <input ref={mainInputRef} type="text" className="main-input unified-input" placeholder={isThinking ? "Processing..." : (isPlaying ? "Speaking..." : "Enter command or message...")} value={inputText} onChange={(e) => setInputText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendText()} disabled={connectionState === ConnectionState.DISCONNECTED && !apiKey}/>
-              {connectionState === ConnectionState.CONNECTED ? <button onClick={disconnect} className="btn btn-danger btn-lg" title="Disconnect Session">STOP</button> : <button onClick={handleStartSession} className="btn btn-primary btn-lg" disabled={connectionState === ConnectionState.CONNECTING} title="Connect Live Session">{connectionState === ConnectionState.CONNECTING ? '...' : 'START'}</button>}
+              {connectionState === ConnectionState.CONNECTED ? <button onClick={disconnect} className="btn btn-danger btn-lg" title="Disconnect Session">STOP</button> : <button onClick={handleStartSession} className="btn btn-primary btn-lg" disabled={connectionState === ConnectionState.CONNECTING || isAgentMuted} title={isAgentMuted ? "Unmute agent to start session" : "Connect Live Session"}>{connectionState === ConnectionState.CONNECTING ? '...' : 'START'}</button>}
               <button onClick={handleSendText} className="btn btn-secondary btn-lg" title="Send Message" disabled={(!inputText.trim() && !pendingAttachment) || (connectionState === ConnectionState.DISCONNECTED && !apiKey)}>SEND</button>
           </div>
       </footer>
