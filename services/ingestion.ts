@@ -2,7 +2,7 @@
 import { VectorRecord } from '../types';
 import { NumMarkX_GenerateID } from '../patterns/NumMarkX';
 import { GeminiProvider } from './llmProviders/geminiProvider';
-import { OllamaProvider } from './llmProviders/ollamaProvider';
+import { LmStudioProvider } from './llmProviders/lmStudioProvider';
 import { 
     bulkPutVectors, 
     getAllVectors, 
@@ -11,6 +11,7 @@ import {
     bulkPutGraphEdges,
     deleteGraphByAgent
 } from "./db";
+import { ExternalRouter } from './externalRouter';
 
 export const IngestionService = {
 
@@ -32,12 +33,14 @@ export const IngestionService = {
         if (onProgress) onProgress(0, chunks.length);
 
         // --- OFFLINE / ONLINE SWITCH ---
-        // If apiKey is empty, we assume Local Mode (Ollama)
+        // If apiKey is empty, we assume Local Mode (LM Studio)
         let provider: { embed: (t: string) => Promise<number[]> };
         
         if (!apiKey) {
-            console.log("[Ingestion] No API Key found. Switching to Local Embeddings (Ollama/Nomic).");
-            provider = new OllamaProvider(); 
+            console.log("[Ingestion] No API Key found. Switching to Local Embeddings (LM Studio).");
+            const registry = ExternalRouter.getToolRegistry();
+            const lmStudioUrl = registry.LM_STUDIO_CHAT.url; // Use the configured URL
+            provider = new LmStudioProvider(lmStudioUrl); 
         } else {
             provider = new GeminiProvider(apiKey);
         }

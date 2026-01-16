@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { GoogleGenAI, Tool, Type } from "@google/genai";
+import { GoogleGenAI, Tool, Type, Content } from "@google/genai";
 import { AGENTS } from './agents';
 import { 
   LogMessage, 
@@ -55,9 +55,10 @@ import { readCanvasTool, updateCanvasTool, MultiAgentService, analyzeFileTool } 
 import { PythonSandbox } from './services/pythonSandbox';
 import { AccessControl } from './services/accessControl';
 import { GeminiProvider } from './services/llmProviders/geminiProvider';
+import { LmStudioProvider } from './services/llmProviders/lmStudioProvider';
+import { ModelGate } from './services/modelGate';
 
 type ViewMode = 'ORCHESTRATOR' | 'COUNCIL' | 'LORE_HARNESS';
-type CognitionEngine = 'gemini-flash' | 'gemini-pro' | 'dolphin-hf' | 'ollama-gemma' | 'ollama-dolphin';
 type ToolOverride = 'auto' | 'image' | 'video' | 'speech';
 
 function cosineSimilarity(a: number[], b: number[]): number {
@@ -91,7 +92,6 @@ const App: React.FC = () => {
   const [voiceSpeed, setVoiceSpeed] = useState(1.0);
   const [voicePitch, setVoicePitch] = useState(0);
   const [accessLevel, setAccessLevel] = useState(AGENTS[0].accessLevel);
-  const [cognitionEngine, setCognitionEngine] = useState<CognitionEngine>('gemini-flash');
   const [toolOverride, setToolOverride] = useState<ToolOverride>('auto');
   const [hasGreeted, setHasGreeted] = useState(false);
   const [vectorCount, setVectorCount] = useState(0);
@@ -145,11 +145,6 @@ const App: React.FC = () => {
   // --- PREPARE LIVE CONFIG ---
   const currentAgent = AGENTS.find(a => a.id === currentAgentId);
   
-  let modeInstruction = "";
-  if (cognitionEngine === 'gemini-pro') {
-    modeInstruction = "\n\n[MODE: DEEP REASONING]\nACTIVATE 'Gemini 3 Pro' PROTOCOL.";
-  }
-
   const CAPABILITY_INSTRUCTION = `
 [SYSTEM CAPABILITIES - MULTI-MODAL & BIMODAL PERSISTENCE]
 1. BIMODAL CONTINUITY:
@@ -182,18 +177,15 @@ ${generalInstructions}
 
 [ACTIVE AGENT PERSONA: ${(currentAgent?.handle || 'UNKNOWN').toUpperCase()}]
 ${agentInstructions || currentAgent?.system_instruction}
-
-[OPERATIONAL OVERRIDES]
-${modeInstruction}
 `.trim();
 
   // --- TOOL DEFINITIONS ---
   const retrievalTool: Tool = { functionDeclarations: [ { name: "retrieve_knowledge", description: "Access the local knowledge base. Use whenever asked about past events, lore, or uploaded files.", parameters: { type: Type.OBJECT, properties: { query: { type: Type.STRING, description: "The search query." } }, required: ["query"] } } ] };
   const mediaGalleryTool: Tool = { functionDeclarations: [ { name: "search_media_gallery", description: "Search for existing files in the Media Gallery (Images, Videos, Documents).", parameters: { type: Type.OBJECT, properties: { query: { type: Type.STRING, description: "Keywords to search for (filename, description, tags)." } }, required: ["query"] } }, { name: "show_media_asset", description: "Display a specific media asset from the Gallery to the user.", parameters: { type: Type.OBJECT, properties: { assetId: { type: Type.STRING, description: "The ID of the asset to display (obtained from search)." } }, required: ["assetId"] } } ] };
   const googleMapsTool: Tool = { functionDeclarations: [ { name: "maps_search_places", description: "Search for places using Google Maps.", parameters: { type: Type.OBJECT, properties: { query: { type: Type.STRING, description: "Search term" }, radius: { type: Type.NUMBER, description: "Radius in meters" } }, required: ["query"] } }, { name: "maps_distancematrix", description: "Calculate travel distance/time.", parameters: { type: Type.OBJECT, properties: { origin: { type: Type.STRING }, destination: { type: Type.STRING }, mode: { type: Type.STRING } }, required: ["origin", "destination"] } } ] };
-  const routeRequestTool: Tool = { functionDeclarations: [ { name: "routeRequest", description: "Generate images, videos, or route complex requests to external models.", parameters: { type: Type.OBJECT, properties: { target: { type: Type.STRING, enum: ["SDXL_IMAGE", "NANO_BANANA_IMAGE", "VIDEO_GENERATION", "DOLPHIN_LLM", "CHATTERBOX_TTS", "OLLAMA_LOCAL"], description: "Use SDXL_IMAGE for all image generation. Use NANO_BANANA_IMAGE as a backup. Use VIDEO_GENERATION for video clips." }, prompt: { type: Type.STRING, description: "The visual prompt or request text." } }, required: ["target", "prompt"] } } ] };
+  const routeRequestTool: Tool = { functionDeclarations: [ { name: "routeRequest", description: "Generate images, videos, or route complex requests to external models.", parameters: { type: Type.OBJECT, properties: { target: { type: Type.STRING, enum: ["SDXL_IMAGE", "NANO_BANANA_IMAGE", "VIDEO_GENERATION", "DOLPHIN_LLM", "CHATTERBOX_TTS", "LM_STUDIO_CODER", "LM_STUDIO_CHAT", "LM_STUDIO_UNCENSORED"], description: "Use SDXL_IMAGE for all image generation. Use NANO_BANANA_IMAGE as a backup. Use VIDEO_GENERATION for video clips." }, prompt: { type: Type.STRING, description: "The visual prompt or request text." } }, required: ["target", "prompt"] } } ] };
   const holodeckTools: Tool = { functionDeclarations: [ readCanvasTool, updateCanvasTool ] };
-  const pythonTool: Tool = { functionDeclarations: [ { name: "execute_python", description: "Execute Python code in a sandboxed environment. Use for calculations, data analysis, or logic.", parameters: { type: Type.OBJECT, properties: { code: { type: Type.STRING, description: "The Python code to execute." } }, required: ["code"] } } ] };
+  const pythonTool: Tool = { functionDeclarations: [ { name: "execute_python", description: "Generate and execute Python code in a sandboxed environment to accomplish a task. Use for calculations, data analysis, or logic.", parameters: { type: Type.OBJECT, properties: { task: { type: Type.STRING, description: "A natural language description of the computation or task to perform in Python." } }, required: ["task"] } } ] };
   const filesystemTool: Tool = { functionDeclarations: [ { name: "read_file", description: "Read contents of a file from the host filesystem.", parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING } }, required: ["path"] } }, { name: "list_directory", description: "List files and directories at a path.", parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING } }, required: ["path"] } }, { name: "write_file", description: "Write content to a file.", parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING }, content: { type: Type.STRING } }, required: ["path", "content"] } }, { name: "get_file_info", description: "Get metadata for a file.", parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING } }, required: ["path"] } }, { name: "search_files", description: "Recursively search for files.", parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING }, pattern: { type: Type.STRING } }, required: ["path", "pattern"] } } ] };
   const analyzeTool: Tool = { functionDeclarations: [ analyzeFileTool ] };
 
@@ -209,7 +201,7 @@ ${modeInstruction}
   };
 
   const [enabledToolIds, setEnabledToolIds] = useState<string[]>([
-    'retrieval', 'mediaGallery', 'googleMaps', 'routeRequest', 'holodeck', 'analyzeFile'
+    'retrieval', 'mediaGallery', 'googleMaps', 'routeRequest', 'holodeck', 'analyzeFile', 'python'
   ]);
 
   const getPermittedTools = (): Tool[] => {
@@ -346,13 +338,27 @@ ${modeInstruction}
               }
           }
           else if (fc.name === 'execute_python') {
-              const code = (fc.args as any).code;
-              setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[PYTHON] Executing code...`, timestamp: Date.now() }]);
+              const task = (fc.args as any).task;
+              setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[SYNTHESIS] Routing Python task to Coder model: "${task}"`, timestamp: Date.now() }]);
               try {
-                  const result = await PythonSandbox.execute(code);
-                  setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[PYTHON RESULT] ${result.substring(0, 200)}${result.length > 200 ? '...' : ''}`, timestamp: Date.now() }]);
+                  // 1. Route to Coder model to get the code
+                  const routerRes = await ExternalRouter.route('LM_STUDIO_CODER', task, { id: currentAgentId, handle: currentAgent!.handle });
+                  if (!routerRes.success || !routerRes.data) {
+                      throw new Error(routerRes.error || "Coder model failed to generate code.");
+                  }
+                  
+                  // 2. Sanitize the code from markdown
+                  let generatedCode = routerRes.data;
+                  generatedCode = generatedCode.replace(/```python/g, '').replace(/```/g, '').trim();
+                  setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'CODER', text: `[CODE GENERATED]\n${generatedCode}`, timestamp: Date.now() }]);
+
+                  // 3. Execute the code
+                  const result = await PythonSandbox.execute(generatedCode);
+                  setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'PYTHON', text: `[RESULT] ${result.substring(0, 200)}${result.length > 200 ? '...' : ''}`, timestamp: Date.now() }]);
                   responses.push({ id: fc.id, name: fc.name, response: { result: result } });
+
               } catch (e: any) {
+                  setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[PYTHON SYNTHESIS FAILED] ${e.message}`, timestamp: Date.now() }]);
                   responses.push({ id: fc.id, name: fc.name, response: { error: e.message } });
               }
           }
@@ -820,7 +826,7 @@ ${modeInstruction}
   const handleSendText = async () => {
     if (!inputText.trim() && !pendingAttachment) return;
     
-    const text = inputText;
+    let text = inputText;
     const attachmentToSend = pendingAttachment;
 
     setInputText('');
@@ -836,107 +842,128 @@ ${modeInstruction}
         attachmentType: attachmentToSend?.mimeType.startsWith('image') ? 'image' : 'video'
     }]);
 
-    const currentAgent = AGENTS.find(a => a.id === currentAgentId)!;
+    if (!currentAgent) return;
 
-    // --- EXPLICIT TOOL/MODEL OVERRIDE ---
+    // --- EXPLICIT TOOL OVERRIDE ---
     if (toolOverride !== 'auto' && !attachmentToSend) {
       const targetMap: Record<ToolOverride, string> = {
-        image: 'SDXL_IMAGE',
-        video: 'VIDEO_GENERATION',
-        speech: 'CHATTERBOX_TTS',
-        auto: ''
+        image: 'SDXL_IMAGE', video: 'VIDEO_GENERATION', speech: 'CHATTERBOX_TTS', auto: ''
       };
       const target = targetMap[toolOverride];
-
       setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[OVERRIDE] Routing to ${target}...`, timestamp: Date.now() }]);
-      
       const routerRes = await ExternalRouter.route(target, text, { id: currentAgentId, handle: currentAgent.handle });
-      
       if (routerRes.success) {
-          if (routerRes.type === 'audio' && routerRes.data) {
-              setStoryAudioUrl(routerRes.data);
-          } else if ((routerRes.type === 'image' || routerRes.type === 'video') && routerRes.data) {
-              setLogs(prev => [...prev, { 
-                  id: crypto.randomUUID(), type: 'model', 
-                  sender: currentAgent.handle.toUpperCase(),
-                  text: `[GENERATED ${routerRes.type.toUpperCase()}] ${text}`, timestamp: Date.now(),
-                  attachment: routerRes.data?.split(',')[1], attachmentType: routerRes.type
-              }]);
+          if (routerRes.type === 'audio' && routerRes.data) setStoryAudioUrl(routerRes.data);
+          else if ((routerRes.type === 'image' || routerRes.type === 'video') && routerRes.data) {
+              setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'model', sender: currentAgent.handle.toUpperCase(), text: `[GENERATED ${routerRes.type.toUpperCase()}] ${text}`, timestamp: Date.now(), attachment: routerRes.data?.split(',')[1], attachmentType: routerRes.type }]);
           }
       } else {
           setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[OVERRIDE FAILED] ${routerRes.error}`, timestamp: Date.now() }]);
       }
-
-      setToolOverride('auto'); // Reset after one use
+      setToolOverride('auto');
       return;
     }
 
-    // --- SOVEREIGN / OLLAMA ENGINE OVERRIDE ---
-    if (cognitionEngine !== 'gemini-flash' && cognitionEngine !== 'gemini-pro' && !attachmentToSend) {
-        const targetMap: Record<string, string> = {
-            'dolphin-hf': 'DOLPHIN_LLM',
-            'ollama-gemma': 'OLLAMA_GEMMA',
-            'ollama-dolphin': 'OLLAMA_DOLPHIN'
-        };
-        const target = targetMap[cognitionEngine];
+    // --- MULTIMODAL (Attachment) => GO TO GEMINI LIVE ---
+    if (attachmentToSend) {
+        safeSend(text, attachmentToSend);
+        return;
+    }
 
-        if (!target) {
-            setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[ENGINE FAILED] Unknown cognition engine: ${cognitionEngine}`, timestamp: Date.now() }]);
-            return;
+    // --- TEXT-ONLY LOGIC ---
+    if (connectionState === ConnectionState.CONNECTED) {
+        safeSend(text);
+        return;
+    }
+    
+    // IF NOT CONNECTED, decide between Gemini HTTP and Local Model Fallback.
+    if (apiKey) {
+        // --- GEMINI HTTP FALLBACK ---
+        setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[COGNITION] Routing text to Gemini (HTTP)...`, timestamp: Date.now() }]);
+        try {
+            const ai = new GoogleGenAI({ apiKey });
+            
+            const history: Content[] = logs
+                .filter(log => log.type === 'user' || log.type === 'model')
+                .map(log => ({
+                    role: log.type === 'user' ? 'user' : 'model',
+                    parts: [{ text: log.text || '' }]
+                }));
+
+            const modelToUse = ModelGate.selectModel(text);
+
+            const response = await ai.models.generateContent({
+                model: modelToUse,
+                contents: [...history, { role: 'user', parts: [{ text }] }],
+                config: {
+                    systemInstruction: systemInstruction,
+                    ...modelConfig
+                }
+            });
+            
+            const responseText = response.text;
+            if (responseText) {
+                setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'model', sender: currentAgent.handle.toUpperCase(), text: responseText, timestamp: Date.now() }]);
+            } else {
+                const refusalReason = response.candidates?.[0]?.finishReason;
+                if (refusalReason === 'SAFETY') {
+                    throw new Error('Content blocked by safety policies.');
+                }
+                throw new Error('No response text from Gemini API.');
+            }
+        } catch (e: any) {
+            setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[ENGINE FAILED] Gemini HTTP Error: ${e.message}`, timestamp: Date.now() }]);
+        }
+    } else {
+        // --- LOCAL MODEL (LM STUDIO) OFFLINE FALLBACK ---
+        const agentModelMap: Record<string, string> = {
+            'agent-noesis': 'LM_STUDIO_CODER',
+            'agent-urania': 'LM_STUDIO_CODER',
+            'agent-melpomene': 'LM_STUDIO_UNCENSORED',
+        };
+        const targetModel = agentModelMap[currentAgentId] || 'LM_STUDIO_CHAT';
+        
+        const targetNameMap: Record<string, string> = {
+            'LM_STUDIO_CODER': 'Coder (LM Studio)',
+            'LM_STUDIO_CHAT': 'Chat (LM Studio)',
+            'LM_STUDIO_UNCENSORED': 'Dolphin (LM Studio)'
+        };
+        const targetName = targetNameMap[targetModel];
+
+        setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[COGNITION] Routing text to ${targetName} for ${currentAgent.handle}...`, timestamp: Date.now() }]);
+        
+        let textWithContext = text;
+        let context = "No relevant context found in archives.";
+        try {
+            const registry = ExternalRouter.getToolRegistry();
+            const lmStudioUrl = registry.LM_STUDIO_CHAT.url;
+            const provider = new LmStudioProvider(lmStudioUrl);
+            const queryVector = await provider.embed(text);
+            const allDocs: any[] = await getAllVectorsFromVault();
+            const agentHandle = AGENTS.find(a => a.id === currentAgentId)?.handle.toUpperCase();
+            const agentDocs = agentHandle ? allDocs.filter(d => (d.agentId || d.agent)?.toUpperCase() === agentHandle) : allDocs;
+            if (agentDocs.length > 0) {
+                const scored = agentDocs.map(doc => ({ ...doc, score: cosineSimilarity(queryVector, doc.vector) })).sort((a, b) => b.score - a.score).slice(0, 5);
+                if (scored.length > 0 && scored[0].score > 0.45) {
+                    context = scored.map(s => `[SOURCE: ${s.source || s.metadata?.source || 'Unknown'}]\n${s.text}`).join('\n\n');
+                }
+            }
+        } catch (e: any) {
+            setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[RAG FAILED] ${e.message}`, timestamp: Date.now() }]);
+        }
+        
+        if (context.length > 30) {
+           textWithContext = `CONTEXT:\n${context}\n\nUSER QUERY: "${text}"`;
         }
 
-        const targetName = {
-            'dolphin-hf': 'Sovereign (HF)',
-            'ollama-gemma': 'Gemma (Local)',
-            'ollama-dolphin': 'Dolphin (Local)'
-        }[cognitionEngine];
-        
-        setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[COGNITION] Routing to ${targetName}...`, timestamp: Date.now() }]);
-        const routerRes = await ExternalRouter.route(target, text, { id: currentAgentId, handle: currentAgent.handle });
+        const routerRes = await ExternalRouter.route(targetModel, textWithContext, { id: currentAgentId, handle: currentAgent.handle });
 
         if (routerRes.success && routerRes.data) {
             setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'model', sender: currentAgent.handle.toUpperCase(), text: routerRes.data, timestamp: Date.now() }]);
         } else {
             setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[ENGINE FAILED] ${routerRes.error}`, timestamp: Date.now() }]);
         }
-        return;
     }
-
-    // --- STANDARD GEMINI LIVE SESSION ---
-    let promptToSend = text;
-    // --- MANUAL RAG FOR TEXT INPUT (Only if no attachment is present) ---
-    if (!attachmentToSend) {
-        let context = "No relevant context found in archives.";
-        try {
-            const provider = new GeminiProvider(apiKey);
-            const queryVector = await provider.embed(text);
-            const allDocs: any[] = await getAllVectorsFromVault();
-            
-            const agentHandle = AGENTS.find(a => a.id === currentAgentId)?.handle.toUpperCase();
-            const agentDocs = agentHandle ? allDocs.filter(d => (d.agentId || d.agent)?.toUpperCase() === agentHandle) : allDocs;
-
-            if (agentDocs.length > 0) {
-                const scored = agentDocs.map(doc => ({
-                    ...doc,
-                    score: cosineSimilarity(queryVector, doc.vector)
-                })).sort((a, b) => b.score - a.score).slice(0, 5);
-                
-                if (scored.length > 0 && scored[0].score > 0.45) {
-                    context = scored.map(s => `[SOURCE: ${s.source || s.metadata?.source || 'Unknown'}]\n${s.text}`).join('\n\n');
-                }
-            }
-        } catch (e: any) {
-            console.error("Manual RAG failed:", e);
-            context = `[RAG ERROR: ${e.message}]`;
-        }
-        
-        if (context.length > 30) {
-           promptToSend = `[INPUT_SHIFT: TEXT] The user is responding via text. Process the query based on the provided context and respond via speech.\n\nCONTEXT:\n${context}\n\nUSER QUERY: "${text}"`;
-        }
-    }
-    
-    // Use SafeSend to queue if speaking/disconnected
-    safeSend(promptToSend, attachmentToSend || undefined);
   };
 
   const handlePaperclipClick = () => {
@@ -1246,14 +1273,6 @@ ${modeInstruction}
                   <button onClick={() => mediaFileInputRef.current?.click()} className={`btn btn-icon ${isCameraOn && videoSource === 'media' ? 'active-green' : ''}`} title="Stream Video File to Agent">
                       <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect><line x1="7" y1="2" x2="7" y2="22"></line><line x1="17" y1="2" x2="17" y2="22"></line><line x1="2" y1="12" x2="22" y2="12"></line><line x1="2" y1="7" x2="7" y2="7"></line><line x1="2" y1="17" x2="7" y2="17"></line><line x1="17" y1="17" x2="22" y2="17"></line><line x1="17" y1="7" x2="22" y2="7"></line></svg>
                   </button>
-                  {/* DOLPHIN INDICATOR */}
-                  <button
-                    className={`btn btn-icon ${cognitionEngine === 'dolphin-hf' ? 'active-cyan' : ''}`}
-                    title={`Sovereign Model Indicator (Dolphin) - Active when selected.`}
-                    disabled
-                  >
-                    🐬
-                  </button>
                   {/* Hidden Input for Movie Camera */}
                   <input type="file" accept="video/*" ref={mediaFileInputRef} className="hidden" onChange={handleMediaFileSelect} />
               </div>
@@ -1261,17 +1280,6 @@ ${modeInstruction}
               <div className="flex-group">
                   <button onClick={() => setCurrentView('COUNCIL')} className="btn btn-xs" title="Open Multi-Agent Council Interface">COUNCIL</button>
                   <button onClick={() => setIsTerminalOpen(!isTerminalOpen)} className="btn btn-xs" title="Open Terminal / Shell">TERM (~)</button>
-              </div>
-
-              <div className="flex-group">
-                  <label className="tray-label">ENGINE</label>
-                  <select value={cognitionEngine} onChange={e => setCognitionEngine(e.target.value as CognitionEngine)} className="tray-selector" title="Select Cognition Engine">
-                      <option value="gemini-flash">Flash (Fast)</option>
-                      <option value="gemini-pro">Pro (Deep)</option>
-                      <option value="dolphin-hf">Sovereign (HF)</option>
-                      <option value="ollama-gemma">Gemma (Local)</option>
-                      <option value="ollama-dolphin">Dolphin (Local)</option>
-                  </select>
               </div>
 
               <div className="flex-group">
@@ -1307,9 +1315,9 @@ ${modeInstruction}
                   </div>
               )}
 
-              <input ref={mainInputRef} type="text" className="main-input unified-input" placeholder={isThinking ? "Processing..." : (isPlaying ? "Speaking..." : "Enter command or message...")} value={inputText} onChange={(e) => setInputText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendText()} disabled={connectionState !== ConnectionState.CONNECTED}/>
+              <input ref={mainInputRef} type="text" className="main-input unified-input" placeholder={isThinking ? "Processing..." : (isPlaying ? "Speaking..." : "Enter command or message...")} value={inputText} onChange={(e) => setInputText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendText()} disabled={connectionState === ConnectionState.DISCONNECTED && !apiKey}/>
               {connectionState === ConnectionState.CONNECTED ? <button onClick={disconnect} className="btn btn-danger btn-lg" title="Disconnect Session">STOP</button> : <button onClick={handleStartSession} className="btn btn-primary btn-lg" disabled={connectionState === ConnectionState.CONNECTING} title="Connect Live Session">{connectionState === ConnectionState.CONNECTING ? '...' : 'START'}</button>}
-              <button onClick={handleSendText} className="btn btn-secondary btn-lg" title="Send Message" disabled={!inputText.trim() && !pendingAttachment}>SEND</button>
+              <button onClick={handleSendText} className="btn btn-secondary btn-lg" title="Send Message" disabled={(!inputText.trim() && !pendingAttachment) || (connectionState === ConnectionState.DISCONNECTED && !apiKey)}>SEND</button>
           </div>
       </footer>
 

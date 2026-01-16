@@ -4,7 +4,7 @@ import { MediaAsset } from "../types";
 import { NumMarkX_GenerateID } from "../patterns/NumMarkX";
 import { GoogleGenAI, Content } from "@google/genai";
 import { DolphinProvider } from './llmProviders/dolphinProvider';
-import { OllamaProvider } from './llmProviders/ollamaProvider';
+import { LmStudioProvider } from './llmProviders/lmStudioProvider';
 import { ModelGate } from "./modelGate";
 
 /**
@@ -57,16 +57,22 @@ const DEFAULT_ENDPOINTS: Record<string, ExternalToolConfig> = {
         url: 'https://merkmorassi-mythos-rag-agent-voice.hf.space/v1',
         isDefault: true
     },
-    OLLAMA_GEMMA: {
-        name: 'Localhost Ollama (Gemma)',
-        description: 'Local inference via Ollama with a Gemma model.',
-        url: 'http://localhost:11434',
+    LM_STUDIO_CODER: {
+        name: 'Local Coder (LM Studio)',
+        description: 'Local code generation model served via LM Studio.',
+        url: 'http://127.0.0.1:1234',
         isDefault: true
     },
-    OLLAMA_DOLPHIN: {
-        name: 'Localhost Ollama (Dolphin)',
-        description: 'Local inference via Ollama with an uncensored Dolphin model.',
-        url: 'http://localhost:11434',
+    LM_STUDIO_CHAT: {
+        name: 'Local Chat (LM Studio)',
+        description: 'Local general-purpose chat model served via LM Studio.',
+        url: 'http://127.0.0.1:1234',
+        isDefault: true
+    },
+    LM_STUDIO_UNCENSORED: {
+        name: 'Local Uncensored (LM Studio)',
+        description: 'Local uncensored model (e.g., Dolphin) served via LM Studio.',
+        url: 'http://127.0.0.1:1234',
         isDefault: true
     },
     CHATTERBOX_TTS: {
@@ -181,7 +187,7 @@ export const ExternalRouter = {
                 target = 'WANIMATE_VIDEO';
             }
             // Text/Logic Redirect (if not targeting a specific tool)
-            else if (target !== 'SDXL_IMAGE' && target !== 'WAN_IMAGE' && target !== 'WANIMATE_VIDEO' && target !== 'CHATTERBOX_TTS' && target !== 'OLLAMA_DOLPHIN') {
+            else if (target !== 'SDXL_IMAGE' && target !== 'WAN_IMAGE' && target !== 'WANIMATE_VIDEO' && target !== 'CHATTERBOX_TTS' && target !== 'LM_STUDIO_UNCENSORED') {
                 return await this.callDolphin(prompt);
             }
         }
@@ -211,15 +217,18 @@ export const ExternalRouter = {
                 return await this.callLipSync(prompt, agent, registry.LIP_SYNC.url);
             }
 
-            // --- SOVEREIGN LLM FALLBACK ---
+            // --- LOCAL / SOVEREIGN LLM ---
             else if (target === 'DOLPHIN_LLM') {
                  return await this.callDolphin(prompt, registry.DOLPHIN_LLM.url);
             }
-            else if (target === 'OLLAMA_GEMMA') {
-                 return await this.callOllama(prompt, registry.OLLAMA_GEMMA.url, 'gemma2');
+            else if (target === 'LM_STUDIO_CODER') {
+                 return await this.callLmStudio(prompt, 'mlabonne/gemma-3-12b-it-abliterated-v2');
             }
-            else if (target === 'OLLAMA_DOLPHIN') {
-                 return await this.callOllama(prompt, registry.OLLAMA_DOLPHIN.url, 'dolphin-phi');
+            else if (target === 'LM_STUDIO_CHAT') {
+                 return await this.callLmStudio(prompt, 'google/gemma-3-4b');
+            }
+             else if (target === 'LM_STUDIO_UNCENSORED') {
+                 return await this.callLmStudio(prompt, 'dphn/dolphin3.0-llama3.1-8b');
             }
             
             // --- TTS ---
@@ -430,17 +439,19 @@ export const ExternalRouter = {
         }
     },
 
-    // --- OLLAMA ENGINE (LOCAL) ---
-    async callOllama(prompt: string, endpoint: string, model: string): Promise<RouteResult> {
+    // --- LM STUDIO ENGINE (LOCAL) ---
+    async callLmStudio(prompt: string, model: string): Promise<RouteResult> {
         try {
-            const ollamaProvider = new OllamaProvider(endpoint, model);
+            const registry = this.getToolRegistry();
+            const baseURL = registry.LM_STUDIO_CHAT.url;
+            const provider = new LmStudioProvider(baseURL, model);
             const context: Content[] = [
                 { role: 'user', parts: [{ text: prompt }] }
             ];
-            const response = await ollamaProvider.generateResponse(context, {});
+            const response = await provider.generateResponse(context, {});
             return { success: true, type: 'text', data: response.content || "" };
         } catch (e: any) {
-            return { success: false, type: 'text', error: `Ollama Error: ${e.message}` };
+            return { success: false, type: 'text', error: `LM Studio Error: ${e.message}` };
         }
     },
 

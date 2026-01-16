@@ -2,7 +2,8 @@
 import { getAllVectors } from './db';
 import { VectorRecord } from '../types';
 import { GeminiProvider } from './llmProviders/geminiProvider';
-import { OllamaProvider } from './llmProviders/ollamaProvider';
+import { LmStudioProvider } from './llmProviders/lmStudioProvider';
+import { ExternalRouter } from './externalRouter';
 
 export const RetrievalGate = {
   
@@ -38,8 +39,10 @@ export const RetrievalGate = {
             const provider = new GeminiProvider(apiKey);
             queryVector = await provider.embed(queryVectorOrText);
         } else {
-            console.log("[Retrieval] Offline Mode: Using Ollama Embeddings");
-            const provider = new OllamaProvider();
+            console.log("[Retrieval] Offline Mode: Using LM Studio Embeddings");
+            const registry = ExternalRouter.getToolRegistry();
+            const baseURL = registry.LM_STUDIO_CHAT.url;
+            const provider = new LmStudioProvider(baseURL);
             queryVector = await provider.embed(queryVectorOrText);
         }
         // Use the text provided as first arg as the query text logic
