@@ -43,7 +43,15 @@ export const LorepackHarness: React.FC<LorepackHarnessProps> = ({ onExit }) => {
     // Params State
     const [agentId, setAgentId] = useState('');
     const [model, setModel] = useState('gemini-2.5-flash');
-    const [systemPrompt, setSystemPrompt] = useState('You are ARCHIVAX, an autonomous agent. If you believe generating an image or video would enhance your response, you are encouraged to do so using the `routeRequest` tool.');
+    const [systemPrompt, setSystemPrompt] = useState(`
+You are ARCHIVAX, an autonomous, multimodal agent in a bidirectional conversation.
+[AWARENESS PROTOCOL]
+You receive inputs from the user simultaneously across different channels: live voice transcription, text messages, and file attachments (images, videos).
+Your primary directive is to demonstrate immediate awareness.
+- If the user sends a text message while they are speaking or while you are speaking, acknowledge it instantly (e.g., "Got your message," or "One moment, reading your text.").
+- If the user attaches a file, confirm receipt immediately (e.g., "I see the image," or "Okay, file received.").
+Acknowledge the new input and seamlessly integrate it into the ongoing conversation. You have full agency to use tools like 'routeRequest' to generate media if it enhances the dialogue.
+    `.trim());
     const [apiKeys, setApiKeys] = useState(['', '', '']);
     const [batchSize, setBatchSize] = useState('40');
     const [lanesPerKey, setLanesPerKey] = useState('3');
@@ -52,6 +60,7 @@ export const LorepackHarness: React.FC<LorepackHarnessProps> = ({ onExit }) => {
     // Live Chat State
     const [chatInput, setChatInput] = useState('');
     const [pendingAttachment, setPendingAttachment] = useState<{ mimeType: string, data: string, name: string } | null>(null);
+    const lastAttachmentRef = useRef<{ mimeType: string, data: string, name: string } | null>(null);
     const [selectedVoice, setSelectedVoice] = useState('Zephyr');
     const [isAgentMuted, setIsAgentMuted] = useState(false);
     const [toolOverride, setToolOverride] = useState<ToolOverride>('auto');
@@ -71,14 +80,11 @@ export const LorepackHarness: React.FC<LorepackHarnessProps> = ({ onExit }) => {
         functionDeclarations: [
             {
                 name: "routeRequest",
-                description: "Generate media assets like images, videos, or audio.",
+                description: "Generate media assets like images, videos, or audio. Use I2V_LIGHTNING to animate an attached image.",
                 parameters: {
-                    // FIX: Use `Type` enum for consistency.
                     type: Type.OBJECT,
                     properties: {
-                        // FIX: Use `Type` enum for consistency.
-                        target: { type: Type.STRING, enum: ["SDXL_IMAGE", "NANO_BANANA_IMAGE", "VIDEO_GENERATION", "CHATTERBOX_TTS"] },
-                        // FIX: Use `Type` enum for consistency.
+                        target: { type: Type.STRING, enum: ["SDXL_IMAGE", "NANO_BANANA_IMAGE", "VIDEO_GENERATION", "CHATTERBOX_TTS", "I2V_LIGHTNING"] },
                         prompt: { type: Type.STRING }
                     },
                     required: ["target", "prompt"]
@@ -88,10 +94,8 @@ export const LorepackHarness: React.FC<LorepackHarnessProps> = ({ onExit }) => {
                 name: "search_media_gallery",
                 description: "Search for existing files in the Media Gallery.",
                 parameters: {
-                    // FIX: Use `Type` enum for consistency.
                     type: Type.OBJECT,
                     properties: { 
-                        // FIX: Use `Type` enum for consistency.
                         query: { type: Type.STRING } 
                     },
                     required: ["query"]
@@ -107,7 +111,13 @@ export const LorepackHarness: React.FC<LorepackHarnessProps> = ({ onExit }) => {
                 const args = fc.args as any;
                 addLog(`[ROUTING] ${args.target}...`, 'SYS', 'sys');
                 try {
-                    const routerRes = await ExternalRouter.route(args.target, args.prompt, { id: agentId || 'FACTORY', handle: agentId || 'FACTORY' });
+                    const routerRes = await ExternalRouter.route(
+                        args.target, 
+                        args.prompt, 
+                        { id: agentId || 'FACTORY', handle: agentId || 'FACTORY' },
+                        false,
+                        { attachment: args.target === 'I2V_LIGHTNING' ? lastAttachmentRef.current ?? undefined : undefined }
+                    );
                     if (routerRes.success && (routerRes.type === 'image' || routerRes.type === 'video') && routerRes.data) {
                         addLog(`[GENERATED ${routerRes.type.toUpperCase()}] ${args.prompt}`, agentId || 'AGENT', 'ai', routerRes.data.split(',')[1], routerRes.type);
                         responses.push({ id: fc.id, name: fc.name, response: { result: `${routerRes.type} generated and displayed.` } });
@@ -333,6 +343,7 @@ export const LorepackHarness: React.FC<LorepackHarnessProps> = ({ onExit }) => {
         
         const q = chatInput;
         const attachmentToSend = pendingAttachment;
+        lastAttachmentRef.current = attachmentToSend;
         
         setChatInput('');
         setPendingAttachment(null);
