@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { ModelConfig } from '../types';
+import { geminiClient } from '../services/geminiClient';
 
 interface SettingsManagerProps {
   modelConfig: ModelConfig;
@@ -35,6 +36,7 @@ const SettingsManager: React.FC<SettingsManagerProps> = (props) => {
   const [accessLevel, setAccessLevel] = useState(props.agentAccessLevel);
   const [speed, setSpeed] = useState(props.voiceSpeed || 1.0);
   const [pitch, setPitch] = useState(props.voicePitch || 0);
+  const [modelsList, setModelsList] = useState<{ name: string, displayName: string }[]>([]);
   
   // Audio Refs
   const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
@@ -49,6 +51,20 @@ const SettingsManager: React.FC<SettingsManagerProps> = (props) => {
   }, [props.voiceReference, props.agentAccessLevel, props.voiceSpeed, props.voicePitch, props.isOpen]);
 
   if (!props.isOpen) return null;
+
+  const handleFetchModels = async () => {
+    if (!props.apiKey) {
+      alert("Please enter a Gemini API Key first.");
+      return;
+    }
+    try {
+      const models = await geminiClient.listModels(props.apiKey);
+      setModelsList(models);
+      alert(`Found ${models.length} compatible models.`);
+    } catch (error: any) {
+      alert(`Failed to fetch models: ${error.message}`);
+    }
+  };
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -142,10 +158,21 @@ const SettingsManager: React.FC<SettingsManagerProps> = (props) => {
             <div className="section-panel" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', borderColor: '#38bdf8' }}>
                 <span className="section-header-title" style={{ fontSize: '0.7rem', color: '#38bdf8' }}>MODEL CONFIGURATION</span>
                 <div className="flex-col">
-                    <label className="form-label">COGNITIVE ENGINE (TEXT)</label>
+                    <div className="flex-group" style={{justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px'}}>
+                        <label className="form-label">COGNITIVE ENGINE (TEXT)</label>
+                        <button type="button" onClick={handleFetchModels} className="btn btn-secondary btn-xs">FETCH MODELS</button>
+                    </div>
                     <select value={props.selectedModel} onChange={(e) => props.setSelectedModel(e.target.value)} className="form-select">
-                        <option value="gemini-3-flash-preview">Gemini 3 Flash (Fast)</option>
-                        <option value="gemini-3-pro-preview">Gemini 3 Pro (Complex)</option>
+                        {modelsList.length > 0 ? (
+                            modelsList.map(model => (
+                                <option key={model.name} value={model.name}>{model.displayName} ({model.name})</option>
+                            ))
+                        ) : (
+                            <>
+                                <option value="gemini-3-flash-preview">Gemini 3 Flash (Fast)</option>
+                                <option value="gemini-3-pro-preview">Gemini 3 Pro (Complex)</option>
+                            </>
+                        )}
                     </select>
                 </div>
                  <div className="flex-group" style={{ gap: '1rem' }}>

@@ -1,11 +1,13 @@
 
-import { saveMediaAsset, getAgentConfig } from "./db";
+import { saveMediaAsset, getAgentConfig, getMediaAsset } from "./db";
 import { MediaAsset } from "../types";
 import { NumMarkX_GenerateID } from "../patterns/NumMarkX";
 import { GoogleGenAI, Content } from "@google/genai";
 import { DolphinProvider } from './llmProviders/dolphinProvider';
 import { LmStudioProvider } from './llmProviders/lmStudioProvider';
 import { ModelGate } from "./modelGate";
+import { McpClient } from "./mcpClient";
+import { base64ToUint8Array } from "./audioUtils";
 
 /**
  * EXTERNAL MODEL ROUTER & FALLBACK SYSTEM
@@ -37,6 +39,12 @@ const DEFAULT_ENDPOINTS: Record<string, ExternalToolConfig> = {
         name: 'Nano Banana (Gemini Fallback)',
         description: 'Fallback image generation via Gemini 2.5 Flash Image (Nano Banana). Use only if SDXL fails.',
         url: 'Google Cloud API (gemini-2.5-flash-image)',
+        isDefault: true
+    },
+    I2V_LIGHTNING: {
+        name: 'Wan 2.2 I2V Lightning',
+        description: 'Generates a short video from an input image and a text prompt.',
+        url: 'mcp://gradio', // This is an MCP tool
         isDefault: true
     },
     WAN_IMAGE: {
@@ -167,7 +175,13 @@ export const ExternalRouter = {
         }
     },
 
-    async route(target: string, prompt: string, agent: { id: string, handle: string }, generateAudio: boolean = false): Promise<RouteResult> {
+    async route(
+        target: string, 
+        prompt: string, 
+        agent: { id: string, handle: string }, 
+        generateAudio: boolean = false, 
+        options?: { inputAssetId?: string; attachment?: { mimeType: string; data: string } }
+    ): Promise<RouteResult> {
         console.log(`[ROUTER] Routing to ${target}: ${prompt.substring(0, 50)}...`);
         
         // Get Dynamic Registry
@@ -209,6 +223,9 @@ export const ExternalRouter = {
             // --- VIDEO GENERATION ---
             else if (target === 'VIDEO_GENERATION') {
                 return await this.callVeoVideo(prompt, agent);
+            }
+            else if (target === 'I2V_LIGHTNING') {
+                return await this.callI2VLightning(prompt, agent, options);
             }
             else if (target === 'WANIMATE_VIDEO') {
                 return await this.callWanimateVideo(prompt, agent, registry.WANIMATE_VIDEO.url);
@@ -285,6 +302,84 @@ export const ExternalRouter = {
             return { success: false, type: 'text', error: `SDXL Engine call failed: ${e.message}` };
         }
     },
+
+    // --- GRADIO I2V ENGINE ---
+    async callI2VLightning(
+        prompt: string, 
+        agent: { id: string, handle: string }, 
+        options?: { inputAssetId?: string; attachment?: { mimeType: string; data: string } }
+    ): Promise<RouteResult> {
+        const baseURL = "https://edbanshee-wan22-14b-lightning-14b-i2v-ui.hf.space";
+        let inputImagePath: string | null = null;
+        let imageData: { data: string; mimeType: string; name: string } | null = null;
+    
+        if (options?.attachment) {
+            imageData = { data: options.attachment.data, mimeType: options.attachment.mimeType, name: 'input.jpg' };
+        } else if (options?.inputAssetId) {
+            const asset = await getMediaAsset(options.inputAssetId);
+            if (asset && asset.type === 'image') {
+                imageData = { data: asset.data, mimeType: 'image/jpeg', name: asset.prompt };
+            } else {
+                return { success: false, type: 'text', error: `Input asset '${options.inputAssetId}' is not a valid image.` };
+            }
+        }
+    
+        if (imageData) {
+            try {
+                const blob = new Blob([base64ToUint8Array(imageData.data)], { type: imageData.mimeType });
+                const formData = new FormData();
+                formData.append('files', blob, imageData.name);
+    
+                const uploadRes = await fetch(`${baseURL}/upload`, {
+                    method: 'POST',
+                    headers: this.getHeaders(),
+                    body: formData,
+                });
+    
+                if (!uploadRes.ok) throw new Error(`Gradio upload failed: ${uploadRes.statusText}`);
+                const uploadJson = await uploadRes.json();
+                if (!uploadJson || !Array.isArray(uploadJson) || !uploadJson[0]) throw new Error("Gradio upload did not return a valid file path.");
+                inputImagePath = uploadJson[0];
+            } catch (e: any) {
+                return { success: false, type: 'text', error: `I2V Pre-flight failed: ${e.message}` };
+            }
+        }
+    
+        const mcpArgs = {
+            input_image: inputImagePath ? { path: inputImagePath, url: `${baseURL}/file=${inputImagePath}`, meta: { _type: "gradio.File" } } : null,
+            prompt: prompt,
+            negative_prompt: "worst quality, low quality, nsfw",
+            steps: 8,
+            cfg: 2.5,
+            motion_bucket_id: 127,
+            duration_seconds: 2,
+            randomize_seed: true
+        };
+    
+        try {
+            const mcpResult = await McpClient.execute('gradio', 'Wan22_14B_Lightning_14b_I2V_UI_generate_video', mcpArgs);
+            if (mcpResult.status !== 'SUCCESS' || !mcpResult.result) throw new Error(mcpResult.error || "MCP tool returned no result.");
+            
+            const videoPath = mcpResult.result[0]?.path;
+            if (!videoPath) throw new Error("MCP tool did not return a video path.");
+    
+            const videoUrl = `${baseURL}/file=${videoPath}`;
+            const videoRes = await fetch(videoUrl);
+            const videoBlob = await videoRes.blob();
+            const base64 = await new Promise<string>((resolve) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result as string);
+                reader.readAsDataURL(videoBlob);
+            });
+    
+            await this.saveGeneratedImage(base64, prompt, agent, 'VID', 'I2V_LIGHTNING');
+            return { success: true, type: 'video', data: base64 };
+    
+        } catch (e: any) {
+            return { success: false, type: 'text', error: `I2V Generation Failed: ${e.message}` };
+        }
+    },
+    
 
     // --- WAN IMAGE ENGINE (SOVEREIGN) ---
     async callWanImage(prompt: string, agent: { id: string, handle: string }, endpoint: string): Promise<RouteResult> {

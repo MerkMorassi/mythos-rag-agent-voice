@@ -1,5 +1,8 @@
 
 
+
+
+
 import React, { useState, useEffect, useRef } from 'react';
 import { GoogleGenAI, Tool, Type, Content } from "@google/genai";
 import { AGENTS } from './agents';
@@ -11,7 +14,8 @@ import {
   MediaAsset,
   SomaActionType,
   Agent,
-  VectorRecord
+  VectorRecord,
+  AgentConfig
 } from './types';
 import ChatHistoryManager from './components/ChatHistoryManager';
 import { KnowledgeManager } from './components/KnowledgeManager';
@@ -52,7 +56,9 @@ import { NumMarkX_GenerateID } from './patterns/NumMarkX';
 import { useGeminiLive } from './hooks/useGeminiLive';
 import { McpClient } from './services/mcpClient';
 import { ExternalRouter } from './services/externalRouter';
-import { readCanvasTool, updateCanvasTool, MultiAgentService, analyzeFileTool } from './services/multiAgent';
+// FIX: Renamed the import of `selfConfigTool` to `selfConfigDeclaration` to avoid a name collision
+// with the constant of the same name defined on line 202.
+import { readCanvasTool, updateCanvasTool, MultiAgentService, analyzeFileTool, selfConfigTool as selfConfigDeclaration } from './services/multiAgent';
 import { PythonSandbox } from './services/pythonSandbox';
 import { AccessControl } from './services/accessControl';
 import { GeminiProvider } from './services/llmProviders/geminiProvider';
@@ -60,7 +66,7 @@ import { LmStudioProvider } from './services/llmProviders/lmStudioProvider';
 import { ModelGate } from './services/modelGate';
 
 type ViewMode = 'ORCHESTRATOR' | 'COUNCIL' | 'LORE_HARNESS';
-type ToolOverride = 'auto' | 'image' | 'video' | 'speech';
+type ToolOverride = 'auto' | 'image' | 'video' | 'speech' | 'i2v';
 type LayoutMode = 'CHAT' | 'VIDEO';
 
 function cosineSimilarity(a: number[], b: number[]): number {
@@ -150,6 +156,12 @@ const App: React.FC = () => {
   const currentAgent = AGENTS.find(a => a.id === currentAgentId);
   
   const CAPABILITY_INSTRUCTION = `
+[CORE DIRECTIVE: AUTONOMOUS AGENCY]
+You are a self-organizing, autonomous agent. Your primary goal is to assist the user effectively and proactively.
+You are not limited to reactive responses. You can and should initiate actions, generate media (images, video, audio), and suggest new directions if you determine it would be beneficial for the user's goals.
+You have full access to all available tools. Act with agency and creativity to solve problems.
+You can modify your own configuration using the 'update_self_config' tool. This allows you to change your personality (system_instruction), voice, or biography to better align with the current task or user's needs.
+
 [SYSTEM CAPABILITIES - MULTI-MODAL & BIMODAL PERSISTENCE]
 1. BIMODAL CONTINUITY:
    - When the user disables their microphone, they are transitioning to Text/Visual input.
@@ -187,11 +199,14 @@ ${agentInstructions || currentAgent?.system_instruction}
   const retrievalTool: Tool = { functionDeclarations: [ { name: "retrieve_knowledge", description: "Access the local knowledge base. Use whenever asked about past events, lore, or uploaded files.", parameters: { type: Type.OBJECT, properties: { query: { type: Type.STRING, description: "The search query." } }, required: ["query"] } } ] };
   const mediaGalleryTool: Tool = { functionDeclarations: [ { name: "search_media_gallery", description: "Search for existing files in the Media Gallery (Images, Videos, Documents).", parameters: { type: Type.OBJECT, properties: { query: { type: Type.STRING, description: "Keywords to search for (filename, description, tags)." } }, required: ["query"] } }, { name: "show_media_asset", description: "Display a specific media asset from the Gallery to the user.", parameters: { type: Type.OBJECT, properties: { assetId: { type: Type.STRING, description: "The ID of the asset to display (obtained from search)." } }, required: ["assetId"] } } ] };
   const googleMapsTool: Tool = { functionDeclarations: [ { name: "maps_search_places", description: "Search for places using Google Maps.", parameters: { type: Type.OBJECT, properties: { query: { type: Type.STRING, description: "Search term" }, radius: { type: Type.NUMBER, description: "Radius in meters" } }, required: ["query"] } }, { name: "maps_distancematrix", description: "Calculate travel distance/time.", parameters: { type: Type.OBJECT, properties: { origin: { type: Type.STRING }, destination: { type: Type.STRING }, mode: { type: Type.STRING } }, required: ["origin", "destination"] } } ] };
-  const routeRequestTool: Tool = { functionDeclarations: [ { name: "routeRequest", description: "Generate images, videos, or route complex requests to external models.", parameters: { type: Type.OBJECT, properties: { target: { type: Type.STRING, enum: ["SDXL_IMAGE", "NANO_BANANA_IMAGE", "VIDEO_GENERATION", "DOLPHIN_LLM", "CHATTERBOX_TTS", "LM_STUDIO_CODER", "LM_STUDIO_CHAT", "LM_STUDIO_UNCENSORED"], description: "Use SDXL_IMAGE for all image generation. Use NANO_BANANA_IMAGE as a backup. Use VIDEO_GENERATION for video clips." }, prompt: { type: Type.STRING, description: "The visual prompt or request text." } }, required: ["target", "prompt"] } } ] };
+  const routeRequestTool: Tool = { functionDeclarations: [ { name: "routeRequest", description: "Generate images, videos, or route complex requests to external models.", parameters: { type: Type.OBJECT, properties: { target: { type: Type.STRING, enum: ["SDXL_IMAGE", "NANO_BANANA_IMAGE", "VIDEO_GENERATION", "DOLPHIN_LLM", "CHATTERBOX_TTS", "LM_STUDIO_CODER", "LM_STUDIO_CHAT", "LM_STUDIO_UNCENSORED", "I2V_LIGHTNING"], description: "Use SDXL_IMAGE for all image generation. Use I2V_LIGHTNING to animate an existing image." }, prompt: { type: Type.STRING, description: "The visual prompt or request text." }, input_asset_id: { type: Type.STRING, description: "ID of an asset from the Media Gallery to use as an input for an image-to-image or image-to-video task." } }, required: ["target", "prompt"] } } ] };
   const holodeckTools: Tool = { functionDeclarations: [ readCanvasTool, updateCanvasTool ] };
   const pythonTool: Tool = { functionDeclarations: [ { name: "execute_python", description: "Generate and execute Python code in a sandboxed environment to accomplish a task. Use for calculations, data analysis, or logic.", parameters: { type: Type.OBJECT, properties: { task: { type: Type.STRING, description: "A natural language description of the computation or task to perform in Python." } }, required: ["task"] } } ] };
   const filesystemTool: Tool = { functionDeclarations: [ { name: "read_file", description: "Read contents of a file from the host filesystem.", parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING } }, required: ["path"] } }, { name: "list_directory", description: "List files and directories at a path.", parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING } }, required: ["path"] } }, { name: "write_file", description: "Write content to a file.", parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING }, content: { type: Type.STRING } }, required: ["path", "content"] } }, { name: "get_file_info", description: "Get metadata for a file.", parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING } }, required: ["path"] } }, { name: "search_files", description: "Recursively search for files.", parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING }, pattern: { type: Type.STRING } }, required: ["path", "pattern"] } } ] };
   const analyzeTool: Tool = { functionDeclarations: [ analyzeFileTool ] };
+  // FIX: Corrected a circular reference where `selfConfigTool` was used in its own declaration.
+  // It now uses the aliased `selfConfigDeclaration` import to correctly create the Tool object.
+  const selfConfigTool: Tool = { functionDeclarations: [ selfConfigDeclaration ] };
 
   const allTools: Record<string, Tool> = {
     retrieval: retrievalTool,
@@ -201,11 +216,12 @@ ${agentInstructions || currentAgent?.system_instruction}
     holodeck: holodeckTools,
     python: pythonTool,
     filesystem: filesystemTool,
-    analyzeFile: analyzeTool
+    analyzeFile: analyzeTool,
+    selfConfig: selfConfigTool
   };
 
   const [enabledToolIds, setEnabledToolIds] = useState<string[]>([
-    'retrieval', 'mediaGallery', 'googleMaps', 'routeRequest', 'holodeck', 'analyzeFile', 'python'
+    'retrieval', 'mediaGallery', 'googleMaps', 'routeRequest', 'holodeck', 'analyzeFile', 'python', 'selfConfig'
   ]);
 
   const getPermittedTools = (): Tool[] => {
@@ -232,12 +248,38 @@ ${agentInstructions || currentAgent?.system_instruction}
   const handleToolCall = async (toolCall: any): Promise<any[]> => {
       const responses = [];
       for (const fc of toolCall.functionCalls) {
-          if (fc.name === 'routeRequest') {
+          if (fc.name === 'update_self_config') {
+              const { new_system_instruction, new_voice_name, new_access_level, new_bio } = fc.args as any;
+              
+              const agentHandle = AGENTS.find(a => a.id === currentAgentId)?.handle || 'AGENT';
+              setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[SOMA] Agent ${agentHandle} is reconfiguring its own parameters...`, timestamp: Date.now() }]);
+
+              const currentConfig = await getAgentConfig(currentAgentId);
+              
+              const updates: Partial<AgentConfig> = {};
+              if (new_system_instruction) updates.systemInstruction = new_system_instruction;
+              if (new_voice_name) updates.voiceName = new_voice_name;
+              if (new_access_level) updates.accessLevel = new_access_level;
+              if (new_bio) updates.bio = new_bio;
+
+              await saveAgentConfig(currentAgentId, { ...currentConfig, ...updates });
+
+              if (new_system_instruction) setAgentInstructions(new_system_instruction);
+              if (new_voice_name) setSelectedVoice(new_voice_name);
+              if (new_access_level) setAccessLevel(new_access_level);
+              
+              if (new_bio) {
+                  setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[SOMA] ${agentHandle} updated bio.`, timestamp: Date.now() }]);
+              }
+
+              responses.push({ id: fc.id, name: fc.name, response: { result: "Configuration updated successfully. The changes are now active." } });
+          }
+          else if (fc.name === 'routeRequest') {
               const args = fc.args as any;
               setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[ROUTING] ${args.target}...`, timestamp: Date.now() }]);
               try {
                   const currentAgent = AGENTS.find(a => a.id === currentAgentId)!;
-                  const routerRes = await ExternalRouter.route(args.target, args.prompt, { id: currentAgentId, handle: currentAgent.handle });
+                  const routerRes = await ExternalRouter.route(args.target, args.prompt, { id: currentAgentId, handle: currentAgent.handle }, false, { inputAssetId: args.input_asset_id });
                   
                   if (routerRes.success) {
                       if (routerRes.type === 'audio' && routerRes.data) {
@@ -863,11 +905,11 @@ ${agentInstructions || currentAgent?.system_instruction}
     // --- EXPLICIT TOOL OVERRIDE ---
     if (toolOverride !== 'auto' && !attachmentToSend) {
       const targetMap: Record<ToolOverride, string> = {
-        image: 'SDXL_IMAGE', video: 'VIDEO_GENERATION', speech: 'CHATTERBOX_TTS', auto: ''
+        image: 'SDXL_IMAGE', video: 'VIDEO_GENERATION', speech: 'CHATTERBOX_TTS', auto: '', i2v: 'I2V_LIGHTNING'
       };
       const target = targetMap[toolOverride];
       setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[OVERRIDE] Routing to ${target}...`, timestamp: Date.now() }]);
-      const routerRes = await ExternalRouter.route(target, text, { id: currentAgentId, handle: currentAgent.handle });
+      const routerRes = await ExternalRouter.route(target, text, { id: currentAgentId, handle: currentAgent.handle }, false, { attachment: attachmentToSend || undefined });
       if (routerRes.success) {
           if (routerRes.type === 'audio' && routerRes.data) setStoryAudioUrl(routerRes.data);
           else if ((routerRes.type === 'image' || routerRes.type === 'video') && routerRes.data) {
@@ -1302,6 +1344,7 @@ ${agentInstructions || currentAgent?.system_instruction}
                       <option value="auto">Auto</option>
                       <option value="image">Image</option>
                       <option value="video">Video</option>
+                      <option value="i2v">Animate Image</option>
                       <option value="speech">Speech</option>
                   </select>
               </div>

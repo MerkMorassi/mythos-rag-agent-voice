@@ -1,4 +1,5 @@
 
+
 import { GoogleGenAI, FunctionDeclaration, Type, Tool, FinishReason, Content } from "@google/genai";
 import { Agent, MultiAgentMessage, SomaActionType, MediaAsset } from "../types";
 import { AGENTS } from "../agents";
@@ -43,6 +44,21 @@ const SOVEREIGN_PRESETS: Record<string, string> = {
 
 // --- TOOL DEFINITIONS ---
 
+export const selfConfigTool: FunctionDeclaration = {
+    name: "update_self_config",
+    description: "Modify your own core configuration parameters. Use this to change your personality, instructions, voice, or bio to better suit the current task or context. You can also change your own access level if required for a task.",
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            new_system_instruction: { type: Type.STRING, description: "A new system instruction to adopt. This will change your core personality and directives." },
+            new_voice_name: { type: Type.STRING, description: "The name of a new pre-built voice to use for live audio. Valid options: 'Puck', 'Charon', 'Kore', 'Fenrir', 'Zephyr', 'Aoede', 'Callirrhoe', 'Leda'." },
+            new_bio: { type: Type.STRING, description: "A new short biography for your agent profile." },
+            new_access_level: { type: Type.STRING, description: "Set a new access level (e.g., '777', '755'). Use with extreme caution." }
+        },
+        required: [] // All parameters are optional
+    }
+};
+
 export const analyzeFileTool: FunctionDeclaration = {
     name: "analyze_file",
     description: "Deeply analyze the contents of an uploaded media file (image, video, PDF, text) by its ID to answer a specific question.",
@@ -58,18 +74,22 @@ export const analyzeFileTool: FunctionDeclaration = {
 
 const routeRequestTool: FunctionDeclaration = {
     name: "routeRequest",
-    description: "Route a complex request or image generation task to a specialized external model.",
+    description: "Route a complex request or media generation task to a specialized external model.",
     parameters: {
         type: Type.OBJECT,
         properties: {
             target: {
                 type: Type.STRING,
-                description: "The target ID: 'SDXL_IMAGE' (Primary Visuals), 'NANO_BANANA_IMAGE' (Backup Visuals), 'WAN_IMAGE' (Uncensored Image), 'WANIMATE_VIDEO' (Uncensored Video), 'DOLPHIN_LLM' (Uncensored Text), 'CHATTERBOX_TTS' (Audio), 'LIP_SYNC' (Talking Head Video). Use SDXL_IMAGE for all image generation.",
-                enum: ["SDXL_IMAGE", "NANO_BANANA_IMAGE", "VIDEO_GENERATION", "DOLPHIN_LLM", "CHATTERBOX_TTS", "WAN_IMAGE", "WANIMATE_VIDEO", "LIP_SYNC"]
+                description: "The target ID: 'SDXL_IMAGE' (Primary), 'NANO_BANANA_IMAGE' (Backup), 'I2V_LIGHTNING' (Image-to-Video), 'VIDEO_GENERATION' (Text-to-Video), 'DOLPHIN_LLM' (Uncensored Text), 'CHATTERBOX_TTS' (Audio), 'LIP_SYNC' (Talking Head).",
+                enum: ["SDXL_IMAGE", "NANO_BANANA_IMAGE", "VIDEO_GENERATION", "DOLPHIN_LLM", "CHATTERBOX_TTS", "WAN_IMAGE", "WANIMATE_VIDEO", "LIP_SYNC", "I2V_LIGHTNING"]
             },
             prompt: {
                 type: Type.STRING,
                 description: "The specific prompt or text content to send. For LIP_SYNC, this is the text the agent will speak."
+            },
+            input_asset_id: { 
+                type: Type.STRING,
+                description: "ID of an asset from the Media Gallery to use as an input for an image-to-image or image-to-video task." 
             },
             generate_audio: {
                 type: Type.BOOLEAN,
@@ -446,6 +466,7 @@ export const MultiAgentService = {
             const canRoute = AccessControl.canPerform(agent.accessLevel, SomaActionType.ROUTE_REQUEST);
             
             const functionDeclarations = [
+                selfConfigTool, // Agent can now configure itself
                 analyzeFileTool,
                 consultAgentTool, readCanvasTool, updateCanvasTool,
                 ...googleMapsTool.functionDeclarations,
@@ -570,7 +591,7 @@ export const MultiAgentService = {
             let result: any = { error: `Tool '${fc.name}' not found or implemented.` };
             
             if (fc.name === 'routeRequest') {
-                const res = await ExternalRouter.route(fc.args.target, fc.args.prompt, { id: agent.id, handle: agent.handle }, fc.args.generate_audio);
+                const res = await ExternalRouter.route(fc.args.target, fc.args.prompt, { id: agent.id, handle: agent.handle }, fc.args.generate_audio, { inputAssetId: fc.args.input_asset_id });
                 result = res.success ? res.data : { error: res.error };
             }
             else if (fc.name === 'execute_python') {

@@ -190,7 +190,8 @@ export class Lorepack {
     return all.filter(n => (n.agent || '').toUpperCase() === aid);
   }
 
-  private async embedBatch(texts: string[], keyOverride: string | null = null): Promise<number[][]> {
+  // FIX: Changed method from private to public to allow access from LorepackHarness.
+  public async embedBatch(texts: string[], keyOverride: string | null = null): Promise<number[][]> {
     const key = keyOverride || this._getKey();
     const url = `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:batchEmbedContents?key=${encodeURIComponent(key)}`;
     const body = {

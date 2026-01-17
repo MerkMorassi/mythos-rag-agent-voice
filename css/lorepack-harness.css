@@ -48,7 +48,6 @@
   padding:14px;
   display:flex;
   flex-direction:column;
-  gap:10px;
   overflow:hidden;
 }
 
@@ -121,6 +120,7 @@
   display:grid;
   grid-template-columns: 1fr 1fr 1fr;
   gap:10px;
+  margin-bottom: 10px;
 }
 
 .lorepack-harness .stat-item{
@@ -154,6 +154,7 @@
   padding:10px;
   font-size:12px;
   line-height:1.4;
+  margin-bottom: 10px;
 }
 
 .lorepack-harness .log-entry{ margin-bottom:8px; word-break: break-word; }
@@ -166,6 +167,7 @@
   height:10px;
   border:1px solid var(--color-border);
   background:#111;
+  margin-bottom: 10px;
 }
 .lorepack-harness .progress-bar{
   height:100%;
@@ -174,10 +176,24 @@
   transition: width 0.1s linear;
 }
 
-.lorepack-harness .chat-input-area {
-  display:flex;
-  gap:10px;
-  align-items:stretch;
+/* NEW STYLES FOR COMMAND DECK */
+.lorepack-harness .command-deck {
+    margin-top: auto;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--color-border);
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+.lorepack-harness .tray-controls {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.lorepack-harness .input-bar {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
 }
 
 .lorepack-harness .modal-overlay {
