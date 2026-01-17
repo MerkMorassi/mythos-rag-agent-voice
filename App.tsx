@@ -524,8 +524,8 @@ ${agentInstructions || currentAgent?.system_instruction}
           // Auto-start session
           connect();
           messageQueueRef.current.push(msg);
-      } else if (isPlaying || isThinking) {
-          // Queue to avoid interruption
+      } else if (isThinking) {
+          // Queue to avoid interruption only when thinking
           messageQueueRef.current.push(msg);
       } else {
           sendText(text, attachment);

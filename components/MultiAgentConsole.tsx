@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 // FIX: Replaced non-existent KnowledgeDoc with VectorRecord.
 import { MultiAgentMessage, LogMessage, VectorRecord, ChatSession } from '../types';
@@ -17,6 +18,7 @@ import {
 import { RoomFocusService } from '../services/roomFocus';
 import { IngestionService } from '../services/ingestion';
 import { ProductionBoard } from './ProductionBoard';
+import './../css/multi-agent-console.css';
 
 interface MultiAgentConsoleProps {
     onExit: () => void;
