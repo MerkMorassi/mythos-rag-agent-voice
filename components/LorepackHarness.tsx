@@ -15,7 +15,7 @@ interface LorepackHarnessProps {
   onExit: () => void;
 }
 
-type ToolOverride = 'auto' | 'image' | 'video' | 'speech';
+type ToolOverride = 'auto' | 'image' | 'video' | 'speech' | 'i2v';
 
 // Helper from App.tsx
 function cosineSimilarity(a: number[], b: number[]): number {
@@ -39,6 +39,7 @@ export const LorepackHarness: React.FC<LorepackHarnessProps> = ({ onExit }) => {
     const [stats, setStats] = useState({ nodes: 0, edges: 0, staged: 0, stagedSize: 0 });
     const [state, setState] = useState('IDLE');
     const [progress, setProgress] = useState(0);
+    const [isIndeterminateProgress, setIsIndeterminateProgress] = useState(false);
 
     // Params State
     const [agentId, setAgentId] = useState('');
@@ -303,17 +304,22 @@ Acknowledge the new input and seamlessly integrate it into the ongoing conversat
         if (!file) return;
         setBusy(true, 'IMPORTING');
         setProgress(0);
+        setIsIndeterminateProgress(file.name.endsWith('.gz'));
+        addLog(`Starting import of "${file.name}"...`, 'SYS');
         try {
-            const res = await lorepack.current.import(file, ({ processed }) => {
-                setProgress(Math.min(99, (processed % 5000) / 50));
+            const res = await lorepack.current.import(file, ({ processed, total }) => {
+                if (total > 0) {
+                    setProgress((processed / total) * 100);
+                }
             });
-            addLog(`Imported ${res.nodesImported} items.`, 'SYS', 'ok');
+            addLog(`Import complete. Imported ${res.nodesImported} items.`, 'SYS', 'ok');
             await refreshStats();
         } catch (e: any) {
             addLog(`Import failed: ${e.message}`, 'ERR', 'err');
         } finally {
             setBusy(false, 'IDLE');
             setProgress(0);
+            setIsIndeterminateProgress(false);
             if(importRef.current) importRef.current.value = '';
         }
     };
@@ -351,17 +357,23 @@ Acknowledge the new input and seamlessly integrate it into the ongoing conversat
         addLog(q || `[Attachment: ${attachmentToSend?.name}]`, 'OPERATOR', 'user');
 
         // --- EXPLICIT TOOL OVERRIDE ---
-        if (toolOverride !== 'auto' && !attachmentToSend) {
+        if (toolOverride !== 'auto') {
             const agentName = agentId || 'ARCHIVAX';
             const agentHandle = agentName; 
             const currentAgent = {id: agentName, handle: agentHandle};
 
             const targetMap: Record<ToolOverride, string> = {
-                image: 'SDXL_IMAGE', video: 'VIDEO_GENERATION', speech: 'CHATTERBOX_TTS', auto: ''
+                image: 'SDXL_IMAGE', video: 'VIDEO_GENERATION', speech: 'CHATTERBOX_TTS', auto: '', i2v: 'I2V_LIGHTNING'
             };
             const target = targetMap[toolOverride];
             addLog(`[OVERRIDE] Routing to ${target}...`, 'SYS', 'sys');
-            const routerRes = await ExternalRouter.route(target, q, { id: currentAgent.id, handle: currentAgent.handle });
+            const routerRes = await ExternalRouter.route(
+                target, 
+                q, 
+                { id: currentAgent.id, handle: currentAgent.handle },
+                false,
+                { attachment: attachmentToSend || undefined }
+            );
             if (routerRes.success) {
                 if ((routerRes.type === 'image' || routerRes.type === 'video') && routerRes.data) {
                     addLog(`[GENERATED ${routerRes.type.toUpperCase()}] ${q}`, agentHandle, 'ai', routerRes.data?.split(',')[1], routerRes.type);
@@ -417,15 +429,25 @@ Acknowledge the new input and seamlessly integrate it into the ongoing conversat
     };
 
     const runNuke = async () => {
-        await lorepack.current.nuke();
-        location.reload();
+        addLog('Initiating vault purge...', 'SYS', 'err');
+        setBusy(true, 'NUKING');
+        try {
+            await lorepack.current.nuke();
+            addLog('Vault purged successfully. Reloading interface...', 'SYS', 'ok');
+            setShowNukeModal(false);
+            setTimeout(() => location.reload(), 1000);
+        } catch (e: any) {
+            addLog(`Vault purge failed: ${e.message}`, 'ERR', 'err');
+            setBusy(false, 'IDLE');
+            setShowNukeModal(false);
+        }
     };
 
     return (
         <div className="lorepack-harness">
             {showNukeModal && (
-                <div id="nukeModal" className="modal-overlay" style={{display:'flex'}}>
-                    <div className="modal">
+                <div id="nukeModal" className="modal-overlay" onClick={() => setShowNukeModal(false)}>
+                    <div className="modal" onClick={e => e.stopPropagation()}>
                         <h2>PURGE VAULT?</h2>
                         <div className="row" style={{display:'flex', gap:'1rem'}}>
                             <button id="nukeConfirmBtn" className="btn danger flex-1" onClick={runNuke}>CONFIRM</button>
@@ -545,10 +567,13 @@ Acknowledge the new input and seamlessly integrate it into the ongoing conversat
                     </div>
 
                     <div className="progress-container">
-                        <div className="progress-bar" style={{width: `${progress}%`}}></div>
+                        <div 
+                            className={`progress-bar ${isIndeterminateProgress ? 'indeterminate' : ''}`} 
+                            style={{width: `${isIndeterminateProgress ? 100 : progress}%`}}
+                        ></div>
                     </div>
                     
-                    <div className="command-deck">
+                    <footer className="command-deck">
                         <div className="tray-controls">
                            <div className="flex-group">
                                 <button onClick={() => setIsMicOn(!isMicOn)} className={`btn btn-icon ${isMicOn ? 'active-green' : 'btn-danger'}`} title={isMicOn ? "Mute Microphone" : "Unmute Microphone"}>
@@ -564,6 +589,7 @@ Acknowledge the new input and seamlessly integrate it into the ongoing conversat
                                     <option value="auto">Auto</option>
                                     <option value="image">Image</option>
                                     <option value="video">Video</option>
+                                    <option value="i2v">Animate Image</option>
                                     <option value="speech">Speech</option>
                                 </select>
                             </div>
@@ -602,7 +628,7 @@ Acknowledge the new input and seamlessly integrate it into the ongoing conversat
 
                             <button onClick={handleSend} className="btn btn-secondary btn-lg" title="Send Message" disabled={(!chatInput.trim() && !pendingAttachment)}>SEND</button>
                         </div>
-                    </div>
+                    </footer>
                 </div>
             </div>
         </div>

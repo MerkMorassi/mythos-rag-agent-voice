@@ -1,5 +1,4 @@
 
-
 import { GraphEdge, GraphNode, VectorRecord } from '../types';
 
 // LOREPACK™ v3.7.0 :: SOVEREIGN KERNEL (TypeScript Port)
@@ -333,9 +332,21 @@ export class Lorepack {
     }
   }
 
-  async import(fileOrBlob: File, onProgress?: (p: { processed: number }) => void): Promise<{ success: boolean, nodesImported: number }> {
+  async import(fileOrBlob: File, onProgress?: (p: { processed: number, total: number }) => void): Promise<{ success: boolean, nodesImported: number }> {
     await this.db.ready;
     const fileName = fileOrBlob?.name || '';
+    
+    let total = 0;
+    if (!fileName.endsWith('.gz')) {
+        try {
+            const text = await fileOrBlob.text();
+            total = (text.match(/\r?\n/g) || []).length;
+            if (text.length > 0 && !text.endsWith('\n')) total += 1;
+        } catch (e) {
+            console.warn("Could not pre-read file for total line count.", e);
+        }
+    }
+
     let stream: ReadableStream<Uint8Array> = fileOrBlob.stream();
     if (fileName.endsWith('.gz')) stream = stream.pipeThrough(new DecompressionStream('gzip'));
     const reader = stream.pipeThrough(new TextDecoderStream()).getReader();
@@ -366,7 +377,7 @@ export class Lorepack {
       
       count += batch.length;
       batch = [];
-      if (onProgress) onProgress({ processed: count });
+      if (onProgress) onProgress({ processed: count, total });
     };
 
     while (true) {
@@ -386,6 +397,9 @@ export class Lorepack {
        try { batch.push(JSON.parse(buffer.trim())); } catch(e){}
     }
     await writeBatch();
+
+    if (onProgress) onProgress({ processed: count, total });
+
     return { success: true, nodesImported: count };
   }
 

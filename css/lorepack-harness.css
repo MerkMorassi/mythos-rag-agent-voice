@@ -176,6 +176,18 @@
   transition: width 0.1s linear;
 }
 
+.lorepack-harness .progress-bar.indeterminate {
+  background-image: linear-gradient(45deg, rgba(255,255,255,.15) 25%, transparent 25%, transparent 50%, rgba(255,255,255,.15) 50%, rgba(255,255,255,.15) 75%, transparent 75%, transparent);
+  background-size: 40px 40px;
+  animation: progress-bar-stripes 2s linear infinite;
+}
+
+@keyframes progress-bar-stripes {
+  from { background-position: 40px 0; }
+  to { background-position: 0 0; }
+}
+
+
 /* NEW STYLES FOR COMMAND DECK */
 .lorepack-harness .command-deck {
     margin-top: auto;
@@ -215,4 +227,24 @@
     gap: 1rem;
     min-width: 300px;
     text-align: center;
+}
+
+.lorepack-harness .command-deck .tray-selector {
+    font-family: var(--font-sans);
+    font-weight: bold;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    height: var(--btn-h-xs);
+    padding: 0 1.5rem 0 0.75rem;
+    background-color: #222;
+    background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
+    background-repeat: no-repeat;
+    background-position: right 0.5rem center;
+    background-size: 1em;
+    -webkit-appearance: none;
+    appearance: none;
+    border-radius: 4px !important;
+}
+.lorepack-harness .command-deck .tray-selector:hover {
+    border-color: #666;
 }
