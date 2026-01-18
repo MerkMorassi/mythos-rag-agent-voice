@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { GoogleGenAI } from '@google/genai';
 import { LogMessage, ChatSession, VectorRecord } from '../types';
@@ -221,7 +222,7 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
             <div className="flex-group">
                 <button 
                   onClick={handleClear} 
-                  className="btn btn-danger" 
+                  className="btn btn-danger btn-md" 
                   style={{flex: 1}}
                   disabled={currentLogs.length === 0}
                   title="Clear current active conversation"
@@ -230,7 +231,7 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
                 </button>
             </div>
             <form onSubmit={handleSave} className="flex-col" style={{marginTop: '1rem', gap: '0.5rem'}}>
-              <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <div className="flex-group">
                 <input
                   type="text"
                   placeholder="Session Name (e.g. Project Alpha)"
@@ -241,8 +242,7 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
                 />
                 <button 
                   type="submit" 
-                  className="btn btn-primary"
-                  style={{ padding: '0 1.5rem'}}
+                  className="btn btn-primary btn-md"
                   disabled={currentLogs.length === 0 || !sessionName.trim()}
                   title="Save current session to history"
                 >
@@ -268,10 +268,11 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
                             {new Date(session.timestamp).toLocaleString()}
                          </span>
                     </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 30px', gap: '0.5rem' }}>
+                    <div className="flex-group">
                         <button 
                             onClick={() => handleLoad(session)}
                             className="btn btn-secondary btn-xs"
+                            style={{ flex: 1 }}
                             title="Restore this session into active view"
                         >
                             LOAD
@@ -279,13 +280,15 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
                         <button 
                             onClick={() => handleExportJson(session)}
                             className="btn btn-secondary btn-xs"
+                             style={{ flex: 1 }}
                             title="Download Legacy LorePack (.json)"
                         >
                             EXPORT JSON
                         </button>
                         <button 
                             onClick={() => handleIngestToLore(session)}
-                            className="btn btn-xs btn-accent"
+                            className="btn btn-accent btn-xs"
+                            style={{ flex: 1 }}
                             title={`Embed into ${currentAgentId}'s RAG Database`}
                             disabled={!!ingestingId}
                         >
@@ -293,9 +296,8 @@ const ChatHistoryManager: React.FC<ChatHistoryManagerProps> = ({
                         </button>
                         <button 
                             onClick={() => handleDelete(session.id)}
-                            className="btn btn-danger btn-xs"
+                            className="btn btn-icon btn-danger btn-xs"
                             title="Delete Session"
-                            style={{ padding: 0 }}
                         >
                             ×
                         </button>

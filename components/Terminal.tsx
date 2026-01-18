@@ -89,12 +89,11 @@ export const Terminal: React.FC<TerminalProps> = ({ isOpen, onClose, onSwitchAge
             <div style={{ padding: '0.5rem', background: '#222', borderBottom: '1px solid #333', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span style={{ fontWeight: 'bold', color: '#4ade80', paddingLeft: '0.5rem' }}>MYTHOS TERMINAL // BASH v1.0</span>
                 <button 
-                    className="btn btn-ghost"
-                    style={{ fontSize: '0.8rem', padding: '0.25rem 0.5rem', fontWeight: 'bold' }}
+                    className="btn btn-ghost btn-sm"
                     onClick={onClose}
                     title="Close Terminal"
                 >
-                    [CLOSE X]
+                    CLOSE
                 </button>
             </div>
             

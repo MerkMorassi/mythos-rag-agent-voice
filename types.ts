@@ -215,6 +215,15 @@ export interface MediaAsset {
     tags?: string[];
 }
 
+// --- SAVED PROMPT ---
+export interface SavedPrompt {
+    id: string;
+    agentId: string;
+    name: string;
+    content: string;
+}
+
+
 // --- HOLODECK STATE (SHARED CANVAS) ---
 export interface CanvasSection {
     id: string;

@@ -180,6 +180,7 @@ html, body, #root {
 .btn-secondary { background: var(--color-secondary); color: #ccc; }
 .btn-danger { background: var(--color-danger); color: #fff; border-color: var(--color-danger); }
 .btn-accent { background: var(--color-accent); color: #000; border-color: var(--color-accent); }
+.btn-cyan { background: var(--color-cyan); color: #fff; border-color: var(--color-cyan); }
 .btn.active-green { background: var(--color-success); color: #000; border-color: var(--color-success); }
 .btn-xl { height: var(--btn-h-xl); }
 .btn-lg { height: var(--btn-h-lg); }
@@ -188,6 +189,18 @@ html, body, #root {
 .btn-xs { height: var(--btn-h-xs); font-size: 0.65rem; }
 .btn-icon { padding: 0; width: var(--btn-h-md); height: var(--btn-h-md); flex-shrink: 0; }
 .btn-icon.btn-lg { width: var(--btn-h-lg); height: var(--btn-h-lg); }
+.btn-icon.btn-sm { width: var(--btn-h-sm); height: var(--btn-h-sm); }
+.btn-icon.btn-xs { width: var(--btn-h-xs); height: var(--btn-h-xs); }
+.btn-ghost {
+    background: transparent;
+    border-color: transparent;
+    color: var(--color-text-muted);
+}
+.btn-ghost:hover:not(:disabled) {
+    background: var(--color-secondary);
+    color: var(--color-text-main);
+}
+
 
 .logo-text { font-weight: 900; letter-spacing: 0.1em; color: #e5e5e5; font-size: 1.1rem; }
 .divider { color: #333; margin: 0 0.5rem; }

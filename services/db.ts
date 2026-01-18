@@ -1,3 +1,4 @@
+
 import { 
     VectorRecord,
     ChatSession, 
@@ -8,6 +9,7 @@ import {
     CanonBlock,
     WorkingMemory,
     SovereignConfig,
+    SavedPrompt,
     DEFAULT_MODEL_CONFIG,
     DEFAULT_SOVEREIGN_CONFIG,
     GraphNode,
@@ -16,15 +18,8 @@ import {
 import { GoogleGenAI, Type } from "@google/genai";
 import { UsageLogEntry } from './llmUsageLogger';
 
-export interface SavedPrompt {
-    id: string;
-    agentId: string;
-    name: string;
-    content: string;
-}
-
 const DB_NAME = 'MythOS_DB';
-const DB_VERSION = 9; // Incremented version to add agentId index to chat_sessions
+const DB_VERSION = 10; // Incremented version to add agentId index to chat_sessions
 
 // Stores
 export const VECTORS_STORE = 'vectors';

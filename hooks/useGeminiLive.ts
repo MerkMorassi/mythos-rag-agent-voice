@@ -26,7 +26,7 @@ export function useGeminiLive({
     onToolCall 
 }: UseGeminiLiveProps) {
     const [connectionState, setConnectionState] = useState<ConnectionState>(ConnectionState.DISCONNECTED);
-    const [isMicOn, setIsMicOn] = useState(true);
+    const [isMicOn, setIsMicOn] = useState(false);
     const [isThinking, setIsThinking] = useState(false);
     const [isPlaying, setIsPlaying] = useState(false);
 

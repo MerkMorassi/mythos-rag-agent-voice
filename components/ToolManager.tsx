@@ -1,5 +1,4 @@
 
-
 import React, { useState, useEffect } from 'react';
 import { Agent, SomaActionType } from '../types';
 import { AccessControl } from '../services/accessControl';
@@ -23,7 +22,8 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
     holodeck: "Read from and write to the shared visual canvas.",
     python: "Execute sandboxed Python code for calculations and logic.",
     filesystem: "Read, write, and list files on the host system.",
-    analyzeFile: "Perform deep analysis on media files (images, video)."
+    analyzeFile: "Perform deep analysis on media files (images, video).",
+    selfConfig: "Allow the agent to modify its own configuration."
 };
 
 export const ToolManager: React.FC<ToolManagerProps> = ({ 
@@ -69,6 +69,7 @@ export const ToolManager: React.FC<ToolManagerProps> = ({
             filesystem: SomaActionType.EXEC_CODE,
             routeRequest: SomaActionType.ROUTE_REQUEST,
             googleMaps: SomaActionType.ROUTE_REQUEST, // Also a form of routing
+            selfConfig: SomaActionType.SYSTEM_ADMIN // Requires high privilege
         };
 
         const action = actionMap[toolId];

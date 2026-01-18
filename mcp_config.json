@@ -25,6 +25,66 @@
     },
     "gradio": {
       "url": "https://edbanshee-wan22-14b-lightning-14b-i2v-ui.hf.space/gradio_api/mcp/"
+    },
+    "flux_klein_9b": {
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "https://black-forest-labs-flux-2-klein-9b.hf.space/gradio_api/mcp/",
+        "--transport",
+        "streamable-http"
+      ]
+    },
+    "upload_to_flux": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "gradio[mcp]",
+        "gradio",
+        "upload-mcp",
+        "https://black-forest-labs-flux-2-klein-9b.hf.space/",
+        "<UPLOAD_DIRECTORY>"
+      ]
+    },
+    "ltx_2_distilled_video": {
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "https://lightricks-ltx-2-distilled.hf.space/gradio_api/mcp/",
+        "--transport",
+        "streamable-http"
+      ]
+    },
+    "upload_to_ltx": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "gradio[mcp]",
+        "gradio",
+        "upload-mcp",
+        "https://lightricks-ltx-2-distilled.hf.space/",
+        "<UPLOAD_DIRECTORY>"
+      ]
+    },
+    "latentsync": {
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "https://fffiloni-latentsync.hf.space/gradio_api/mcp/",
+        "--transport",
+        "streamable-http"
+      ]
+    },
+    "upload_to_latentsync": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "gradio[mcp]",
+        "gradio",
+        "upload-mcp",
+        "https://fffiloni-latentsync.hf.space/",
+        "<UPLOAD_DIRECTORY>"
+      ]
     }
   }
 }

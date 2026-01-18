@@ -1,5 +1,6 @@
+
 import React, { useState, useEffect } from 'react';
-import { SavedPrompt } from '../services/db';
+import { SavedPrompt } from '../types';
 import {
   savePrompt,
   getSavedPromptsByAgentId,

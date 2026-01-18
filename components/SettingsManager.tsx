@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ModelConfig } from '../types';
 import { geminiClient } from '../services/geminiClient';
+import { ExternalRouter } from '../services/externalRouter';
 
 interface SettingsManagerProps {
   modelConfig: ModelConfig;
@@ -38,10 +39,13 @@ const SettingsManager: React.FC<SettingsManagerProps> = (props) => {
   const [pitch, setPitch] = useState(props.voicePitch || 0);
   const [modelsList, setModelsList] = useState<{ name: string, displayName: string }[]>([]);
   
-  // Audio Refs
+  // Audio Refs & TTS Test State
   const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
   const audioPreviewRef = useRef<HTMLAudioElement | null>(null);
   const audioFileInputRef = useRef<HTMLInputElement>(null);
+  const [testText, setTestText] = useState('');
+  const [testAudioUrl, setTestAudioUrl] = useState<string | null>(null);
+  const [isSynthesizing, setIsSynthesizing] = useState(false);
 
   useEffect(() => {
     setVoiceRef(props.voiceReference || '');
@@ -109,6 +113,33 @@ const SettingsManager: React.FC<SettingsManagerProps> = (props) => {
     reader.readAsDataURL(file);
 
     if (audioFileInputRef.current) audioFileInputRef.current.value = '';
+  };
+
+  const handleSynthesizeTest = async () => {
+    if (!testText.trim() || !voiceRef) {
+      alert("Please provide text and a voice sample.");
+      return;
+    }
+    setIsSynthesizing(true);
+    setTestAudioUrl(null);
+    try {
+      const result = await ExternalRouter.route(
+        'CHATTERBOX_TTS', 
+        testText,
+        { id: props.agentId, handle: props.agentName },
+        false,
+        { voiceRefOverride: voiceRef }
+      );
+      if (result.success && result.data) {
+        setTestAudioUrl(result.data);
+      } else {
+        alert(`Synthesis failed: ${result.error}`);
+      }
+    } catch (e: any) {
+      alert(`Synthesis failed: ${e.message}`);
+    } finally {
+      setIsSynthesizing(false);
+    }
   };
 
 
@@ -262,6 +293,31 @@ const SettingsManager: React.FC<SettingsManagerProps> = (props) => {
                         </button>
                     </div>
                 </div>
+
+                <div className="flex-col">
+                    <label className="form-label">SYNTHESIS TEST</label>
+                    <textarea
+                        className="form-input"
+                        style={{ height: '5rem', resize: 'vertical' }}
+                        placeholder="Enter text to synthesize with the current voice sample..."
+                        value={testText}
+                        onChange={e => setTestText(e.target.value)}
+                        maxLength={2000}
+                    />
+                </div>
+                <button
+                    type="button"
+                    onClick={handleSynthesizeTest}
+                    className="btn btn-secondary"
+                    disabled={isSynthesizing || !testText.trim() || !voiceRef}
+                >
+                    {isSynthesizing ? 'SYNTHESIZING...' : 'GENERATE TEST AUDIO'}
+                </button>
+                {testAudioUrl && (
+                    <div style={{ marginTop: '0.5rem' }}>
+                        <audio src={testAudioUrl} controls autoPlay style={{ width: '100%' }} />
+                    </div>
+                )}
             </div>
 
             <div className="flex-col">

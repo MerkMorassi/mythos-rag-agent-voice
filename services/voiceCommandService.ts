@@ -41,7 +41,7 @@ export const DEFAULT_SECTIONS: CommandSection[] = [
         timestamp: Date.now(),
         items: [
             { id: 'p1', label: 'OPTIMIZE', trigger: '"Optimize prompt: [Text]"', description: 'Rewrite prompt via AI.' },
-            { id: 'p2', label: 'SAVE', trigger: '"Save prompt as [Name]"', description: 'Persist current instructions.' }
+            { id: 'p2', label: 'SAVE', trigger: '"Save prompt as [Name]"', description: 'Save last user message to Prompt Library.' }
         ]
     },
     {

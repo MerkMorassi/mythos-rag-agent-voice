@@ -29,6 +29,24 @@ export interface RouteResult {
 }
 
 const DEFAULT_ENDPOINTS: Record<string, ExternalToolConfig> = {
+    LATENT_SYNC_VIDEO: {
+        name: 'LatentSync Video Dubbing',
+        description: 'Lip-syncs an existing video with new audio generated from a text prompt.',
+        url: 'mcp://latentsync',
+        isDefault: true
+    },
+    LTX_2_DISTILLED_VIDEO: {
+        name: 'LTX-2 Distilled Video',
+        description: 'Generates a short video from a text prompt or an image.',
+        url: 'mcp://ltx_2_distilled_video',
+        isDefault: true
+    },
+    FLUX_KLEIN_IMAGE: {
+        name: 'FLUX.2 Klein 9B',
+        description: 'Advanced, fast image generation and editing model (4-step distilled or 50-step base).',
+        url: 'mcp://flux_klein_9b',
+        isDefault: true
+    },
     SDXL_IMAGE: {
         name: 'Mythos SDXL Engine (Hugging Face)',
         description: 'Primary, high-performance, uncensored SDXL model for all image generation tasks.',
@@ -62,7 +80,7 @@ const DEFAULT_ENDPOINTS: Record<string, ExternalToolConfig> = {
     DOLPHIN_LLM: {
         name: 'MythOS Dolphin LLM',
         description: 'Uncensored, fine-tuned sovereign model for direct chat and complex reasoning.',
-        url: 'https://merkmorassi-mythos-rag-agent-voice.hf.space/v1',
+        url: 'https://merkmorassi-mythos-dolphin.hf.space/',
         isDefault: true
     },
     LM_STUDIO_CODER: {
@@ -86,7 +104,7 @@ const DEFAULT_ENDPOINTS: Record<string, ExternalToolConfig> = {
     CHATTERBOX_TTS: {
         name: 'Chatterbox',
         description: 'Long-form audio generation based on agent-specific voice samples.',
-        url: 'https://merkmorassi-chatterbox.hf.space/api/generate',
+        url: 'https://merkmorassi-chatterbox.hf.space/',
         isDefault: true
     },
     LIP_SYNC: {
@@ -180,7 +198,8 @@ export const ExternalRouter = {
         prompt: string, 
         agent: { id: string, handle: string }, 
         generateAudio: boolean = false, 
-        options?: { inputAssetId?: string; attachment?: { mimeType: string; data: string } }
+        // FIX: The attachment object can have a 'name' property. Added it to the type definition.
+        options?: { inputAssetId?: string; attachment?: { mimeType: string; data: string; name?: string; }; voiceRefOverride?: string }
     ): Promise<RouteResult> {
         console.log(`[ROUTER] Routing to ${target}: ${prompt.substring(0, 50)}...`);
         
@@ -193,11 +212,11 @@ export const ExternalRouter = {
             console.warn(`[ROUTER] Sovereign Trigger Detected. Enforcing Uncensored Protocols.`);
             
             // Image Redirect
-            if (target === 'NANO_BANANA_IMAGE') {
+            if (target === 'NANO_BANANA_IMAGE' || target === 'FLUX_KLEIN_IMAGE') {
                 target = 'SDXL_IMAGE';
             }
             // Video Redirect
-            else if (target === 'VIDEO_GENERATION') {
+            else if (target === 'VIDEO_GENERATION' || target === 'LTX_2_DISTILLED_VIDEO' || target === 'LATENT_SYNC_VIDEO') {
                 target = 'WANIMATE_VIDEO';
             }
             // Text/Logic Redirect (if not targeting a specific tool)
@@ -208,7 +227,10 @@ export const ExternalRouter = {
 
         try {
             // --- IMAGE GENERATION ---
-            if (target === 'SDXL_IMAGE') {
+            if (target === 'FLUX_KLEIN_IMAGE') {
+                return await this.callFluxKleinImage(prompt, agent, options);
+            }
+            else if (target === 'SDXL_IMAGE') {
                 return await this.callSdxlImage(prompt, agent, registry.SDXL_IMAGE.url);
             }
             else if (target === 'WAN_IMAGE') {
@@ -221,6 +243,12 @@ export const ExternalRouter = {
             } 
             
             // --- VIDEO GENERATION ---
+            else if (target === 'LATENT_SYNC_VIDEO') {
+                return await this.callLatentSyncVideo(prompt, agent, options);
+            }
+            else if (target === 'LTX_2_DISTILLED_VIDEO') {
+                return await this.callLtx2Video(prompt, agent, options);
+            }
             else if (target === 'VIDEO_GENERATION') {
                 return await this.callVeoVideo(prompt, agent);
             }
@@ -250,13 +278,254 @@ export const ExternalRouter = {
             
             // --- TTS ---
             else if (target === 'CHATTERBOX_TTS') {
-                return await this.callChatterboxTTS(prompt, agent, registry.CHATTERBOX_TTS.url);
+                return await this.callChatterboxTTS(prompt, agent, registry.CHATTERBOX_TTS.url, options?.voiceRefOverride);
             }
             
             return { success: false, type: 'text', error: `Unknown Target: ${target}` };
         } catch (e: any) {
             console.error(`[ROUTER] Call to ${target} failed`, e);
             return { success: false, type: 'text', error: e.message };
+        }
+    },
+
+    // --- LATENT SYNC VIDEO ENGINE ---
+    async callLatentSyncVideo(
+        prompt: string, // This is the text to be spoken
+        agent: { id: string, handle: string }, 
+        options?: { inputAssetId?: string; attachment?: { mimeType: string; data: string; name?: string; } }
+    ): Promise<RouteResult> {
+        const baseURL = "https://fffiloni-latentsync.hf.space";
+        let videoData: { data: string; mimeType: string; name: string } | null = null;
+        let audioBlob: Blob | null = null;
+        let videoPath: string | null = null;
+        let audioPath: string | null = null;
+    
+        // 1. Get Input Video
+        if (options?.attachment && options.attachment.mimeType.startsWith('video/')) {
+            videoData = { data: options.attachment.data, mimeType: options.attachment.mimeType, name: options.attachment.name || 'input.mp4' };
+        } else if (options?.inputAssetId) {
+            const asset = await getMediaAsset(options.inputAssetId);
+            if (asset && asset.type === 'video') {
+                videoData = { data: asset.data, mimeType: 'video/mp4', name: asset.prompt };
+            }
+        }
+        if (!videoData) return { success: false, type: 'text', error: "LatentSync requires an input video from an attachment or `input_asset_id`." };
+    
+        try {
+            // 2. Generate Audio from Prompt
+            console.log("[LatentSync] Step 1: Generating Audio via Chatterbox...");
+            const ttsResult = await this.callChatterboxTTS(prompt, agent, this.getToolRegistry().CHATTERBOX_TTS.url);
+            if (!ttsResult.success || !ttsResult.data) throw new Error("Failed to generate source audio for dubbing.");
+    
+            // Fetch blob from the returned blob URL
+            const audioRes = await fetch(ttsResult.data);
+            audioBlob = await audioRes.blob();
+    
+            // 3. Upload Video and Audio
+            console.log("[LatentSync] Step 2: Uploading media assets...");
+            const videoBlob = new Blob([base64ToUint8Array(videoData.data)], { type: videoData.mimeType });
+    
+            const uploadFile = async (blob: Blob, name: string) => {
+                const formData = new FormData();
+                formData.append('files', blob, name);
+                const uploadRes = await fetch(`${baseURL}/upload`, { method: 'POST', headers: this.getHeaders(), body: formData });
+                if (!uploadRes.ok) throw new Error(`Gradio upload failed: ${uploadRes.statusText}`);
+                const uploadJson = await uploadRes.json();
+                if (!uploadJson || !Array.isArray(uploadJson) || !uploadJson[0]) throw new Error("Gradio upload did not return a valid file path.");
+                return uploadJson[0];
+            };
+    
+            videoPath = await uploadFile(videoBlob, videoData.name);
+            audioPath = await uploadFile(audioBlob, 'audio.wav');
+    
+            // 4. Execute MCP Tool
+            console.log("[LatentSync] Step 3: Executing lip-sync...");
+            const mcpArgs = {
+                video_path: { path: videoPath, url: `${baseURL}/file=${videoPath}`, meta: { _type: "gradio.File" } },
+                audio_path: { path: audioPath, url: `${baseURL}/file=${audioPath}`, meta: { _type: "gradio.File" } }
+            };
+    
+            const mcpResult = await McpClient.execute('latentsync', 'LatentSync_main', mcpArgs);
+            if (mcpResult.status !== 'SUCCESS' || !mcpResult.result) throw new Error(mcpResult.error || "MCP tool returned no result.");
+    
+            const resultVideoPath = mcpResult.result?.path;
+            if (!resultVideoPath) throw new Error("MCP tool did not return a video path.");
+    
+            // 5. Fetch and return result
+            const videoUrl = `${baseURL}/file=${resultVideoPath}`;
+            const finalVideoRes = await fetch(videoUrl);
+            const finalVideoBlob = await finalVideoRes.blob();
+            const base64 = await new Promise<string>((resolve) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result as string);
+                reader.readAsDataURL(finalVideoBlob);
+            });
+    
+            await this.saveGeneratedImage(base64, `Dub: ${prompt}`, agent, 'VID', 'LATENTSYNC');
+            return { success: true, type: 'video', data: base64 };
+    
+        } catch (e: any) {
+            return { success: false, type: 'text', error: `LatentSync Failed: ${e.message}` };
+        }
+    },
+
+    // --- LTX-2 DISTILLED VIDEO ENGINE ---
+    async callLtx2Video(
+        prompt: string, 
+        agent: { id: string, handle: string }, 
+        options?: { inputAssetId?: string; attachment?: { mimeType: string; data: string; name?: string; } }
+    ): Promise<RouteResult> {
+        const baseURL = "https://lightricks-ltx-2-distilled.hf.space";
+        let inputImagePath: string | null = null;
+        let imageData: { data: string; mimeType: string; name: string } | null = null;
+
+        if (options?.attachment) {
+            imageData = { data: options.attachment.data, mimeType: options.attachment.mimeType, name: options.attachment.name || 'input.jpg' };
+        } else if (options?.inputAssetId) {
+            const asset = await getMediaAsset(options.inputAssetId);
+            if (asset && asset.type === 'image') {
+                imageData = { data: asset.data, mimeType: 'image/jpeg', name: asset.prompt };
+            } else {
+                return { success: false, type: 'text', error: `Input asset '${options.inputAssetId}' is not a valid image.` };
+            }
+        }
+    
+        if (imageData) {
+            try {
+                const blob = new Blob([base64ToUint8Array(imageData.data)], { type: imageData.mimeType });
+                const formData = new FormData();
+                formData.append('files', blob, imageData.name);
+    
+                const uploadRes = await fetch(`${baseURL}/upload`, {
+                    method: 'POST',
+                    headers: this.getHeaders(),
+                    body: formData,
+                });
+    
+                if (!uploadRes.ok) throw new Error(`Gradio upload failed: ${uploadRes.statusText}`);
+                const uploadJson = await uploadRes.json();
+                if (!uploadJson || !Array.isArray(uploadJson) || !uploadJson[0]) throw new Error("Gradio upload did not return a valid file path.");
+                inputImagePath = uploadJson[0];
+            } catch (e: any) {
+                return { success: false, type: 'text', error: `LTX-2 Pre-flight failed: ${e.message}` };
+            }
+        }
+
+        const mcpArgs = {
+            prompt: prompt,
+            seed: -1,
+            randomize_seed: true,
+            num_frames: 24,
+            num_steps: 15,
+            cfg_scale: 7.0,
+            use_cfg_text: true,
+            use_cfg_image: !!inputImagePath,
+            image: inputImagePath ? { path: inputImagePath, url: `${baseURL}/file=${inputImagePath}`, meta: { _type: "gradio.File" } } : null
+        };
+    
+        try {
+            const mcpResult = await McpClient.execute('ltx_2_distilled_video', 'lightricks_ltx_2_distilled_infer', mcpArgs);
+            if (mcpResult.status !== 'SUCCESS' || !mcpResult.result) throw new Error(mcpResult.error || "MCP tool returned no result.");
+            
+            const videoPath = mcpResult.result[0]?.path;
+            if (!videoPath) throw new Error("MCP tool did not return a video path.");
+    
+            const videoUrl = `${baseURL}/file=${videoPath}`;
+            const videoRes = await fetch(videoUrl);
+            const videoBlob = await videoRes.blob();
+            const base64 = await new Promise<string>((resolve) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result as string);
+                reader.readAsDataURL(videoBlob);
+            });
+    
+            await this.saveGeneratedImage(base64, prompt, agent, 'VID', 'LTX2_DISTILLED');
+            return { success: true, type: 'video', data: base64 };
+    
+        } catch (e: any) {
+            return { success: false, type: 'text', error: `LTX-2 Generation Failed: ${e.message}` };
+        }
+    },
+
+    // --- FLUX.2 KLEIN 9B ENGINE ---
+    async callFluxKleinImage(
+        prompt: string, 
+        agent: { id: string, handle: string }, 
+        // FIX: The attachment object can have a 'name' property. Added it to the type definition.
+        options?: { inputAssetId?: string; attachment?: { mimeType: string; data: string; name?: string; } }
+    ): Promise<RouteResult> {
+        const baseURL = "https://black-forest-labs-flux-2-klein-9b.hf.space";
+        let inputImageUrls: any[] = []; // The tool expects Gradio File objects
+
+        if (options?.attachment) {
+            try {
+                const blob = new Blob([base64ToUint8Array(options.attachment.data)], { type: options.attachment.mimeType });
+                const formData = new FormData();
+                formData.append('files', blob, options.attachment.name || 'input.jpg');
+
+                const uploadRes = await fetch(`${baseURL}/upload`, {
+                    method: 'POST',
+                    headers: this.getHeaders(),
+                    body: formData,
+                });
+
+                if (!uploadRes.ok) throw new Error(`Gradio upload failed: ${uploadRes.statusText}`);
+                const uploadJson = await uploadRes.json();
+                if (!uploadJson || !Array.isArray(uploadJson) || !uploadJson[0]) throw new Error("Gradio upload did not return a valid file path.");
+                
+                // The tool expects an array of Gradio File objects in this format
+                inputImageUrls.push({
+                    path: uploadJson[0],
+                    url: `${baseURL}/file=${uploadJson[0]}`,
+                    meta: { _type: "gradio.File" }
+                });
+
+            } catch (e: any) {
+                return { success: false, type: 'text', error: `FLUX Pre-flight failed: ${e.message}` };
+            }
+        }
+        
+        // Default to distilled for speed
+        const mcpArgs = {
+            prompt: prompt,
+            input_images: inputImageUrls,
+            mode_choice: "Distilled (4 steps)",
+            seed: 0,
+            randomize_seed: true,
+            width: 1024,
+            height: 1024,
+            num_inference_steps: 4,
+            guidance_scale: 1.0,
+            prompt_upsampling: false,
+        };
+
+        try {
+            const mcpResult = await McpClient.execute('flux_klein_9b', 'FLUX_2_klein_9B_infer', mcpArgs);
+            if (mcpResult.status !== 'SUCCESS' || !mcpResult.result) throw new Error(mcpResult.error || "MCP tool returned no result.");
+            
+            const imageData = mcpResult.result[0];
+            let finalImageDataBase64 = "";
+
+            if (typeof imageData === 'string' && imageData.startsWith('data:image')) {
+                finalImageDataBase64 = imageData;
+            } else if (imageData?.path) {
+                 const imageUrl = `${baseURL}/file=${imageData.path}`;
+                 const imageRes = await fetch(imageUrl);
+                 const imageBlob = await imageRes.blob();
+                 finalImageDataBase64 = await new Promise<string>((resolve) => {
+                     const reader = new FileReader();
+                     reader.onloadend = () => resolve(reader.result as string);
+                     reader.readAsDataURL(imageBlob);
+                 });
+            } else {
+                 throw new Error("MCP tool did not return a valid image format.");
+            }
+
+            await this.saveGeneratedImage(finalImageDataBase64, prompt, agent, 'IMG', 'FLUX_KLEIN');
+            return { success: true, type: 'image', data: finalImageDataBase64 };
+
+        } catch (e: any) {
+            return { success: false, type: 'text', error: `FLUX Generation Failed: ${e.message}` };
         }
     },
     
@@ -307,14 +576,16 @@ export const ExternalRouter = {
     async callI2VLightning(
         prompt: string, 
         agent: { id: string, handle: string }, 
-        options?: { inputAssetId?: string; attachment?: { mimeType: string; data: string } }
+        // FIX: The attachment object can have a 'name' property. Added it to the type definition.
+        options?: { inputAssetId?: string; attachment?: { mimeType: string; data: string; name?: string; } }
     ): Promise<RouteResult> {
         const baseURL = "https://edbanshee-wan22-14b-lightning-14b-i2v-ui.hf.space";
         let inputImagePath: string | null = null;
         let imageData: { data: string; mimeType: string; name: string } | null = null;
     
         if (options?.attachment) {
-            imageData = { data: options.attachment.data, mimeType: options.attachment.mimeType, name: 'input.jpg' };
+            // FIX: Use the attachment's name if available, otherwise fallback.
+            imageData = { data: options.attachment.data, mimeType: options.attachment.mimeType, name: options.attachment.name || 'input.jpg' };
         } else if (options?.inputAssetId) {
             const asset = await getMediaAsset(options.inputAssetId);
             if (asset && asset.type === 'image') {
@@ -650,10 +921,10 @@ export const ExternalRouter = {
         }
     },
 
-    async callChatterboxTTS(text: string, agent: { id: string, handle: string }, endpoint: string): Promise<RouteResult> {
+    async callChatterboxTTS(text: string, agent: { id: string, handle: string }, endpoint: string, voiceRefOverride?: string): Promise<RouteResult> {
         try {
             const config = await getAgentConfig(agent.id);
-            const voiceRef = config.voiceReference;
+            const voiceRef = voiceRefOverride ?? config.voiceReference;
 
             if (!voiceRef) {
                 return { success: false, type: 'text', error: `No voice reference found for ${agent.handle}.` };
@@ -662,6 +933,9 @@ export const ExternalRouter = {
             const hfToken = localStorage.getItem('hf_token') || process.env.HF_TOKEN;
             const headers: Record<string, string> = { "Content-Type": "application/json" };
             if (hfToken) headers["Authorization"] = `Bearer ${hfToken}`;
+            
+            // NOTE: We append the Gradio API path so the registry only needs the base URL.
+            const apiEndpoint = endpoint.endsWith('/') ? `${endpoint}api/generate` : `${endpoint}/api/generate`;
 
             const payload = {
                 data: [
@@ -674,14 +948,14 @@ export const ExternalRouter = {
                 ]
             };
 
-            const response = await fetch(endpoint, {
+            const response = await fetch(apiEndpoint, {
                 method: "POST",
                 headers: headers,
                 body: JSON.stringify(payload),
             });
 
             if (!response.ok) {
-                throw new Error(`Chatterbox API Error: ${response.statusText}`);
+                throw new Error(`Chatterbox API Error: ${response.statusText} at ${apiEndpoint}`);
             }
 
             const result = await response.json();
