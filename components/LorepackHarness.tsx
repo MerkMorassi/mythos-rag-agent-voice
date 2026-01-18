@@ -443,6 +443,13 @@ Acknowledge the new input and seamlessly integrate it into the ongoing conversat
         }
     };
 
+    const handleExit = () => {
+        if (connectionState === ConnectionState.CONNECTED) {
+            disconnect();
+        }
+        onExit();
+    };
+
     return (
         <div className="lorepack-harness">
             {showNukeModal && (
@@ -461,7 +468,7 @@ Acknowledge the new input and seamlessly integrate it into the ongoing conversat
                 <div className="brand">MYTHOS <span style={{color: '#666'}}>//</span> LOREPACK FACTORY</div>
                 <div style={{display: 'flex', alignItems: 'center', gap: '1rem'}}>
                     <div style={{fontSize: '12px', color: '#888'}}>STATUS: <span style={{color: '#4ade80'}}>GRAPH READY</span></div>
-                    <button onClick={onExit} className="btn" style={{borderColor: '#facc15', color: '#facc15', padding: '5px 10px', fontSize: '10px'}}>EXIT</button>
+                    <button onClick={handleExit} className="btn" style={{borderColor: '#facc15', color: '#facc15', padding: '5px 10px', fontSize: '10px'}}>EXIT</button>
                 </div>
             </div>
 

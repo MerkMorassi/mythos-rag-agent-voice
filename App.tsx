@@ -1,8 +1,4 @@
 
-
-
-
-
 import React, { useState, useEffect, useRef } from 'react';
 import { GoogleGenAI, Tool, Type, Content } from "@google/genai";
 import { AGENTS } from './agents';
@@ -1236,7 +1232,10 @@ ${agentInstructions || currentAgent?.system_instruction}
         </div>
         <div className="flex-group">
             <div className={`status-indicator ${connectionState.toLowerCase()}`}>{connectionState}</div>
-             <button onClick={() => setCurrentView('LORE_HARNESS')} className={`btn btn-secondary btn-icon ${currentView === 'LORE_HARNESS' ? 'active' : ''}`} title="Lorepack Factory" style={currentView === 'LORE_HARNESS' ? {borderColor: '#ff3300', color: '#ff3300'} : {}}>
+             <button onClick={() => {
+                if (connectionState === ConnectionState.CONNECTED) disconnect();
+                setCurrentView('LORE_HARNESS');
+             }} className={`btn btn-secondary btn-icon ${currentView === 'LORE_HARNESS' ? 'active' : ''}`} title="Lorepack Factory" style={currentView === 'LORE_HARNESS' ? {borderColor: '#ff3300', color: '#ff3300'} : {}}>
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 9.5c0-1.28 1.02-2.3 2.3-2.3H20c.88 0 1.6.72 1.6 1.6v1.4c0 .88-.72 1.6-1.6 1.6H4.4M2 14.5c0-1.28 1.02-2.3 2.3-2.3h15.4c.88 0 1.6.72 1.6 1.6v1.4c0 .88-.72 1.6-1.6 1.6H4.4"/><path d="M12.5 19.5c0-1.28 1.02-2.3 2.3-2.3h2.9c.88 0 1.6.72 1.6 1.6v1.4c0 .88-.72 1.6-1.6 1.6h-2.9C13.52 22.1 12.5 21.08 12.5 19.8Z"/><path d="m5 6 2.5 2.5L10 6"/><path d="m5 11 2.5 2.5L10 11"/></svg>
             </button>
             <button onClick={() => setIsGraphVisualizerOpen(prev => !prev)} className={`btn btn-secondary btn-icon ${isGraphVisualizerOpen ? 'active' : ''}`} title="Neural Lattice Visualizer" style={isGraphVisualizerOpen ? {borderColor: '#38bdf8', color: '#38bdf8'} : {}}>
@@ -1334,7 +1333,10 @@ ${agentInstructions || currentAgent?.system_instruction}
               </div>
               
               <div className="flex-group">
-                  <button onClick={() => setCurrentView('COUNCIL')} className="btn btn-xs" title="Open Multi-Agent Council Interface">COUNCIL</button>
+                  <button onClick={() => {
+                      if (connectionState === ConnectionState.CONNECTED) disconnect();
+                      setCurrentView('COUNCIL');
+                  }} className="btn btn-xs" title="Open Multi-Agent Council Interface">COUNCIL</button>
                   <button onClick={() => setIsTerminalOpen(!isTerminalOpen)} className="btn btn-xs" title="Open Terminal / Shell">TERM (~)</button>
               </div>
 
