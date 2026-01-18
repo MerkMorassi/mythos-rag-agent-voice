@@ -688,20 +688,6 @@ ${agentInstructions || currentAgent?.system_instruction}
       return () => { if (frameIntervalRef.current) clearInterval(frameIntervalRef.current); };
   }, [isCameraOn, connectionState, sendRealtimeInput, videoSource, streamFileUrl]); 
 
-  // Enforce Text-Only Mode when Agent is Muted
-  useEffect(() => {
-    if (isAgentMuted && connectionState === ConnectionState.CONNECTED) {
-      disconnect();
-      setLogs(prev => [...prev, {
-        id: crypto.randomUUID(),
-        type: 'system',
-        sender: 'SYSTEM',
-        text: 'Agent audio muted. Live session terminated to switch to text-only responses.',
-        timestamp: Date.now()
-      }]);
-    }
-  }, [isAgentMuted, connectionState, disconnect]);
-
   const loadAgentConfig = async (id: string) => {
       const cfg = await getAgentConfig(id);
       const agent = AGENTS.find(a => a.id === id);
@@ -959,126 +945,29 @@ ${agentInstructions || currentAgent?.system_instruction}
         text: text || `[Sent Attachment: ${attachmentToSend?.name}]`, 
         timestamp: Date.now(),
         attachment: attachmentToSend?.data,
-        attachmentType: attachmentToSend?.mimeType?.startsWith('image') ? 'image' : 'video'
+        attachmentType: attachmentToSend?.mimeType?.startsWith('image') ? 'image' : (attachmentToSend?.mimeType?.startsWith('video') ? 'video' : undefined)
     }]);
 
     if (!currentAgent) return;
 
-    // --- EXPLICIT TOOL OVERRIDE ---
-    if (toolOverride !== 'auto' && !attachmentToSend) {
+    // The tool override is now handled via natural language through the agent's tools.
+    // Prepending a command to the user's text to guide the agent.
+    if (toolOverride !== 'auto') {
       const targetMap: Record<ToolOverride, string> = {
-        image: 'SDXL_IMAGE', video: 'VIDEO_GENERATION', speech: 'CHATTERBOX_TTS', auto: '', i2v: 'I2V_LIGHTNING'
+        image: 'Create an image of the following: ', 
+        video: 'Create a video of the following: ', 
+        speech: 'Read the following text aloud: ', 
+        auto: '', 
+        i2v: 'Animate the attached image with the following prompt: '
       };
-      const target = targetMap[toolOverride];
-      setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[OVERRIDE] Routing to ${target}...`, timestamp: Date.now() }]);
-      const routerRes = await ExternalRouter.route(target, text, { id: currentAgentId, handle: currentAgent.handle }, false, { attachment: attachmentToSend || undefined });
-      if (routerRes.success) {
-          if (routerRes.type === 'audio' && routerRes.data) setStoryAudioUrl(routerRes.data);
-          else if ((routerRes.type === 'image' || routerRes.type === 'video') && routerRes.data) {
-              setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'model', sender: currentAgent.handle.toUpperCase(), text: `[GENERATED ${routerRes.type.toUpperCase()}] ${text}`, timestamp: Date.now(), attachment: routerRes.data?.split(',')[1], attachmentType: routerRes.type }]);
-          }
-      } else {
-          setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[OVERRIDE FAILED] ${routerRes.error}`, timestamp: Date.now() }]);
-      }
-      setToolOverride('auto');
-      return;
-    }
-
-    // --- ROUTING LOGIC ---
-    const useLiveSession = !isAgentMuted && (connectionState === ConnectionState.CONNECTED || !!attachmentToSend);
-
-    if (useLiveSession) {
-        safeSend(text, attachmentToSend);
-        return; // Live session handler takes over.
+      text = targetMap[toolOverride] + text;
+      setToolOverride('auto'); // Reset after use
     }
     
-    // --- FALLBACK (HTTP/LM Studio) LOGIC ---
-    // This path is taken if:
-    // 1. Agent is muted.
-    // 2. Agent is not muted, but we are disconnected AND have no attachment to trigger a connection.
-    if (apiKey) {
-        // PRIORITY 2: Gemini HTTP Fallback
-        setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[COGNITION] Routing text to Gemini (HTTP)...`, timestamp: Date.now() }]);
-        try {
-            const ai = new GoogleGenAI({ apiKey });
-            
-            const history: Content[] = logs
-                .filter(log => (log.type === 'user' || log.type === 'model') && log.text)
-                .map(log => ({
-                    role: log.type === 'user' ? 'user' : 'model',
-                    parts: [{ text: log.text! }]
-                }));
-
-            const modelToUse = ModelGate.selectModel(text);
-
-            const response = await ai.models.generateContent({
-                model: modelToUse,
-                contents: [...history, { role: 'user', parts: [{ text }] }],
-                config: {
-                    systemInstruction: systemInstruction,
-                    ...modelConfig
-                }
-            });
-            
-            const responseText = response.text;
-            if (responseText) {
-                setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'model', sender: currentAgent.handle.toUpperCase(), text: responseText, timestamp: Date.now() }]);
-            } else {
-                const refusalReason = response.candidates?.[0]?.finishReason;
-                if (refusalReason === 'SAFETY') {
-                    throw new Error('Content blocked by safety policies.');
-                }
-                throw new Error('No response text from Gemini API.');
-            }
-        } catch (e: any) {
-            setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[ENGINE FAILED] Gemini HTTP Error: ${e.message}`, timestamp: Date.now() }]);
-        }
-    } else {
-        // PRIORITY 3: Local Model (LM Studio) Offline Fallback
-        const agentModelMap: Record<string, string> = {
-            'agent-noesis': 'LM_STUDIO_CODER',
-            'agent-urania': 'LM_STUDIO_CODER',
-            'agent-melpomene': 'LM_STUDIO_UNCENSORED',
-        };
-        const targetModel = agentModelMap[currentAgentId] || 'LM_STUDIO_CHAT';
-        
-        const targetNameMap: Record<string, string> = {
-            'LM_STUDIO_CODER': 'Coder (LM Studio)',
-            'LM_STUDIO_CHAT': 'Chat (LM Studio)',
-            'LM_STUDIO_UNCENSORED': 'Dolphin (LM Studio)'
-        };
-        const targetName = targetNameMap[targetModel];
-
-        setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[COGNITION] Routing text to ${targetName} for ${currentAgent.handle}...`, timestamp: Date.now() }]);
-        
-        let textWithContext = text;
-        try {
-            const registry = ExternalRouter.getToolRegistry();
-            const lmStudioUrl = registry.LM_STUDIO_CHAT.url;
-            const provider = new LmStudioProvider(lmStudioUrl);
-            const queryVector = await provider.embed(text);
-            const allDocs: any[] = await getAllVectorsFromVault();
-            const agentHandle = AGENTS.find(a => a.id === currentAgentId)?.handle.toUpperCase();
-            const agentDocs = agentHandle ? allDocs.filter(d => (d.agentId || d.agent)?.toUpperCase() === agentHandle) : allDocs;
-            if (agentDocs.length > 0) {
-                const scored = agentDocs.map(doc => ({ ...doc, score: cosineSimilarity(queryVector, doc.vector) })).sort((a, b) => b.score - a.score).slice(0, 5);
-                if (scored.length > 0 && scored[0].score > 0.45) {
-                    const context = scored.map(s => `[SOURCE: ${s.source || s.metadata?.source || 'Unknown'}]\n${s.text}`).join('\n\n');
-                    textWithContext = `CONTEXT:\n${context}\n\nUSER QUERY: "${text}"`;
-                }
-            }
-        } catch (e: any) {
-            setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[RAG FAILED] ${e.message}`, timestamp: Date.now() }]);
-        }
-        
-        const routerRes = await ExternalRouter.route(targetModel, textWithContext, { id: currentAgentId, handle: currentAgent.handle });
-
-        if (routerRes.success && routerRes.data) {
-            setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'model', sender: currentAgent.handle.toUpperCase(), text: routerRes.data, timestamp: Date.now() }]);
-        } else {
-            setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[ENGINE FAILED] ${routerRes.error}`, timestamp: Date.now() }]);
-        }
-    }
+    // Always use the live session infrastructure.
+    // safeSend will auto-connect if disconnected and queue the message,
+    // ensuring full tool support is always available.
+    safeSend(text, attachmentToSend || undefined);
   };
 
   const handlePaperclipClick = () => {
