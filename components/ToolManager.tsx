@@ -173,7 +173,7 @@ export const ToolManager: React.FC<ToolManagerProps> = ({
                         )}
 
                         <div className="flex-col" style={{ gap: '1rem' }}>
-                            {Object.entries(externalTools).map(([key, config]: [string, ExternalToolConfig]) => {
+                            {Object.entries(externalTools).filter(([key]) => key !== 'DOLPHIN_LLM').map(([key, config]: [string, ExternalToolConfig]) => {
                                 const isEditing = editingId === key;
                                 const isModified = !config.isDefault;
 

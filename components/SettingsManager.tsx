@@ -41,16 +41,21 @@ const SettingsManager: React.FC<SettingsManagerProps> = (props) => {
   const [pitch, setPitch] = useState(props.voicePitch || 0);
   const [modelsList, setModelsList] = useState<{ name: string, displayName: string }[]>([]);
   const [recognition, setRecognition] = useState(props.recognition || { userInteraction: '', agentInteraction: '' });
+  const [dolphinUrl, setDolphinUrl] = useState('');
   
   // Audio Refs & TTS Test State
   const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
   const audioPreviewRef = useRef<HTMLAudioElement | null>(null);
-  const audioFileInputRef = useRef<HTMLInputElement>(null);
+  const audioFileInputRef = useRef<HTMLInputElement | null>(null);
   const [testText, setTestText] = useState('');
   const [testAudioUrl, setTestAudioUrl] = useState<string | null>(null);
   const [isSynthesizing, setIsSynthesizing] = useState(false);
 
   useEffect(() => {
+    if (props.isOpen) {
+        const registry = ExternalRouter.getToolRegistry();
+        setDolphinUrl(registry.DOLPHIN_LLM.url);
+    }
     setVoiceRef(props.voiceReference || '');
     setAccessLevel(props.agentAccessLevel);
     setSpeed(props.voiceSpeed || 1.0);
@@ -80,6 +85,8 @@ const SettingsManager: React.FC<SettingsManagerProps> = (props) => {
     if (props.apiKey) localStorage.setItem('gemini_api_key', props.apiKey);
     if (props.hfToken) localStorage.setItem('hf_token', props.hfToken);
     
+    ExternalRouter.updateToolConfig('DOLPHIN_LLM', { url: dolphinUrl });
+
     await props.onSave(props.selectedModel, voiceRef, accessLevel, speed, pitch, recognition);
     
     setIsSaving(false);
@@ -165,6 +172,22 @@ const SettingsManager: React.FC<SettingsManagerProps> = (props) => {
             <div className="flex-col">
                 <label className="form-label">HUGGINGFACE TOKEN (External Models)</label>
                 <input type="password" value={props.hfToken} onChange={e => props.setHfToken(e.target.value)} className="form-input" placeholder="hf_..." autoComplete="off" />
+            </div>
+
+             <div className="flex-col">
+                <span className="section-header-title" style={{ color: '#f87171' }}>SOVEREIGN ENGINE (DOLPHIN)</span>
+                <p style={{fontSize:'0.7rem', color:'#888', margin:0, marginBottom: '0.5rem'}}>
+                    Uncensored, fine-tuned sovereign model for direct chat and complex reasoning.
+                </p>
+                <label className="form-label">ENDPOINT URL</label>
+                <input 
+                    type="text" 
+                    value={dolphinUrl} 
+                    onChange={e => setDolphinUrl(e.target.value)} 
+                    className="form-input" 
+                    placeholder="https://..." 
+                    autoComplete="off" 
+                />
             </div>
 
             <div className="flex-col">
