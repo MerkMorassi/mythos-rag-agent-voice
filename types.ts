@@ -92,6 +92,7 @@ export interface AgentConfig {
   // FIX: Added bio for overrides
   bio?: string;
   recognition?: RecognitionSettings;
+  behaviorTuning?: string;
 }
 
 export interface CloudFile {
@@ -182,6 +183,7 @@ export interface Agent {
   accessLevel: string; // '777', '755', '644'
   permissions: SomaPermission[]; 
   recognition: RecognitionSettings;
+  behaviorTuning: string;
   
   // Capabilities
   voice: string;
