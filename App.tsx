@@ -1330,7 +1330,7 @@ ${agentInstructions || currentAgent?.system_instruction}
               )}
 
               <input ref={mainInputRef} type="text" className="main-input unified-input" placeholder={isThinking ? "Processing..." : (isPlaying ? "Speaking..." : "Enter command or message...")} value={inputText} onChange={(e) => setInputText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendText()} disabled={connectionState === ConnectionState.DISCONNECTED && !apiKey}/>
-              {connectionState === ConnectionState.CONNECTED ? <button onClick={handleStopSession} className="btn btn-danger btn-lg" title="Disconnect Session">STOP</button> : <button onClick={handleStartSession} className="btn btn-primary btn-lg" disabled={connectionState === ConnectionState.CONNECTING || isAgentMuted} title={isAgentMuted ? "Unmute agent to start session" : "Connect Live Session"}>{connectionState === ConnectionState.CONNECTING ? '...' : 'START'}</button>}
+              {connectionState === ConnectionState.CONNECTED ? <button onClick={handleStopSession} className="btn btn-danger btn-lg" title="Disconnect Session">STOP</button> : <button onClick={handleStartSession} className="btn btn-primary btn-lg" disabled={connectionState === ConnectionState.CONNECTING} title={isAgentMuted ? "Connect Live Session (Agent Muted)" : "Connect Live Session"}>{connectionState === ConnectionState.CONNECTING ? '...' : 'START'}</button>}
               <button onClick={handleSendText} className="btn btn-secondary btn-lg" title="Send Message" disabled={(!inputText.trim() && !pendingAttachment) || (connectionState === ConnectionState.DISCONNECTED && !apiKey)}>SEND</button>
           </div>
       </footer>
