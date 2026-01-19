@@ -114,14 +114,15 @@ export class SomaKernel {
         switch(action) {
             case SomaActionType.QUERY_DB: return 'READ_LORE';
             case SomaActionType.INGEST_DATA: return 'WRITE_LORE';
-            case SomaActionType.DELETE_DATA: return 'MODIFY_LORE'; // or MANAGE_MEMORY
+            case SomaActionType.DELETE_DATA: return 'MODIFY_LORE';
             case SomaActionType.EXEC_CODE: return 'EXECUTE_CODE';
             case SomaActionType.ROUTE_REQUEST: return 'ROUTE_EXTERNAL';
             case SomaActionType.CREATE_IMAGE: return 'GENERATE_MEDIA';
             case SomaActionType.SYSTEM_ADMIN: return 'ADMIN_OVERRIDE';
             case SomaActionType.BROADCAST: return 'BROADCAST_COUNCIL';
-            case SomaActionType.PUBLISH_CANON: return 'WRITE_CANON'; // Map to new perm
+            case SomaActionType.PUBLISH_CANON: return 'WRITE_CANON';
             case SomaActionType.COLLABORATE: return 'COLLABORATE';
+            case SomaActionType.DELEGATE_TASK: return 'COLLABORATE';
             default: return undefined;
         }
     }

@@ -74,6 +74,11 @@ export const DEFAULT_SOVEREIGN_CONFIG: SovereignConfig = {
   customGreeting: ''
 };
 
+export interface RecognitionSettings {
+    userInteraction: string;
+    agentInteraction: string;
+}
+
 export interface AgentConfig {
   agentId: string;
   systemInstruction: string;
@@ -86,6 +91,7 @@ export interface AgentConfig {
   accessLevel?: string; // "777", "755", etc.
   // FIX: Added bio for overrides
   bio?: string;
+  recognition?: RecognitionSettings;
 }
 
 export interface CloudFile {
@@ -175,6 +181,7 @@ export interface Agent {
   // Operational
   accessLevel: string; // '777', '755', '644'
   permissions: SomaPermission[]; 
+  recognition: RecognitionSettings;
   
   // Capabilities
   voice: string;

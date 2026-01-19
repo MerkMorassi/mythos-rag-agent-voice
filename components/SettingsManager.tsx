@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { ModelConfig } from '../types';
+import { ModelConfig, RecognitionSettings } from '../types';
 import { geminiClient } from '../services/geminiClient';
 import { ExternalRouter } from '../services/externalRouter';
 
@@ -19,7 +19,7 @@ interface SettingsManagerProps {
   agentAccessLevel: string;
   selectedVoice: string;
   onVoiceChange: (voice: string) => void;
-  onSave: (modelName: string, voiceRef?: string, accessLevel?: string, voiceSpeed?: number, voicePitch?: number) => Promise<void>;
+  onSave: (modelName: string, voiceRef?: string, accessLevel?: string, voiceSpeed?: number, voicePitch?: number, recognition?: RecognitionSettings) => Promise<void>;
   isOpen: boolean;
   onClose: () => void;
   apiKey: string;
@@ -29,6 +29,8 @@ interface SettingsManagerProps {
   voiceReference?: string;
   voiceSpeed?: number;
   voicePitch?: number;
+  recognition: RecognitionSettings;
+  setRecognition: (recognition: RecognitionSettings) => void;
 }
 
 const SettingsManager: React.FC<SettingsManagerProps> = (props) => {
@@ -38,6 +40,7 @@ const SettingsManager: React.FC<SettingsManagerProps> = (props) => {
   const [speed, setSpeed] = useState(props.voiceSpeed || 1.0);
   const [pitch, setPitch] = useState(props.voicePitch || 0);
   const [modelsList, setModelsList] = useState<{ name: string, displayName: string }[]>([]);
+  const [recognition, setRecognition] = useState(props.recognition || { userInteraction: '', agentInteraction: '' });
   
   // Audio Refs & TTS Test State
   const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
@@ -52,7 +55,8 @@ const SettingsManager: React.FC<SettingsManagerProps> = (props) => {
     setAccessLevel(props.agentAccessLevel);
     setSpeed(props.voiceSpeed || 1.0);
     setPitch(props.voicePitch || 0);
-  }, [props.voiceReference, props.agentAccessLevel, props.voiceSpeed, props.voicePitch, props.isOpen]);
+    setRecognition(props.recognition || { userInteraction: '', agentInteraction: '' });
+  }, [props.voiceReference, props.agentAccessLevel, props.voiceSpeed, props.voicePitch, props.recognition, props.isOpen]);
 
   if (!props.isOpen) return null;
 
@@ -76,7 +80,7 @@ const SettingsManager: React.FC<SettingsManagerProps> = (props) => {
     if (props.apiKey) localStorage.setItem('gemini_api_key', props.apiKey);
     if (props.hfToken) localStorage.setItem('hf_token', props.hfToken);
     
-    await props.onSave(props.selectedModel, voiceRef, accessLevel, speed, pitch);
+    await props.onSave(props.selectedModel, voiceRef, accessLevel, speed, pitch, recognition);
     
     setIsSaving(false);
     alert("NEURAL SYNC: System parameters updated.");
@@ -183,6 +187,30 @@ const SettingsManager: React.FC<SettingsManagerProps> = (props) => {
                     style={{ height: '4rem' }}
                     placeholder="Traits for this agent..."
                 />
+            </div>
+
+            <div className="section-panel" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', borderColor: '#f472b6' }}>
+                <span className="section-header-title" style={{ fontSize: '0.7rem', color: '#f472b6' }}>RECOGNITION PROTOCOL</span>
+                <div className="flex-col">
+                    <label className="form-label">USER INTERACTION DIRECTIVE</label>
+                    <textarea 
+                        value={recognition.userInteraction} 
+                        onChange={e => setRecognition({ ...recognition, userInteraction: e.target.value })} 
+                        className="form-input" 
+                        style={{ height: '4rem', fontSize: '0.8rem' }}
+                        placeholder="e.g., Address the user as 'Director'. Maintain a formal tone."
+                    />
+                </div>
+                <div className="flex-col">
+                    <label className="form-label">AGENT INTERACTION DIRECTIVE</label>
+                    <textarea 
+                        value={recognition.agentInteraction} 
+                        onChange={e => setRecognition({ ...recognition, agentInteraction: e.target.value })} 
+                        className="form-input" 
+                        style={{ height: '4rem', fontSize: '0.8rem' }}
+                        placeholder="e.g., Defer to BARBELO on strategic matters. Address NOESIS with technical precision."
+                    />
+                </div>
             </div>
             
             {/* MODEL CONFIGURATION */}

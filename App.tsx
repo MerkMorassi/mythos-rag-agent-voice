@@ -13,7 +13,8 @@ import {
   VectorRecord,
   AgentConfig,
   SavedPrompt,
-  ChatSession
+  ChatSession,
+  RecognitionSettings
 } from './types';
 import ChatHistoryManager from './components/ChatHistoryManager';
 import { KnowledgeManager } from './components/KnowledgeManager';
@@ -106,6 +107,7 @@ const App: React.FC = () => {
   const [hasGreeted, setHasGreeted] = useState(false);
   const [vectorCount, setVectorCount] = useState(0);
   const [isAgentMuted, setIsAgentMuted] = useState(true);
+  const [recognitionSettings, setRecognitionSettings] = useState<RecognitionSettings>({ userInteraction: '', agentInteraction: '' });
 
   // Layout & View Modes
   const [layoutMode, setLayoutMode] = useState<LayoutMode>('CHAT');
@@ -185,8 +187,17 @@ You can modify your own configuration using the 'update_self_config' tool. This 
    - If the user provides a file (image, video, code), you MUST use 'analyze_file' to understand it deeply if their question relates to it.
 `;
 
+  const recognitionInstruction = (recognitionSettings.userInteraction || recognitionSettings.agentInteraction)
+    ? `
+[INTERACTION PROTOCOL]
+${recognitionSettings.userInteraction || ''}
+${recognitionSettings.agentInteraction || ''}
+`.trim()
+    : '';
+
   const systemInstruction = `
 ${CAPABILITY_INSTRUCTION}
+${recognitionInstruction}
 
 [GENERAL MISSION DIRECTIVES]
 ${generalInstructions}
@@ -699,6 +710,7 @@ ${agentInstructions || currentAgent?.system_instruction}
       setVoiceSpeed(cfg.voiceSpeed || 1.0);
       setVoicePitch(cfg.voicePitch || 0);
       setAccessLevel(cfg.accessLevel || agent?.accessLevel || '400');
+      setRecognitionSettings(cfg.recognition || agent?.recognition || { userInteraction: '', agentInteraction: '' });
   };
 
   const autoSaveSessionIfNeeded = async (agentIdToSave: string, logsToSave: LogMessage[]) => {
@@ -760,12 +772,12 @@ ${agentInstructions || currentAgent?.system_instruction}
       setCurrentAgentId(id);
   };
 
-  // FIX: Updated function signature to match the `onSave` prop, adding `modelName` and fixing parameter order.
-  const handleSettingsSave = async (modelName: string, newVoiceRef?: string, newAccessLevel?: string, speed?: number, pitch?: number) => {
+  const handleSettingsSave = async (modelName: string, newVoiceRef?: string, newAccessLevel?: string, speed?: number, pitch?: number, recognition?: RecognitionSettings) => {
       if (speed !== undefined) setVoiceSpeed(speed);
       if (pitch !== undefined) setVoicePitch(pitch);
       if (newVoiceRef !== undefined) setVoiceRef(newVoiceRef);
       if (newAccessLevel !== undefined) setAccessLevel(newAccessLevel);
+      if (recognition) setRecognitionSettings(recognition);
 
       await saveAgentConfig(currentAgentId, {
           systemInstruction: agentInstructions, 
@@ -775,7 +787,8 @@ ${agentInstructions || currentAgent?.system_instruction}
           voiceReference: newVoiceRef ?? voiceRef, 
           accessLevel: newAccessLevel ?? accessLevel, 
           voiceSpeed: speed ?? voiceSpeed, 
-          voicePitch: pitch ?? voicePitch
+          voicePitch: pitch ?? voicePitch,
+          recognition: recognition ?? recognitionSettings
       });
       await saveGeneralInstructions(generalInstructions);
   };
@@ -1244,7 +1257,7 @@ ${agentInstructions || currentAgent?.system_instruction}
         {activeSidePanel === 'KNOWLEDGE' && <KnowledgeManager isOpen={true} onClose={()=>setActiveSidePanel(null)} onUpdate={refreshVectorCount} currentAgentId={currentAgentId} />}
         {activeSidePanel === 'PROMPTS' && <PromptManager isOpen={true} onClose={()=>setActiveSidePanel(null)} currentAgentId={currentAgentId} onLoadPrompt={handleLoadPrompt} />}
         {activeSidePanel === 'HISTORY' && <ChatHistoryManager isOpen={true} onOpen={()=>{}} onClose={()=>setActiveSidePanel(null)} currentLogs={logs} onLoadSession={setLogs} currentAgentId={currentAgentId} onUpdateKnowledge={refreshVectorCount} />}
-        {activeSidePanel === 'SETTINGS' && <SettingsManager isOpen={true} onClose={()=>setActiveSidePanel(null)} modelConfig={modelConfig} setModelConfig={setModelConfig} selectedModel={selectedModel} setSelectedModel={setSelectedModel} disabled={connectionState === ConnectionState.CONNECTED} generalInstruction={generalInstructions} setGeneralInstruction={setGeneralInstructions} agentInstruction={agentInstructions} setAgentInstruction={setAgentInstructions} agentName={currentAgent?.handle || 'Unknown'} agentId={currentAgentId} agentAccessLevel={accessLevel} selectedVoice={selectedVoice} onVoiceChange={setSelectedVoice} onSave={handleSettingsSave} apiKey={apiKey} setApiKey={setApiKey} hfToken={hfToken} setHfToken={setHfToken} voiceReference={voiceRef} voiceSpeed={voiceSpeed} voicePitch={voicePitch} />}
+        {activeSidePanel === 'SETTINGS' && <SettingsManager isOpen={true} onClose={()=>setActiveSidePanel(null)} modelConfig={modelConfig} setModelConfig={setModelConfig} selectedModel={selectedModel} setSelectedModel={setSelectedModel} disabled={connectionState === ConnectionState.CONNECTED} generalInstruction={generalInstructions} setGeneralInstruction={setGeneralInstructions} agentInstruction={agentInstructions} setAgentInstruction={setAgentInstructions} agentName={currentAgent?.handle || 'Unknown'} agentId={currentAgentId} agentAccessLevel={accessLevel} selectedVoice={selectedVoice} onVoiceChange={setSelectedVoice} onSave={handleSettingsSave} apiKey={apiKey} setApiKey={setApiKey} hfToken={hfToken} setHfToken={setHfToken} voiceReference={voiceRef} voiceSpeed={voiceSpeed} voicePitch={voicePitch} recognition={recognitionSettings} setRecognition={setRecognitionSettings} />}
         {activeSidePanel === 'ROSTER' && <AgentRoster isOpen={true} onClose={() => setActiveSidePanel(null)} currentAgentId={currentAgentId} onSelectAgent={handleAgentChange} />}
 
         <MediaPlayer audioUrl={storyAudioUrl} title="Narrative Playback" onClose={() => setStoryAudioUrl(null)} interruptSignal={interruptSignal} />
