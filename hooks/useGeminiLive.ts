@@ -93,35 +93,40 @@ export function useGeminiLive({
                 model: configRef.current.modelName,
                 config,
                 callbacks: {
-                    onopen: () => {
+                    onopen: async () => {
                         setConnectionState(ConnectionState.CONNECTED);
                         callbackRef.current.onLog({ id: crypto.randomUUID(), type: 'system', text: 'Live Session Connected', timestamp: Date.now() });
                         
-                        // Start Mic Stream
+                        // Start Mic Stream using AudioWorklet
                         if (inputContextRef.current) {
-                            const source = inputContextRef.current.createMediaStreamSource(stream);
-                            const processor = inputContextRef.current.createScriptProcessor(4096, 1, 1);
-                            
-                            processor.onaudioprocess = (e) => {
-                                // STOP sending if we are disconnecting to prevent race conditions
-                                if (isIntentionalDisconnect.current) return;
-                                if (!configRef.current.isMicOn) return;
+                            try {
+                                await inputContextRef.current.audioWorklet.addModule('audio-processor.js');
+                                const source = inputContextRef.current.createMediaStreamSource(stream);
+                                const workletNode = new AudioWorkletNode(inputContextRef.current, 'audio-stream-processor');
+
+                                workletNode.port.onmessage = (event) => {
+                                    const inputData = event.data as Float32Array;
+
+                                    if (isIntentionalDisconnect.current || !configRef.current.isMicOn) return;
+
+                                    const pcmBlob = createPcmBlob(inputData);
+                                    
+                                    sessionPromise.then(session => {
+                                        if (isIntentionalDisconnect.current) return;
+                                        session.sendRealtimeInput({ media: pcmBlob });
+                                    }).catch(err => {
+                                        if(!isIntentionalDisconnect.current) console.warn("Input Send Error:", err);
+                                    });
+                                };
                                 
-                                const inputData = e.inputBuffer.getChannelData(0);
-                                const pcmBlob = createPcmBlob(inputData);
-                                
-                                sessionPromise.then(session => {
-                                    // Guard against sending to closed session
-                                    if (isIntentionalDisconnect.current) return;
-                                    session.sendRealtimeInput({ media: pcmBlob });
-                                }).catch(err => {
-                                    // Swallow errors during disconnect
-                                    if(!isIntentionalDisconnect.current) console.warn("Input Send Error:", err);
-                                });
-                            };
-                            
-                            source.connect(processor);
-                            processor.connect(inputContextRef.current.destination);
+                                source.connect(workletNode);
+                                workletNode.connect(inputContextRef.current.destination);
+
+                            } catch (e: any) {
+                                console.error("Failed to set up AudioWorklet:", e);
+                                callbackRef.current.onLog({ id: crypto.randomUUID(), type: 'system', text: `Audio setup failed: ${e.message}`, timestamp: Date.now() });
+                                setConnectionState(ConnectionState.ERROR);
+                            }
                         }
                     },
                     onmessage: async (msg: LiveServerMessage) => {
