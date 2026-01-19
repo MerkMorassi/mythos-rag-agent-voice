@@ -100,8 +100,23 @@ export function useGeminiLive({
                         // Start Mic Stream using AudioWorklet
                         if (inputContextRef.current) {
                             try {
-                                const processorUrl = new URL('../audio-processor.js', import.meta.url).href;
+                                const processorCode = `
+class AudioStreamProcessor extends AudioWorkletProcessor {
+  process(inputs) {
+    const input = inputs[0];
+    if (input.length > 0) {
+      const channelData = input[0];
+      this.port.postMessage(channelData);
+    }
+    return true;
+  }
+}
+registerProcessor('audio-stream-processor', AudioStreamProcessor);
+`;
+                                const blob = new Blob([processorCode], { type: 'application/javascript' });
+                                const processorUrl = URL.createObjectURL(blob);
                                 await inputContextRef.current.audioWorklet.addModule(processorUrl);
+                                
                                 const source = inputContextRef.current.createMediaStreamSource(stream);
                                 const workletNode = new AudioWorkletNode(inputContextRef.current, 'audio-stream-processor');
 
