@@ -19,7 +19,7 @@ interface SettingsManagerProps {
   agentAccessLevel: string;
   selectedVoice: string;
   onVoiceChange: (voice: string) => void;
-  onSave: (modelName: string, voiceRef?: string, accessLevel?: string, voiceSpeed?: number, voicePitch?: number, recognition?: RecognitionSettings) => Promise<void>;
+  onSave: (modelName: string, voiceRef?: string, accessLevel?: string, voiceSpeed?: number, voicePitch?: number, recognition?: RecognitionSettings, behaviorTuning?: string) => Promise<void>;
   isOpen: boolean;
   onClose: () => void;
   apiKey: string;
@@ -31,6 +31,8 @@ interface SettingsManagerProps {
   voicePitch?: number;
   recognition: RecognitionSettings;
   setRecognition: (recognition: RecognitionSettings) => void;
+  behaviorTuning: string;
+  setBehaviorTuning: (val: string) => void;
 }
 
 const SettingsManager: React.FC<SettingsManagerProps> = (props) => {
@@ -87,7 +89,7 @@ const SettingsManager: React.FC<SettingsManagerProps> = (props) => {
     
     ExternalRouter.updateToolConfig('DOLPHIN_LLM', { url: dolphinUrl });
 
-    await props.onSave(props.selectedModel, voiceRef, accessLevel, speed, pitch, recognition);
+    await props.onSave(props.selectedModel, voiceRef, accessLevel, speed, pitch, recognition, props.behaviorTuning);
     
     setIsSaving(false);
     alert("NEURAL SYNC: System parameters updated.");
@@ -209,6 +211,17 @@ const SettingsManager: React.FC<SettingsManagerProps> = (props) => {
                     className="form-input" 
                     style={{ height: '4rem' }}
                     placeholder="Traits for this agent..."
+                />
+            </div>
+            
+            <div className="section-panel" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', borderColor: '#f97316' }}>
+                <span className="section-header-title" style={{ fontSize: '0.7rem', color: '#f97316' }}>BEHAVIOR TUNING</span>
+                <textarea 
+                    value={props.behaviorTuning} 
+                    onChange={e => props.setBehaviorTuning(e.target.value)} 
+                    className="form-input" 
+                    style={{ height: '5rem', fontSize: '0.8rem' }}
+                    placeholder="e.g., 'Never mention being an AI.', 'Always speak in short, declarative sentences.', 'Adopt a slightly sarcastic tone.'"
                 />
             </div>
 

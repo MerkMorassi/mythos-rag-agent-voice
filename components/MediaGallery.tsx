@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { getAllMediaAssets, saveMediaAsset, deleteMediaAsset, updateMediaAsset } from '../services/db';
 import { MediaAsset } from '../types';
@@ -9,9 +10,10 @@ interface MediaGalleryProps {
     onOpen: () => void;
     onClose: () => void;
     currentAgentId: string;
+    agentScope?: string | null;
 }
 
-export const MediaGallery: React.FC<MediaGalleryProps> = ({ isOpen, onOpen, onClose, currentAgentId }) => {
+export const MediaGallery: React.FC<MediaGalleryProps> = ({ isOpen, onOpen, onClose, currentAgentId, agentScope }) => {
     const [assets, setAssets] = useState<MediaAsset[]>([]);
     const [filteredAssets, setFilteredAssets] = useState<MediaAsset[]>([]);
     const [isLoading, setIsLoading] = useState(false);
@@ -32,10 +34,14 @@ export const MediaGallery: React.FC<MediaGalleryProps> = ({ isOpen, onOpen, onCl
 
     useEffect(() => {
         if (isOpen) {
-            setSelectedAgentId(currentAgentId || 'ALL');
+            if (agentScope) {
+                setSelectedAgentId(agentScope);
+            } else {
+                setSelectedAgentId(currentAgentId || 'ALL');
+            }
             refresh();
         }
-    }, [isOpen, currentAgentId]);
+    }, [isOpen, currentAgentId, agentScope]);
 
     // ... (keeping internal logic same) ...
     useEffect(() => {
@@ -452,7 +458,7 @@ export const MediaGallery: React.FC<MediaGalleryProps> = ({ isOpen, onOpen, onCl
                 
                 <div className="modal-header-area">
                     <div className="flex-group">
-                        <span className="modal-section-title" style={{ color: '#e879f9' }}>MEDIA GALLERY</span>
+                        <span className="modal-section-title" style={{ color: '#e879f9' }}>MEDIA GALLERY {agentScope ? `: ${AGENTS.find(a=>a.id === agentScope)?.handle}` : ''}</span>
                     </div>
                     <button onClick={onClose} className="close-btn" title="Close">
                         <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -493,6 +499,7 @@ export const MediaGallery: React.FC<MediaGalleryProps> = ({ isOpen, onOpen, onCl
                             onChange={(e) => setSelectedAgentId(e.target.value)}
                             className="form-select"
                             style={{ width: 'auto', flex: 1 }}
+                            disabled={!!agentScope}
                         >
                             <option value="ALL">ALL AGENTS</option>
                             <option value="USER">USER UPLOADS</option>
@@ -541,7 +548,7 @@ export const MediaGallery: React.FC<MediaGalleryProps> = ({ isOpen, onOpen, onCl
                                         {asset.prompt}
                                     </div>
                                     <div style={{ fontSize: '0.65rem', color: '#a78bfa', textTransform: 'uppercase' }}>
-                                        {asset.agentId}
+                                        {AGENTS.find(a => a.id === asset.agentId)?.handle || asset.agentId}
                                     </div>
                                     
                                     {asset.tags && asset.tags.length > 0 && (

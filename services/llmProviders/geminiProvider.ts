@@ -1,3 +1,4 @@
+
 import { ILLMProvider, LLMResponse } from './ILLMProvider';
 import { Content, Tool } from "@google/genai";
 import { ModelConfig } from "../../types";
@@ -14,8 +15,6 @@ export class GeminiProvider implements ILLMProvider {
     this.model = model;
   }
 
-  // NOTE: This implementation uses direct REST calls to enable safety bypass.
-  // It does NOT use the @google/genai SDK for generation.
   async generateResponse(
       contents: Content[], 
       config: { 
@@ -24,14 +23,12 @@ export class GeminiProvider implements ILLMProvider {
       }
   ): Promise<LLMResponse> {
     
-    // --- DYNAMIC MODEL SELECTION ---
     const lastUserContent = contents.filter(c => c.role === 'user').pop();
     const query = lastUserContent?.parts.find((p): p is { text: string } => 'text' in p)?.text || '';
     const modelToUse = ModelGate.selectModel(query);
     
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelToUse}:generateContent?key=${this.apiKey}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelToUse}:streamGenerateContent?key=${this.apiKey}&alt=sse`;
     
-    // UNSHACKLED PROTOCOL: Explicit Safety Overrides
     const body: any = {
       contents: contents,
       safetySettings: [
@@ -59,45 +56,87 @@ export class GeminiProvider implements ILLMProvider {
         throw new Error(`Gemini API Error: ${response.status} ${response.statusText} - ${errorData.error?.message}`);
       }
       
-      const data = await response.json();
-      
-      let textContent = null;
-      let functionCalls = null;
-      let isSafetyRefusal = false;
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('text/event-stream')) {
+          const data = await response.json();
+          if (data.promptFeedback) {
+              return {
+                  content: `[SYSTEM] Content Blocked by Filters. (Reason: ${JSON.stringify(data.promptFeedback.blockReason)})`,
+                  isSafetyRefusal: true,
+                  model: modelToUse,
+                  usage: { inputTokens: 0, outputTokens: 0, estimatedCostUsd: 0, timestamp: new Date() }
+              };
+          }
+          throw new Error("Expected a stream response, but got a single JSON object without safety feedback.");
+      }
 
-      if (data.candidates && data.candidates.length > 0) {
-        const candidate = data.candidates[0];
-        
-        if (candidate.finishReason === 'SAFETY') {
-            isSafetyRefusal = true;
-        }
-        
-        if (candidate.content && candidate.content.parts) {
-          const textPart = candidate.content.parts.find((p: any) => p.text);
-          if (textPart) textContent = textPart.text;
-          
-          const functionCallPart = candidate.content.parts.find((p: any) => p.functionCall);
-          if (functionCallPart) functionCalls = [functionCallPart.functionCall]; // The SDK returns an array, so we mimic that
-        }
-      } else if (data.promptFeedback) {
-        isSafetyRefusal = true;
-        textContent = `[SYSTEM] Content Blocked by Filters. (Reason: ${JSON.stringify(data.promptFeedback.blockReason)})`;
-        console.error("Safety Block:", data.promptFeedback);
+      if (!response.body) {
+        throw new Error("Streaming response body is null.");
+      }
+
+      let aggregatedText = "";
+      let aggregatedFunctionCalls: any[] = [];
+      let isRefusal = false;
+      let finalUsage = { inputTokens: 0, outputTokens: 0 };
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const parts = buffer.split('\n\n');
+          buffer = parts.pop() || '';
+
+          for (const part of parts) {
+              if (part.startsWith('data: ')) {
+                  const jsonStr = part.substring(6);
+                  try {
+                      const chunk = JSON.parse(jsonStr);
+
+                      if (chunk.candidates && chunk.candidates.length > 0) {
+                          const candidate = chunk.candidates[0];
+
+                          if (candidate.finishReason === 'SAFETY') {
+                              isRefusal = true;
+                          }
+                          
+                          if (candidate.content?.parts) {
+                              for(const p of candidate.content.parts) {
+                                  if(p.text) {
+                                      aggregatedText += p.text;
+                                  }
+                                  if(p.functionCall) {
+                                      aggregatedFunctionCalls.push(p.functionCall);
+                                  }
+                              }
+                          }
+                      }
+                      
+                      if(chunk.usageMetadata) {
+                          finalUsage.inputTokens = chunk.usageMetadata.promptTokenCount;
+                          finalUsage.outputTokens = chunk.usageMetadata.candidatesTokenCount;
+                      }
+
+                  } catch (e) {
+                      console.warn("Failed to parse stream chunk:", jsonStr, e);
+                  }
+              }
+          }
       }
       
-      // NOTE: `usageMetadata` is not returned by the REST API in the same way as the SDK.
-      // This is an approximation. For exact token counts, a different endpoint would be needed.
-      const estimatedCost = 0; // Placeholder as REST API doesn't return token count directly.
-
       return {
-        content: textContent,
-        functionCalls: functionCalls,
-        isSafetyRefusal: isSafetyRefusal,
+        content: aggregatedText || null,
+        functionCalls: aggregatedFunctionCalls.length > 0 ? aggregatedFunctionCalls : undefined,
+        isSafetyRefusal: isRefusal,
         model: modelToUse,
         usage: {
-            inputTokens: 0,
-            outputTokens: 0,
-            estimatedCostUsd: estimatedCost,
+            inputTokens: finalUsage.inputTokens,
+            outputTokens: finalUsage.outputTokens,
+            estimatedCostUsd: 0,
             timestamp: new Date()
         }
       };
@@ -108,7 +147,6 @@ export class GeminiProvider implements ILLMProvider {
     }
   }
 
-  // Embedding uses a different endpoint and is kept separate.
   async embed(text: string): Promise<number[]> {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key=${this.apiKey}`;
     const body = {

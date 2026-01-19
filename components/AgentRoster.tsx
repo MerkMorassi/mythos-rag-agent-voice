@@ -9,9 +9,10 @@ interface AgentRosterProps {
     onClose: () => void;
     currentAgentId: string;
     onSelectAgent: (id: string) => void;
+    onOpenGallery: (agentId: string) => void;
 }
 
-export const AgentRoster: React.FC<AgentRosterProps> = ({ isOpen, onClose, currentAgentId, onSelectAgent }) => {
+export const AgentRoster: React.FC<AgentRosterProps> = ({ isOpen, onClose, currentAgentId, onSelectAgent, onOpenGallery }) => {
     const [agents, setAgents] = useState<Agent[]>([]);
     const [editingId, setEditingId] = useState<string | null>(null);
     
@@ -21,7 +22,9 @@ export const AgentRoster: React.FC<AgentRosterProps> = ({ isOpen, onClose, curre
         system_instruction: string;
         voice: string;
         accessLevel: string;
-    }>({ bio: '', system_instruction: '', voice: '', accessLevel: '' });
+        behaviorTuning: string;
+        profileImageUrl: string;
+    }>({ bio: '', system_instruction: '', voice: '', accessLevel: '', behaviorTuning: '', profileImageUrl: '' });
 
     useEffect(() => {
         if (isOpen) refreshAgents();
@@ -35,7 +38,9 @@ export const AgentRoster: React.FC<AgentRosterProps> = ({ isOpen, onClose, curre
                 bio: config.bio || baseAgent.bio, 
                 system_instruction: config.systemInstruction || baseAgent.system_instruction,
                 voice: config.voiceName || baseAgent.voice,
-                accessLevel: config.accessLevel || baseAgent.accessLevel
+                accessLevel: config.accessLevel || baseAgent.accessLevel,
+                behaviorTuning: config.behaviorTuning || baseAgent.behaviorTuning,
+                profileImageUrl: config.profileImageUrl || baseAgent.profileImageUrl
             };
         }));
         setAgents(hydratedAgents);
@@ -47,7 +52,9 @@ export const AgentRoster: React.FC<AgentRosterProps> = ({ isOpen, onClose, curre
             bio: agent.bio,
             system_instruction: agent.system_instruction,
             voice: agent.voice,
-            accessLevel: agent.accessLevel
+            accessLevel: agent.accessLevel,
+            behaviorTuning: agent.behaviorTuning,
+            profileImageUrl: agent.profileImageUrl || ''
         });
     };
 
@@ -56,7 +63,9 @@ export const AgentRoster: React.FC<AgentRosterProps> = ({ isOpen, onClose, curre
             systemInstruction: editForm.system_instruction,
             voiceName: editForm.voice,
             accessLevel: editForm.accessLevel,
-            bio: editForm.bio 
+            bio: editForm.bio,
+            behaviorTuning: editForm.behaviorTuning,
+            profileImageUrl: editForm.profileImageUrl
         });
         setEditingId(null);
         await refreshAgents();
@@ -115,16 +124,28 @@ export const AgentRoster: React.FC<AgentRosterProps> = ({ isOpen, onClose, curre
                                         
                                         {/* PROFILE HEADER */}
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                                            <div style={{ 
-                                                width: '56px', height: '56px', borderRadius: '50%', 
-                                                background: `radial-gradient(circle at 30% 30%, ${color}44, transparent), #111`,
-                                                color: color, 
-                                                display: 'flex', alignItems: 'center', justifyContent: 'center', 
-                                                fontWeight: '900', fontSize: '1.4rem', border: `2px solid ${color}44`,
-                                                textShadow: `0 0 10px ${color}66`
-                                            }}>
-                                                {agent.handle.substring(0, 1)}
-                                            </div>
+                                            {agent.profileImageUrl ? (
+                                                <img 
+                                                    src={agent.profileImageUrl} 
+                                                    alt={agent.handle}
+                                                    style={{ 
+                                                        width: '56px', height: '56px', borderRadius: '50%', 
+                                                        background: '#111', border: `2px solid ${color}44`,
+                                                        objectFit: 'cover'
+                                                    }}
+                                                />
+                                            ) : (
+                                                <div style={{ 
+                                                    width: '56px', height: '56px', borderRadius: '50%', 
+                                                    background: `radial-gradient(circle at 30% 30%, ${color}44, transparent), #111`,
+                                                    color: color, 
+                                                    display: 'flex', alignItems: 'center', justifyContent: 'center', 
+                                                    fontWeight: '900', fontSize: '1.4rem', border: `2px solid ${color}44`,
+                                                    textShadow: `0 0 10px ${color}66`
+                                                }}>
+                                                    {agent.handle.substring(0, 1)}
+                                                </div>
+                                            )}
                                             <div style={{ flex: 1 }}>
                                                 <div style={{ fontSize: '1.2rem', fontWeight: 'bold', color: '#fff', lineHeight: '1.1', marginBottom: '4px' }}>{agent.name}</div>
                                                 <div style={{ fontSize: '0.75rem', color: '#888', display: 'flex', gap: '0.5rem', alignItems: 'center', fontFamily: 'monospace' }}>
@@ -155,6 +176,16 @@ export const AgentRoster: React.FC<AgentRosterProps> = ({ isOpen, onClose, curre
                                             {isEditing ? (
                                                 <div className="flex-col" style={{ gap: '0.75rem', height: '100%' }}>
                                                     <div>
+                                                        <label className="form-label" style={{color: color}}>PROFILE IMAGE URL</label>
+                                                        <input 
+                                                            className="form-input" 
+                                                            value={editForm.profileImageUrl} 
+                                                            onChange={e => setEditForm({...editForm, profileImageUrl: e.target.value})}
+                                                            style={{ height: '2rem', fontSize: '0.8rem', background: '#111' }}
+                                                            placeholder="https://..."
+                                                        />
+                                                    </div>
+                                                    <div>
                                                         <label className="form-label" style={{color: color}}>BIO OVERRIDE</label>
                                                         <textarea 
                                                             className="form-input" 
@@ -170,6 +201,16 @@ export const AgentRoster: React.FC<AgentRosterProps> = ({ isOpen, onClose, curre
                                                             value={editForm.system_instruction} 
                                                             onChange={e => setEditForm({...editForm, system_instruction: e.target.value})}
                                                             style={{ height: '6rem', fontSize: '0.75rem', background: '#111' }}
+                                                        />
+                                                    </div>
+                                                     <div>
+                                                        <label className="form-label" style={{color: color}}>BEHAVIOR TUNING</label>
+                                                        <textarea 
+                                                            className="form-input" 
+                                                            value={editForm.behaviorTuning} 
+                                                            onChange={e => setEditForm({...editForm, behaviorTuning: e.target.value})}
+                                                            style={{ height: '4rem', fontSize: '0.8rem', resize: 'vertical', background: '#111' }}
+                                                            placeholder="e.g., Never mention being an AI."
                                                         />
                                                     </div>
                                                     <div className="flex-group">
@@ -219,6 +260,15 @@ export const AgentRoster: React.FC<AgentRosterProps> = ({ isOpen, onClose, curre
                                                             {agent.system_instruction}
                                                         </div>
                                                     </div>
+                                                    
+                                                    {agent.behaviorTuning && (
+                                                        <div style={{ background: '#111', padding: '0.75rem', borderRadius: '4px', border: '1px solid #f9731633' }}>
+                                                            <div style={{ fontSize: '0.65rem', color: '#f97316', marginBottom: '4px', fontWeight: 'bold', textTransform: 'uppercase' }}>Behavior Tuning</div>
+                                                            <div style={{ fontSize: '0.75rem', color: '#999', lineHeight: '1.4', fontStyle: 'italic' }}>
+                                                                {agent.behaviorTuning}
+                                                            </div>
+                                                        </div>
+                                                    )}
 
                                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.7rem', color: '#666', borderTop: '1px solid #222', paddingTop: '0.5rem' }}>
                                                         <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
@@ -255,6 +305,7 @@ export const AgentRoster: React.FC<AgentRosterProps> = ({ isOpen, onClose, curre
                                                 >
                                                     {isCurrent ? '● ACTIVE AGENT' : 'ACTIVATE'}
                                                 </button>
+                                                <button onClick={() => onOpenGallery(agent.id)} className="btn btn-secondary btn-sm" style={{ flex: 1 }} title="View Agent's Media">GALLERY</button>
                                                 <button onClick={() => handleEditClick(agent)} className="btn btn-secondary btn-sm" style={{ flex: 1 }} title="Modify Agent Profile">EDIT</button>
                                             </div>
                                         )}

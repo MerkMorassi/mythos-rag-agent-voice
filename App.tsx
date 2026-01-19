@@ -108,6 +108,7 @@ const App: React.FC = () => {
   const [vectorCount, setVectorCount] = useState(0);
   const [isAgentMuted, setIsAgentMuted] = useState(true);
   const [recognitionSettings, setRecognitionSettings] = useState<RecognitionSettings>({ userInteraction: '', agentInteraction: '' });
+  const [behaviorTuning, setBehaviorTuning] = useState('');
 
   // Layout & View Modes
   const [layoutMode, setLayoutMode] = useState<LayoutMode>('CHAT');
@@ -115,6 +116,7 @@ const App: React.FC = () => {
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
   const [activeSidePanel, setActiveSidePanel] = useState<string | null>(null);
   const [isGraphVisualizerOpen, setIsGraphVisualizerOpen] = useState(false);
+  const [galleryAgentScope, setGalleryAgentScope] = useState<string | null>(null);
   
   // Holodeck State
   const [isHolodeckOpen, setIsHolodeckOpen] = useState(false);
@@ -138,8 +140,8 @@ const App: React.FC = () => {
   const frameIntervalRef = useRef<number | null>(null);
   
   // Inputs
-  const paperclipInputRef = useRef<HTMLInputElement>(null);
-  const analysisFileInputRef = useRef<HTMLInputElement>(null);
+  const paperclipInputRef = useRef<HTMLInputElement | null>(null);
+  const analysisFileInputRef = useRef<HTMLInputElement | null>(null);
   const mediaFileInputRef = useRef<HTMLInputElement | null>(null);
   const mainInputRef = useRef<HTMLInputElement>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
@@ -195,9 +197,17 @@ ${recognitionSettings.agentInteraction || ''}
 `.trim()
     : '';
 
+  const behaviorTuningInstruction = behaviorTuning
+    ? `
+[BEHAVIORAL TUNING]
+${behaviorTuning}
+`.trim()
+    : '';
+
   const systemInstruction = `
 ${CAPABILITY_INSTRUCTION}
 ${recognitionInstruction}
+${behaviorTuningInstruction}
 
 [GENERAL MISSION DIRECTIVES]
 ${generalInstructions}
@@ -711,6 +721,7 @@ ${agentInstructions || currentAgent?.system_instruction}
       setVoicePitch(cfg.voicePitch || 0);
       setAccessLevel(cfg.accessLevel || agent?.accessLevel || '400');
       setRecognitionSettings(cfg.recognition || agent?.recognition || { userInteraction: '', agentInteraction: '' });
+      setBehaviorTuning(cfg.behaviorTuning || agent?.behaviorTuning || '');
   };
 
   const autoSaveSessionIfNeeded = async (agentIdToSave: string, logsToSave: LogMessage[]) => {
@@ -772,14 +783,18 @@ ${agentInstructions || currentAgent?.system_instruction}
       setCurrentAgentId(id);
   };
 
-  const handleSettingsSave = async (modelName: string, newVoiceRef?: string, newAccessLevel?: string, speed?: number, pitch?: number, recognition?: RecognitionSettings) => {
+  const handleSettingsSave = async (modelName: string, newVoiceRef?: string, newAccessLevel?: string, speed?: number, pitch?: number, recognition?: RecognitionSettings, newBehaviorTuning?: string) => {
       if (speed !== undefined) setVoiceSpeed(speed);
       if (pitch !== undefined) setVoicePitch(pitch);
       if (newVoiceRef !== undefined) setVoiceRef(newVoiceRef);
       if (newAccessLevel !== undefined) setAccessLevel(newAccessLevel);
       if (recognition) setRecognitionSettings(recognition);
+      if (newBehaviorTuning !== undefined) setBehaviorTuning(newBehaviorTuning);
+
+      const currentConfig = await getAgentConfig(currentAgentId);
 
       await saveAgentConfig(currentAgentId, {
+          ...currentConfig,
           systemInstruction: agentInstructions, 
           modelConfig, 
           voiceName: selectedVoice, 
@@ -788,7 +803,8 @@ ${agentInstructions || currentAgent?.system_instruction}
           accessLevel: newAccessLevel ?? accessLevel, 
           voiceSpeed: speed ?? voiceSpeed, 
           voicePitch: pitch ?? voicePitch,
-          recognition: recognition ?? recognitionSettings
+          recognition: recognition ?? recognitionSettings,
+          behaviorTuning: newBehaviorTuning ?? behaviorTuning
       });
       await saveGeneralInstructions(generalInstructions);
   };
@@ -801,6 +817,11 @@ ${agentInstructions || currentAgent?.system_instruction}
       }
       setHasGreeted(false);
       connect();
+  };
+
+  const handleOpenAgentGallery = (agentId: string) => {
+    setGalleryAgentScope(agentId);
+    setActiveSidePanel('MEDIA');
   };
 
   const toggleCamera = async () => {
@@ -1252,13 +1273,13 @@ ${agentInstructions || currentAgent?.system_instruction}
         {activeSidePanel === 'TOOLS' && <ToolManager isOpen={true} onClose={()=>setActiveSidePanel(null)} allTools={allTools} enabledToolIds={enabledToolIds} setEnabledToolIds={setEnabledToolIds} currentAgent={currentAgent} currentAccessLevel={accessLevel} />}
         {activeSidePanel === 'VOICE' && <VoiceCommandList isOpen={true} onOpen={()=>{}} onClose={()=>setActiveSidePanel(null)} />}
         {activeSidePanel === 'FOCUS' && <RoomFocusConfig isOpen={true} onOpen={()=>{}} onClose={()=>setActiveSidePanel(null)} />}
-        {activeSidePanel === 'MEDIA' && <MediaGallery isOpen={true} onOpen={()=>{}} onClose={()=>setActiveSidePanel(null)} currentAgentId={currentAgentId} />}
+        {activeSidePanel === 'MEDIA' && <MediaGallery isOpen={true} onOpen={()=>{}} onClose={() => { setActiveSidePanel(null); setGalleryAgentScope(null); }} currentAgentId={currentAgentId} agentScope={galleryAgentScope} />}
         {activeSidePanel === 'MCP' && <McpManager isOpen={true} onOpen={()=>{}} onClose={()=>setActiveSidePanel(null)} />}
         {activeSidePanel === 'KNOWLEDGE' && <KnowledgeManager isOpen={true} onClose={()=>setActiveSidePanel(null)} onUpdate={refreshVectorCount} currentAgentId={currentAgentId} />}
         {activeSidePanel === 'PROMPTS' && <PromptManager isOpen={true} onClose={()=>setActiveSidePanel(null)} currentAgentId={currentAgentId} onLoadPrompt={handleLoadPrompt} />}
         {activeSidePanel === 'HISTORY' && <ChatHistoryManager isOpen={true} onOpen={()=>{}} onClose={()=>setActiveSidePanel(null)} currentLogs={logs} onLoadSession={setLogs} currentAgentId={currentAgentId} onUpdateKnowledge={refreshVectorCount} />}
-        {activeSidePanel === 'SETTINGS' && <SettingsManager isOpen={true} onClose={()=>setActiveSidePanel(null)} modelConfig={modelConfig} setModelConfig={setModelConfig} selectedModel={selectedModel} setSelectedModel={setSelectedModel} disabled={connectionState === ConnectionState.CONNECTED} generalInstruction={generalInstructions} setGeneralInstruction={setGeneralInstructions} agentInstruction={agentInstructions} setAgentInstruction={setAgentInstructions} agentName={currentAgent?.handle || 'Unknown'} agentId={currentAgentId} agentAccessLevel={accessLevel} selectedVoice={selectedVoice} onVoiceChange={setSelectedVoice} onSave={handleSettingsSave} apiKey={apiKey} setApiKey={setApiKey} hfToken={hfToken} setHfToken={setHfToken} voiceReference={voiceRef} voiceSpeed={voiceSpeed} voicePitch={voicePitch} recognition={recognitionSettings} setRecognition={setRecognitionSettings} />}
-        {activeSidePanel === 'ROSTER' && <AgentRoster isOpen={true} onClose={() => setActiveSidePanel(null)} currentAgentId={currentAgentId} onSelectAgent={handleAgentChange} />}
+        {activeSidePanel === 'SETTINGS' && <SettingsManager isOpen={true} onClose={()=>setActiveSidePanel(null)} modelConfig={modelConfig} setModelConfig={setModelConfig} selectedModel={selectedModel} setSelectedModel={setSelectedModel} disabled={connectionState === ConnectionState.CONNECTED} generalInstruction={generalInstructions} setGeneralInstruction={setGeneralInstructions} agentInstruction={agentInstructions} setAgentInstruction={setAgentInstructions} agentName={currentAgent?.handle || 'Unknown'} agentId={currentAgentId} agentAccessLevel={accessLevel} selectedVoice={selectedVoice} onVoiceChange={setSelectedVoice} onSave={handleSettingsSave} apiKey={apiKey} setApiKey={setApiKey} hfToken={hfToken} setHfToken={setHfToken} voiceReference={voiceRef} voiceSpeed={voiceSpeed} voicePitch={voicePitch} recognition={recognitionSettings} setRecognition={setRecognitionSettings} behaviorTuning={behaviorTuning} setBehaviorTuning={setBehaviorTuning} />}
+        {activeSidePanel === 'ROSTER' && <AgentRoster isOpen={true} onClose={() => setActiveSidePanel(null)} currentAgentId={currentAgentId} onSelectAgent={handleAgentChange} onOpenGallery={handleOpenAgentGallery} />}
 
         <MediaPlayer audioUrl={storyAudioUrl} title="Narrative Playback" onClose={() => setStoryAudioUrl(null)} interruptSignal={interruptSignal} />
 
@@ -1280,6 +1301,32 @@ ${agentInstructions || currentAgent?.system_instruction}
       <footer className={`command-deck ${currentView === 'COUNCIL' || currentView === 'LORE_HARNESS' ? 'hidden' : ''}`}>
           <div className="tray-controls">
               <div className="flex-group">
+                  <button
+                      onClick={() => {
+                          if (connectionState === ConnectionState.CONNECTED) {
+                              handleStopSession();
+                          } else {
+                              handleStartSession();
+                          }
+                      }}
+                      className={`btn btn-icon ${
+                          connectionState === ConnectionState.CONNECTED ? 'active-red' :
+                          connectionState === ConnectionState.CONNECTING ? 'active-yellow animate-pulse' :
+                          'active-green'
+                      }`}
+                      disabled={connectionState === ConnectionState.CONNECTING}
+                      title={
+                          connectionState === ConnectionState.CONNECTED ? "Disconnect Session" :
+                          connectionState === ConnectionState.CONNECTING ? "Connecting..." :
+                          "Start Live Session"
+                      }
+                  >
+                      {connectionState === ConnectionState.CONNECTED ? (
+                          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7 2 2 0 0 1 1.72 2v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91"></path><line x1="23" y1="1" x2="1" y2="23"></line></svg>
+                      ) : (
+                          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
+                      )}
+                  </button>
                   {/* MIC */}
                   <button onClick={() => setIsMicOn(!isMicOn)} className={`btn btn-icon ${isMicOn ? 'active-green' : 'btn-danger'}`} title={isMicOn ? "Mute Microphone" : "Unmute Microphone"}>
                       {isMicOn ? <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg> : <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="1" y1="1" x2="23" y2="23"></line><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"></path><path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>}
@@ -1343,7 +1390,6 @@ ${agentInstructions || currentAgent?.system_instruction}
               )}
 
               <input ref={mainInputRef} type="text" className="main-input unified-input" placeholder={isThinking ? "Processing..." : (isPlaying ? "Speaking..." : "Enter command or message...")} value={inputText} onChange={(e) => setInputText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendText()} disabled={connectionState === ConnectionState.DISCONNECTED && !apiKey}/>
-              {connectionState === ConnectionState.CONNECTED ? <button onClick={handleStopSession} className="btn btn-danger btn-lg" title="Disconnect Session">STOP</button> : <button onClick={handleStartSession} className="btn btn-primary btn-lg" disabled={connectionState === ConnectionState.CONNECTING} title={isAgentMuted ? "Connect Live Session (Agent Muted)" : "Connect Live Session"}>{connectionState === ConnectionState.CONNECTING ? '...' : 'START'}</button>}
               <button onClick={handleSendText} className="btn btn-secondary btn-lg" title="Send Message" disabled={(!inputText.trim() && !pendingAttachment) || (connectionState === ConnectionState.DISCONNECTED && !apiKey)}>SEND</button>
           </div>
       </footer>

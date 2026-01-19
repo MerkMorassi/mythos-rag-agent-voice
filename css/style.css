@@ -182,6 +182,8 @@ html, body, #root {
 .btn-accent { background: var(--color-accent); color: #000; border-color: var(--color-accent); }
 .btn-cyan { background: var(--color-cyan); color: #fff; border-color: var(--color-cyan); }
 .btn.active-green { background: var(--color-success); color: #000; border-color: var(--color-success); }
+.btn.active-red { background: var(--color-danger); color: #fff; border-color: var(--color-danger); }
+.btn.active-yellow { background: var(--color-accent); color: #000; border-color: var(--color-accent); }
 .btn-xl { height: var(--btn-h-xl); }
 .btn-lg { height: var(--btn-h-lg); }
 .btn-md { height: var(--btn-h-md); }

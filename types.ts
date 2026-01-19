@@ -93,6 +93,7 @@ export interface AgentConfig {
   bio?: string;
   recognition?: RecognitionSettings;
   behaviorTuning?: string;
+  profileImageUrl?: string;
 }
 
 export interface CloudFile {
@@ -168,6 +169,7 @@ export interface Agent {
   id: string;
   handle: string;
   name: string;
+  profileImageUrl?: string;
   
   // Hierarchy
   agentClass: AgentClass;
@@ -278,7 +280,7 @@ export enum ProductionStage {
     IDEATION = 'IDEATION',   // Divergent (Brainstorm)
     SCRIPT = 'SCRIPT',       // Convergent (Scribe)
     DESIGN = 'DESIGN',       // Visual Style (VisDev)
-    ART = 'ART'              // High Fidelity (Lumiere)
+    ART = 'ART'              // High Fidelity (Lumière)
 }
 
 export enum ApprovalStatus {
