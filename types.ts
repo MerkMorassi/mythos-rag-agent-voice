@@ -191,6 +191,10 @@ export interface Agent {
 
   // State (Legacy support)
   file_ids?: string[]; 
+
+  // Editor properties
+  isCustom?: boolean;
+  order: number;
 }
 
 // --- LOREPACK SCHEMA (MYTHOS.LOREPACK.v1) ---
@@ -241,7 +245,7 @@ export interface CanvasSection {
 }
 
 export interface WorkingMemory {
-    id: string; // 'HOLODECK_MAIN'
+    id: 'HOLODECK_MAIN';
     title: string;
     sections: CanvasSection[];
     lastModified: number;

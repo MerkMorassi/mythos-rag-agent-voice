@@ -23,6 +23,8 @@ export const AGENTS: Agent[] = [
         recognition: { userInteraction: '', agentInteraction: '' },
         voice: 'Kore',
         studioConfig: { preferredTools: ['consult_agent'], color: '#fbbf24' },
+        isCustom: false,
+        order: 0
     },
     {
         id: 'agent-sophia',
@@ -38,6 +40,8 @@ export const AGENTS: Agent[] = [
         recognition: { userInteraction: '', agentInteraction: '' },
         voice: 'Callirrhoe',
         studioConfig: { preferredTools: ['retrieve_knowledge'], color: '#ec4899' },
+        isCustom: false,
+        order: 1
     },
     {
         id: 'agent-domantheia',
@@ -53,6 +57,8 @@ export const AGENTS: Agent[] = [
         recognition: { userInteraction: '', agentInteraction: '' },
         voice: 'Leda',
         studioConfig: { preferredTools: ['retrieve_knowledge', 'maps_search_places'], color: '#8b5cf6' },
+        isCustom: false,
+        order: 2
     },
 
     // --- CORE FUNCTIONAL AGENTS ---
@@ -70,6 +76,8 @@ export const AGENTS: Agent[] = [
         recognition: { userInteraction: '', agentInteraction: '' },
         voice: 'Zephyr',
         studioConfig: { preferredTools: ['retrieve_knowledge'], color: '#a78bfa' },
+        isCustom: false,
+        order: 3
     },
     {
         id: 'agent-noesis',
@@ -85,6 +93,8 @@ export const AGENTS: Agent[] = [
         recognition: { userInteraction: '', agentInteraction: '' },
         voice: 'Fenrir',
         studioConfig: { preferredTools: ['execute_python'], color: '#38bdf8' },
+        isCustom: false,
+        order: 4
     },
     {
         id: 'agent-merkos',
@@ -100,6 +110,8 @@ export const AGENTS: Agent[] = [
         recognition: { userInteraction: '', agentInteraction: '' },
         voice: 'Puck',
         studioConfig: { preferredTools: ['routeRequest', 'maps_search_places'], color: '#4ade80' },
+        isCustom: false,
+        order: 5
     },
 
     // --- THE NINE MUSES (CREATIVE STAFF) ---
@@ -117,6 +129,8 @@ export const AGENTS: Agent[] = [
         recognition: { userInteraction: '', agentInteraction: '' },
         voice: 'Aoede',
         studioConfig: { preferredTools: ['update_canvas'], color: '#f97316' },
+        isCustom: false,
+        order: 6
     },
     {
         id: 'agent-clio',
@@ -132,6 +146,8 @@ export const AGENTS: Agent[] = [
         recognition: { userInteraction: '', agentInteraction: '' },
         voice: 'Zephyr',
         studioConfig: { preferredTools: ['retrieve_knowledge'], color: '#94a3b8' },
+        isCustom: false,
+        order: 7
     },
     {
         id: 'agent-erato',
@@ -147,6 +163,8 @@ export const AGENTS: Agent[] = [
         recognition: { userInteraction: '', agentInteraction: '' },
         voice: 'Aoede',
         studioConfig: { preferredTools: ['update_canvas'], color: '#f472b6' },
+        isCustom: false,
+        order: 8
     },
     {
         id: 'agent-euterpe',
@@ -162,6 +180,8 @@ export const AGENTS: Agent[] = [
         recognition: { userInteraction: '', agentInteraction: '' },
         voice: 'Leda',
         studioConfig: { preferredTools: ['routeRequest'], color: '#16a34a' },
+        isCustom: false,
+        order: 9
     },
     {
         id: 'agent-melpomene',
@@ -177,6 +197,8 @@ export const AGENTS: Agent[] = [
         recognition: { userInteraction: '', agentInteraction: '' },
         voice: 'Charon',
         studioConfig: { preferredTools: ['update_canvas'], color: '#ef4444' },
+        isCustom: false,
+        order: 10
     },
     {
         id: 'agent-polyhymnia',
@@ -192,6 +214,8 @@ export const AGENTS: Agent[] = [
         recognition: { userInteraction: '', agentInteraction: '' },
         voice: 'Kore',
         studioConfig: { preferredTools: ['update_canvas'], color: '#64748b' },
+        isCustom: false,
+        order: 11
     },
     {
         id: 'agent-terpsichore',
@@ -207,6 +231,8 @@ export const AGENTS: Agent[] = [
         recognition: { userInteraction: '', agentInteraction: '' },
         voice: 'Puck',
         studioConfig: { preferredTools: ['routeRequest'], color: '#6ee7b7' },
+        isCustom: false,
+        order: 12
     },
     {
         id: 'agent-thalia',
@@ -222,6 +248,8 @@ export const AGENTS: Agent[] = [
         recognition: { userInteraction: '', agentInteraction: '' },
         voice: 'Puck',
         studioConfig: { preferredTools: ['update_canvas'], color: '#eab308' },
+        isCustom: false,
+        order: 13
     },
     {
         id: 'agent-urania',
@@ -237,5 +265,7 @@ export const AGENTS: Agent[] = [
         recognition: { userInteraction: '', agentInteraction: '' },
         voice: 'Fenrir',
         studioConfig: { preferredTools: ['execute_python'], color: '#0ea5e9' },
+        isCustom: false,
+        order: 14
     }
 ];
