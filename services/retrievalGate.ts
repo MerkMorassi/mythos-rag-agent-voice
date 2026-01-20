@@ -29,7 +29,7 @@ export const RetrievalGate = {
     return dot / (Math.sqrt(nA) * Math.sqrt(nB)) || 0;
   },
 
-  async query(queryVectorOrText: number[] | string, queryTextFallback: string, topK: number = 8): Promise<VectorRecord[]> {
+  async query(queryVectorOrText: number[] | string, queryTextFallback: string, topK: number = 8, minScore: number = 0): Promise<VectorRecord[]> {
     let queryVector: number[];
 
     // 1. Resolve Vector (Handle Text vs Pre-computed Vector)
@@ -73,8 +73,9 @@ export const RetrievalGate = {
       score: this.cosineSimilarity(queryVector, v.vector)
     }));
 
-    // Sort descending by score
+    // Filter by threshold and Sort descending by score
     return scored
+      .filter(v => v.score >= minScore)
       .sort((a, b) => b.score - a.score)
       .slice(0, topK);
   }

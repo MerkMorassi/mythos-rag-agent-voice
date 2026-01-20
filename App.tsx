@@ -49,7 +49,9 @@ import {
   getVaultStats,
   getVectorCountByAgent,
   savePrompt,
-  saveChatSession
+  saveChatSession,
+  getRagThreshold,
+  saveRagThreshold
 } from './services/db';
 import { RetrievalGate } from './services/retrievalGate';
 import { IngestionService } from './services/ingestion';
@@ -109,6 +111,7 @@ const App: React.FC = () => {
   const [isAgentMuted, setIsAgentMuted] = useState(true);
   const [recognitionSettings, setRecognitionSettings] = useState<RecognitionSettings>({ userInteraction: '', agentInteraction: '' });
   const [behaviorTuning, setBehaviorTuning] = useState('');
+  const [ragThreshold, setRagThreshold] = useState(0.35);
 
   // Layout & View Modes
   const [layoutMode, setLayoutMode] = useState<LayoutMode>('CHAT');
@@ -465,7 +468,7 @@ ${agentInstructions || currentAgent?.system_instruction}
               try {
                   const provider = new GeminiProvider(apiKey);
                   const vec = await provider.embed(query);
-                  const vectorDocs = await RetrievalGate.query(vec, query);
+                  const vectorDocs = await RetrievalGate.query(vec, query, 8, ragThreshold);
                   const combined = `DOCS:\n${vectorDocs.map(d => `- ${d.text.substring(0,400)}...`).join('\n')}`;
                   responses.push({ id: fc.id, name: fc.name, response: { result: combined } });
               } catch(e: any) {
@@ -590,6 +593,7 @@ ${agentInstructions || currentAgent?.system_instruction}
           setGeneralInstructions(gen);
           loadAgentConfig(currentAgentId);
           refreshVectorCount();
+          getRagThreshold().then(setRagThreshold);
       };
       init();
       const handleKeyDown = (e: KeyboardEvent) => { if (e.key === '`' || e.key === '~') { if (document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') { e.preventDefault(); setIsTerminalOpen(prev => !prev); } } };
@@ -783,13 +787,14 @@ ${agentInstructions || currentAgent?.system_instruction}
       setCurrentAgentId(id);
   };
 
-  const handleSettingsSave = async (modelName: string, newVoiceRef?: string, newAccessLevel?: string, speed?: number, pitch?: number, recognition?: RecognitionSettings, newBehaviorTuning?: string) => {
+  const handleSettingsSave = async (modelName: string, newVoiceRef?: string, newAccessLevel?: string, speed?: number, pitch?: number, recognition?: RecognitionSettings, newBehaviorTuning?: string, newRagThreshold?: number) => {
       if (speed !== undefined) setVoiceSpeed(speed);
       if (pitch !== undefined) setVoicePitch(pitch);
       if (newVoiceRef !== undefined) setVoiceRef(newVoiceRef);
       if (newAccessLevel !== undefined) setAccessLevel(newAccessLevel);
       if (recognition) setRecognitionSettings(recognition);
       if (newBehaviorTuning !== undefined) setBehaviorTuning(newBehaviorTuning);
+      if (newRagThreshold !== undefined) setRagThreshold(newRagThreshold);
 
       const currentConfig = await getAgentConfig(currentAgentId);
 
@@ -806,7 +811,9 @@ ${agentInstructions || currentAgent?.system_instruction}
           recognition: recognition ?? recognitionSettings,
           behaviorTuning: newBehaviorTuning ?? behaviorTuning
       });
+      
       await saveGeneralInstructions(generalInstructions);
+      await saveRagThreshold(newRagThreshold ?? ragThreshold);
   };
 
   const handleStartSession = () => {
@@ -1278,7 +1285,7 @@ ${agentInstructions || currentAgent?.system_instruction}
         {activeSidePanel === 'KNOWLEDGE' && <KnowledgeManager isOpen={true} onClose={()=>setActiveSidePanel(null)} onUpdate={refreshVectorCount} currentAgentId={currentAgentId} />}
         {activeSidePanel === 'PROMPTS' && <PromptManager isOpen={true} onClose={()=>setActiveSidePanel(null)} currentAgentId={currentAgentId} onLoadPrompt={handleLoadPrompt} />}
         {activeSidePanel === 'HISTORY' && <ChatHistoryManager isOpen={true} onOpen={()=>{}} onClose={()=>setActiveSidePanel(null)} currentLogs={logs} onLoadSession={setLogs} currentAgentId={currentAgentId} onUpdateKnowledge={refreshVectorCount} />}
-        {activeSidePanel === 'SETTINGS' && <SettingsManager isOpen={true} onClose={()=>setActiveSidePanel(null)} modelConfig={modelConfig} setModelConfig={setModelConfig} selectedModel={selectedModel} setSelectedModel={setSelectedModel} disabled={connectionState === ConnectionState.CONNECTED} generalInstruction={generalInstructions} setGeneralInstruction={setGeneralInstructions} agentInstruction={agentInstructions} setAgentInstruction={setAgentInstructions} agentName={currentAgent?.handle || 'Unknown'} agentId={currentAgentId} agentAccessLevel={accessLevel} selectedVoice={selectedVoice} onVoiceChange={setSelectedVoice} onSave={handleSettingsSave} apiKey={apiKey} setApiKey={setApiKey} hfToken={hfToken} setHfToken={setHfToken} voiceReference={voiceRef} voiceSpeed={voiceSpeed} voicePitch={voicePitch} recognition={recognitionSettings} setRecognition={setRecognitionSettings} behaviorTuning={behaviorTuning} setBehaviorTuning={setBehaviorTuning} />}
+        {activeSidePanel === 'SETTINGS' && <SettingsManager isOpen={true} onClose={()=>setActiveSidePanel(null)} modelConfig={modelConfig} setModelConfig={setModelConfig} selectedModel={selectedModel} setSelectedModel={setSelectedModel} disabled={connectionState === ConnectionState.CONNECTED} generalInstruction={generalInstructions} setGeneralInstruction={setGeneralInstructions} agentInstruction={agentInstructions} setAgentInstruction={setAgentInstructions} agentName={currentAgent?.handle || 'Unknown'} agentId={currentAgentId} agentAccessLevel={accessLevel} selectedVoice={selectedVoice} onVoiceChange={setSelectedVoice} onSave={handleSettingsSave} apiKey={apiKey} setApiKey={setApiKey} hfToken={hfToken} setHfToken={setHfToken} voiceReference={voiceRef} voiceSpeed={voiceSpeed} voicePitch={voicePitch} recognition={recognitionSettings} setRecognition={setRecognitionSettings} behaviorTuning={behaviorTuning} setBehaviorTuning={setBehaviorTuning} ragThreshold={ragThreshold} setRagThreshold={setRagThreshold} />}
         {activeSidePanel === 'ROSTER' && <AgentRoster isOpen={true} onClose={() => setActiveSidePanel(null)} currentAgentId={currentAgentId} onSelectAgent={handleAgentChange} onOpenGallery={handleOpenAgentGallery} />}
 
         <MediaPlayer audioUrl={storyAudioUrl} title="Narrative Playback" onClose={() => setStoryAudioUrl(null)} interruptSignal={interruptSignal} />
@@ -1372,7 +1379,7 @@ ${agentInstructions || currentAgent?.system_instruction}
               </div>
           </div>
           <div className="input-bar">
-              <input type="file" accept="image/*,video/*,audio/*,.pdf,.txt,.md,.json,.js,.ts,.tsx" ref={paperclipInputRef} className="hidden" onChange={handlePaperclipUpload} />
+              <input type="file" accept="image/*,video/*,audio/*,.pdf,.txt,.md,.json,.js,.ts,.tsx,.jsx,.py,.html,.css,.xml,.yaml,.yml,.sh" ref={paperclipInputRef} className="hidden" onChange={handlePaperclipUpload} />
               <input type="file" accept="image/*,video/*" ref={analysisFileInputRef} className="hidden" onChange={handleAnalysisFileUpload} />
 
               <button onClick={handlePaperclipClick} className="btn btn-icon btn-lg" style={{ marginRight: '0.5rem' }} title="Ingest files (text) or attach media">

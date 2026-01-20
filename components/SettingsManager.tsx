@@ -19,7 +19,7 @@ interface SettingsManagerProps {
   agentAccessLevel: string;
   selectedVoice: string;
   onVoiceChange: (voice: string) => void;
-  onSave: (modelName: string, voiceRef?: string, accessLevel?: string, voiceSpeed?: number, voicePitch?: number, recognition?: RecognitionSettings, behaviorTuning?: string) => Promise<void>;
+  onSave: (modelName: string, voiceRef?: string, accessLevel?: string, voiceSpeed?: number, voicePitch?: number, recognition?: RecognitionSettings, behaviorTuning?: string, ragThreshold?: number) => Promise<void>;
   isOpen: boolean;
   onClose: () => void;
   apiKey: string;
@@ -33,6 +33,8 @@ interface SettingsManagerProps {
   setRecognition: (recognition: RecognitionSettings) => void;
   behaviorTuning: string;
   setBehaviorTuning: (val: string) => void;
+  ragThreshold?: number;
+  setRagThreshold?: (val: number) => void;
 }
 
 const SettingsManager: React.FC<SettingsManagerProps> = (props) => {
@@ -44,6 +46,7 @@ const SettingsManager: React.FC<SettingsManagerProps> = (props) => {
   const [modelsList, setModelsList] = useState<{ name: string, displayName: string }[]>([]);
   const [recognition, setRecognition] = useState(props.recognition || { userInteraction: '', agentInteraction: '' });
   const [dolphinUrl, setDolphinUrl] = useState('');
+  const [threshold, setThreshold] = useState(props.ragThreshold || 0.35);
   
   // Audio Refs & TTS Test State
   const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
@@ -63,7 +66,8 @@ const SettingsManager: React.FC<SettingsManagerProps> = (props) => {
     setSpeed(props.voiceSpeed || 1.0);
     setPitch(props.voicePitch || 0);
     setRecognition(props.recognition || { userInteraction: '', agentInteraction: '' });
-  }, [props.voiceReference, props.agentAccessLevel, props.voiceSpeed, props.voicePitch, props.recognition, props.isOpen]);
+    setThreshold(props.ragThreshold || 0.35);
+  }, [props.voiceReference, props.agentAccessLevel, props.voiceSpeed, props.voicePitch, props.recognition, props.ragThreshold, props.isOpen]);
 
   if (!props.isOpen) return null;
 
@@ -89,7 +93,7 @@ const SettingsManager: React.FC<SettingsManagerProps> = (props) => {
     
     ExternalRouter.updateToolConfig('DOLPHIN_LLM', { url: dolphinUrl });
 
-    await props.onSave(props.selectedModel, voiceRef, accessLevel, speed, pitch, recognition, props.behaviorTuning);
+    await props.onSave(props.selectedModel, voiceRef, accessLevel, speed, pitch, recognition, props.behaviorTuning, threshold);
     
     setIsSaving(false);
     alert("NEURAL SYNC: System parameters updated.");
@@ -201,6 +205,22 @@ const SettingsManager: React.FC<SettingsManagerProps> = (props) => {
                     style={{ height: '5rem', fontSize: '0.8rem' }}
                     placeholder="Global directives for all agents..."
                 />
+            </div>
+
+            <div className="flex-col">
+                <label className="form-label">RAG SIMILARITY THRESHOLD: {threshold}</label>
+                <input 
+                    type="range" 
+                    min="0.0" 
+                    max="1.0" 
+                    step="0.01" 
+                    value={threshold} 
+                    onChange={e => setThreshold(parseFloat(e.target.value))} 
+                    style={{ width: '100%' }} 
+                />
+                <p style={{fontSize:'0.65rem', color:'#666', marginTop:'4px'}}>
+                    Minimum similarity score (0.0 - 1.0) for a knowledge node to be considered relevant. Higher values reduce hallucinations but may miss data.
+                </p>
             </div>
 
             <div className="flex-col">

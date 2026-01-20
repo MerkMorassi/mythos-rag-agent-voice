@@ -1,9 +1,8 @@
 
-
 import { GoogleGenAI, FunctionDeclaration, Type, Tool, FinishReason, Content } from "@google/genai";
 import { Agent, MultiAgentMessage, SomaActionType, MediaAsset } from "../types";
 import { AGENTS } from "../agents";
-import { getAgentConfig, getCanvas, updateCanvas, getSovereignConfig, getMediaAsset } from "./db";
+import { getAgentConfig, getCanvas, updateCanvas, getSovereignConfig, getMediaAsset, getRagThreshold } from "./db";
 import { RetrievalGate } from "./retrievalGate";
 import { EXTERNAL_MODEL_ENDPOINTS, ExternalRouter } from "./externalRouter";
 import { SomaKernel } from "./soma";
@@ -438,7 +437,8 @@ export const MultiAgentService = {
 
             if (gateResult.shouldRetrieve) {
                 const queryVector = await geminiProvider.embed(userMessage);
-                const docs = await RetrievalGate.query(queryVector, userMessage);
+                const threshold = await getRagThreshold();
+                const docs = await RetrievalGate.query(queryVector, userMessage, 8, threshold); // Pass threshold
                 if (docs.length > 0) {
                     ragContext = `\n\n[CONTEXT]\n${docs.map(d => d.text).join('\n---\n')}\n[/CONTEXT]\n`;
                 }

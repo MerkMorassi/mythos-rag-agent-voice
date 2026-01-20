@@ -403,6 +403,18 @@ export const getSovereignConfig = async (): Promise<SovereignConfig> => {
     });
 };
 
+export const saveRagThreshold = (val: number) => putItem(SETTINGS_STORE, { id: 'RAG_THRESHOLD', value: val });
+export const getRagThreshold = async (): Promise<number> => {
+    const db = await initDB();
+    return new Promise((resolve) => {
+        const tx = db.transaction([SETTINGS_STORE], 'readonly');
+        const req = tx.objectStore(SETTINGS_STORE).get('RAG_THRESHOLD');
+        // Default to 0.35 if not set.
+        req.onsuccess = () => resolve(req.result?.value ?? 0.35);
+        req.onerror = () => resolve(0.35);
+    });
+};
+
 
 // --- MEDIA ASSETS ---
 
