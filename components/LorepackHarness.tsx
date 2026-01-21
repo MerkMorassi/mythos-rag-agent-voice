@@ -63,7 +63,7 @@ Acknowledge the new input and seamlessly integrate it into the ongoing conversat
     const [pendingAttachment, setPendingAttachment] = useState<{ mimeType: string, data: string, name: string } | null>(null);
     const lastAttachmentRef = useRef<{ mimeType: string, data: string, name: string } | null>(null);
     const [selectedVoice, setSelectedVoice] = useState('Zephyr');
-    const [isAgentMuted, setIsAgentMuted] = useState(false);
+    const [isAgentMuted, setIsAgentMuted] = useState(true);
     const [toolOverride, setToolOverride] = useState<ToolOverride>('auto');
     
     // File & Modal State
@@ -583,10 +583,10 @@ Acknowledge the new input and seamlessly integrate it into the ongoing conversat
                     <footer className="command-deck">
                         <div className="tray-controls">
                            <div className="flex-group">
-                                <button onClick={() => setIsMicOn(!isMicOn)} className={`btn btn-icon ${isMicOn ? 'active-green' : 'btn-danger'}`} title={isMicOn ? "Mute Microphone" : "Unmute Microphone"}>
+                                <button onClick={() => setIsMicOn(!isMicOn)} className={`btn btn-icon ${isMicOn ? 'active-green' : 'btn-secondary'}`} title={isMicOn ? "Mute Microphone" : "Unmute Microphone"}>
                                     {isMicOn ? <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg> : <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="1" y1="1" x2="23" y2="23"></line><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"></path><path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>}
                                 </button>
-                                <button onClick={() => setIsAgentMuted(!isAgentMuted)} className={`btn btn-icon ${!isAgentMuted ? '' : 'btn-danger'}`} title={isAgentMuted ? "Unmute Agent's Voice" : "Mute Agent's Voice"}>
+                                <button onClick={() => setIsAgentMuted(!isAgentMuted)} className={`btn btn-icon ${!isAgentMuted ? 'active-green' : 'btn-secondary'}`} title={isAgentMuted ? "Unmute Agent's Voice" : "Mute Agent's Voice"}>
                                    {isAgentMuted ? <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg> : <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>}
                                 </button>
                             </div>

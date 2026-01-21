@@ -25,6 +25,7 @@ export interface RouteResult {
     success: boolean;
     type: 'text' | 'image' | 'video' | 'audio';
     data?: string;
+    assetId?: string; // The ID of the saved asset in the gallery
     error?: string;
 }
 
@@ -198,7 +199,6 @@ export const ExternalRouter = {
         prompt: string, 
         agent: { id: string, handle: string }, 
         generateAudio: boolean = false, 
-        // FIX: The attachment object can have a 'name' property. Added it to the type definition.
         options?: { inputAssetId?: string; attachment?: { mimeType: string; data: string; name?: string; }; voiceRefOverride?: string }
     ): Promise<RouteResult> {
         console.log(`[ROUTER] Routing to ${target}: ${prompt.substring(0, 50)}...`);
@@ -290,7 +290,7 @@ export const ExternalRouter = {
 
     // --- LATENT SYNC VIDEO ENGINE ---
     async callLatentSyncVideo(
-        prompt: string, // This is the text to be spoken
+        prompt: string, 
         agent: { id: string, handle: string }, 
         options?: { inputAssetId?: string; attachment?: { mimeType: string; data: string; name?: string; } }
     ): Promise<RouteResult> {
@@ -361,8 +361,8 @@ export const ExternalRouter = {
                 reader.readAsDataURL(finalVideoBlob);
             });
     
-            await this.saveGeneratedImage(base64, `Dub: ${prompt}`, agent, 'VID', 'LATENTSYNC');
-            return { success: true, type: 'video', data: base64 };
+            const assetId = await this.saveGeneratedImage(base64, `Dub: ${prompt}`, agent, 'VID', 'LATENTSYNC');
+            return { success: true, type: 'video', data: base64, assetId };
     
         } catch (e: any) {
             return { success: false, type: 'text', error: `LatentSync Failed: ${e.message}` };
@@ -439,8 +439,8 @@ export const ExternalRouter = {
                 reader.readAsDataURL(videoBlob);
             });
     
-            await this.saveGeneratedImage(base64, prompt, agent, 'VID', 'LTX2_DISTILLED');
-            return { success: true, type: 'video', data: base64 };
+            const assetId = await this.saveGeneratedImage(base64, prompt, agent, 'VID', 'LTX2_DISTILLED');
+            return { success: true, type: 'video', data: base64, assetId };
     
         } catch (e: any) {
             return { success: false, type: 'text', error: `LTX-2 Generation Failed: ${e.message}` };
@@ -451,7 +451,6 @@ export const ExternalRouter = {
     async callFluxKleinImage(
         prompt: string, 
         agent: { id: string, handle: string }, 
-        // FIX: The attachment object can have a 'name' property. Added it to the type definition.
         options?: { inputAssetId?: string; attachment?: { mimeType: string; data: string; name?: string; } }
     ): Promise<RouteResult> {
         const baseURL = "https://black-forest-labs-flux-2-klein-9b.hf.space";
@@ -521,8 +520,8 @@ export const ExternalRouter = {
                  throw new Error("MCP tool did not return a valid image format.");
             }
 
-            await this.saveGeneratedImage(finalImageDataBase64, prompt, agent, 'IMG', 'FLUX_KLEIN');
-            return { success: true, type: 'image', data: finalImageDataBase64 };
+            const assetId = await this.saveGeneratedImage(finalImageDataBase64, prompt, agent, 'IMG', 'FLUX_KLEIN');
+            return { success: true, type: 'image', data: finalImageDataBase64, assetId };
 
         } catch (e: any) {
             return { success: false, type: 'text', error: `FLUX Generation Failed: ${e.message}` };
@@ -563,8 +562,8 @@ export const ExternalRouter = {
                 throw new Error("Invalid image data format from SDXL model.");
             }
 
-            await this.saveGeneratedImage(output, prompt, agent, 'IMG', 'SDXL');
-            return { success: true, type: 'image', data: output };
+            const assetId = await this.saveGeneratedImage(output, prompt, agent, 'IMG', 'SDXL');
+            return { success: true, type: 'image', data: output, assetId };
 
         } catch (e: any) {
             console.error("[ROUTER] SDXL Call failed:", e.message);
@@ -576,7 +575,6 @@ export const ExternalRouter = {
     async callI2VLightning(
         prompt: string, 
         agent: { id: string, handle: string }, 
-        // FIX: The attachment object can have a 'name' property. Added it to the type definition.
         options?: { inputAssetId?: string; attachment?: { mimeType: string; data: string; name?: string; } }
     ): Promise<RouteResult> {
         const baseURL = "https://edbanshee-wan22-14b-lightning-14b-i2v-ui.hf.space";
@@ -584,7 +582,6 @@ export const ExternalRouter = {
         let imageData: { data: string; mimeType: string; name: string } | null = null;
     
         if (options?.attachment) {
-            // FIX: Use the attachment's name if available, otherwise fallback.
             imageData = { data: options.attachment.data, mimeType: options.attachment.mimeType, name: options.attachment.name || 'input.jpg' };
         } else if (options?.inputAssetId) {
             const asset = await getMediaAsset(options.inputAssetId);
@@ -643,8 +640,8 @@ export const ExternalRouter = {
                 reader.readAsDataURL(videoBlob);
             });
     
-            await this.saveGeneratedImage(base64, prompt, agent, 'VID', 'I2V_LIGHTNING');
-            return { success: true, type: 'video', data: base64 };
+            const assetId = await this.saveGeneratedImage(base64, prompt, agent, 'VID', 'I2V_LIGHTNING');
+            return { success: true, type: 'video', data: base64, assetId };
     
         } catch (e: any) {
             return { success: false, type: 'text', error: `I2V Generation Failed: ${e.message}` };
@@ -672,8 +669,8 @@ export const ExternalRouter = {
             
             if (!output || !output.startsWith('data:image')) throw new Error("Invalid output from Wan.");
 
-            await this.saveGeneratedImage(output, prompt, agent, 'IMG', 'WAN');
-            return { success: true, type: 'image', data: output };
+            const assetId = await this.saveGeneratedImage(output, prompt, agent, 'IMG', 'WAN');
+            return { success: true, type: 'image', data: output, assetId };
         } catch (e: any) {
             return { success: false, type: 'text', error: `Wan Image failed: ${e.message}` };
         }
@@ -708,8 +705,8 @@ export const ExternalRouter = {
 
             if (!finalVideoData) throw new Error("Invalid output from Wanimate.");
 
-            await this.saveGeneratedImage(finalVideoData, prompt, agent, 'VID', 'WANIMATE');
-            return { success: true, type: 'video', data: finalVideoData };
+            const assetId = await this.saveGeneratedImage(finalVideoData, prompt, agent, 'VID', 'WANIMATE');
+            return { success: true, type: 'video', data: finalVideoData, assetId };
         } catch (e: any) {
             return { success: false, type: 'text', error: `Wanimate failed: ${e.message}` };
         }
@@ -775,8 +772,8 @@ export const ExternalRouter = {
 
             if (!finalVideoData) throw new Error("Invalid output from Wav2Lip.");
 
-            await this.saveGeneratedImage(finalVideoData, `Sync: ${text.substring(0,20)}...`, agent, 'VID', 'LIPSYNC');
-            return { success: true, type: 'video', data: finalVideoData };
+            const assetId = await this.saveGeneratedImage(finalVideoData, `Sync: ${text.substring(0,20)}...`, agent, 'VID', 'LIPSYNC');
+            return { success: true, type: 'video', data: finalVideoData, assetId };
 
         } catch (e: any) {
             console.error("LipSync Failed:", e);
@@ -855,8 +852,8 @@ export const ExternalRouter = {
                 return { success: false, type: 'text', error: "Model did not return an image." };
             }
 
-            await this.saveGeneratedImage(`data:image/jpeg;base64,${base64Image}`, prompt, agent, 'IMG', 'GEMINI');
-            return { success: true, type: 'image', data: `data:image/jpeg;base64,${base64Image}` };
+            const assetId = await this.saveGeneratedImage(`data:image/jpeg;base64,${base64Image}`, prompt, agent, 'IMG', 'GEMINI');
+            return { success: true, type: 'image', data: `data:image/jpeg;base64,${base64Image}`, assetId };
 
         } catch (e: any) {
             if (e.message?.includes('400') || e.message?.includes('SAFETY')) {
@@ -909,8 +906,8 @@ export const ExternalRouter = {
                 reader.readAsDataURL(blob);
             });
 
-            await this.saveGeneratedImage(`data:video/mp4;base64,${base64}`, prompt, agent, 'VID', 'VEO');
-            return { success: true, type: 'video', data: `data:video/mp4;base64,${base64}` };
+            const assetId = await this.saveGeneratedImage(`data:video/mp4;base64,${base64}`, prompt, agent, 'VID', 'VEO');
+            return { success: true, type: 'video', data: `data:video/mp4;base64,${base64}`, assetId };
 
         } catch (e: any) {
             console.error("Veo Error:", e);
@@ -973,7 +970,7 @@ export const ExternalRouter = {
             }
 
             const base64 = audioDataStr.split(',')[1];
-            await this.saveGeneratedImage(base64, `Story TTS: ${text.substring(0, 30)}...`, agent, 'AUD', 'CHATTERBOX');
+            const assetId = await this.saveGeneratedImage(base64, `Story TTS: ${text.substring(0, 30)}...`, agent, 'AUD', 'CHATTERBOX');
             
             // Create Blob URL for immediate playback
             const binStr = atob(base64);
@@ -983,7 +980,7 @@ export const ExternalRouter = {
             const blob = new Blob([bytes.buffer], { type: 'audio/wav' });
             const audioUrl = URL.createObjectURL(blob);
 
-            return { success: true, type: 'audio', data: audioUrl };
+            return { success: true, type: 'audio', data: audioUrl, assetId };
 
         } catch (e: any) {
             return { success: false, type: 'text', error: `TTS Failed: ${e.message}` };
@@ -992,7 +989,7 @@ export const ExternalRouter = {
 
     exportRouteResult: undefined as RouteResult | undefined, // Type reference for compatibility
 
-    async saveGeneratedImage(urlOrBase64: string, prompt: string, agent: { id: string, handle: string }, type: 'IMG' | 'VID' | 'AUD' = 'IMG', tag: string = 'GENERATED') {
+    async saveGeneratedImage(urlOrBase64: string, prompt: string, agent: { id: string, handle: string }, type: 'IMG' | 'VID' | 'AUD' = 'IMG', tag: string = 'GENERATED'): Promise<string> {
         try {
             let finalData: string = urlOrBase64;
             if (urlOrBase64.startsWith('http')) {
@@ -1008,8 +1005,9 @@ export const ExternalRouter = {
             }
 
             const assetType = type === 'IMG' ? 'image' : (type === 'VID' ? 'video' : 'audio');
+            const id = NumMarkX_GenerateID(type);
             const asset: MediaAsset = {
-                id: NumMarkX_GenerateID(type),
+                id: id,
                 type: assetType,
                 data: finalData,
                 prompt: prompt,
@@ -1019,8 +1017,10 @@ export const ExternalRouter = {
             };
 
             await saveMediaAsset(asset);
+            return id;
         } catch (e) {
             console.error("Failed to auto-save generated media", e);
+            return "ERROR";
         }
     }
 };

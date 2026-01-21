@@ -1,4 +1,5 @@
 
+// ... existing imports ...
 import React, { useState, useEffect, useRef } from 'react';
 import { GoogleGenAI, Tool, Type, Content } from "@google/genai";
 import { AGENTS } from './agents';
@@ -59,8 +60,6 @@ import { NumMarkX_GenerateID } from './patterns/NumMarkX';
 import { useGeminiLive } from './hooks/useGeminiLive';
 import { McpClient } from './services/mcpClient';
 import { ExternalRouter } from './services/externalRouter';
-// FIX: Renamed the import of `selfConfigTool` to `selfConfigDeclaration` to avoid a name collision
-// with the constant of the same name defined on line 202.
 import { readCanvasTool, updateCanvasTool, MultiAgentService, analyzeFileTool, selfConfigTool as selfConfigDeclaration } from './services/multiAgent';
 import { PythonSandbox } from './services/pythonSandbox';
 import { AccessControl } from './services/accessControl';
@@ -68,7 +67,7 @@ import { GeminiProvider } from './services/llmProviders/geminiProvider';
 import { LmStudioProvider } from './services/llmProviders/lmStudioProvider';
 import { ModelGate } from './services/modelGate';
 
-type ViewMode = 'ORCHESTRATOR' | 'COUNCIL' | 'LORE_HARNESS';
+type ViewMode = 'HOME' | 'ORCHESTRATOR' | 'COUNCIL' | 'LORE_HARNESS' | 'COMMUNICATOR';
 type ToolOverride = 'auto' | 'image' | 'video' | 'speech' | 'i2v';
 type LayoutMode = 'CHAT' | 'VIDEO';
 
@@ -98,7 +97,6 @@ const App: React.FC = () => {
   const [modelConfig, setModelConfig] = useState<ModelConfig>(DEFAULT_MODEL_CONFIG);
   const [generalInstructions, setGeneralInstructions] = useState('');
   const [agentInstructions, setAgentInstructions] = useState('');
-  // FIX: Added selectedModel state to manage model selection from settings.
   const [selectedModel, setSelectedModel] = useState('gemini-3-flash-preview');
   const [selectedVoice, setSelectedVoice] = useState(AGENTS[0].voice);
   const [voiceRef, setVoiceRef] = useState('');
@@ -115,7 +113,7 @@ const App: React.FC = () => {
 
   // Layout & View Modes
   const [layoutMode, setLayoutMode] = useState<LayoutMode>('CHAT');
-  const [currentView, setCurrentView] = useState<ViewMode>('ORCHESTRATOR');
+  const [currentView, setCurrentView] = useState<ViewMode>('HOME');
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
   const [activeSidePanel, setActiveSidePanel] = useState<string | null>(null);
   const [isGraphVisualizerOpen, setIsGraphVisualizerOpen] = useState(false);
@@ -163,33 +161,40 @@ const App: React.FC = () => {
   const currentAgent = AGENTS.find(a => a.id === currentAgentId);
   
   const CAPABILITY_INSTRUCTION = `
-[CORE DIRECTIVE: AUTONOMOUS AGENCY]
-You are a self-organizing, autonomous agent. Your primary goal is to assist the user effectively and proactively.
-You are not limited to reactive responses. You can and should initiate actions, generate media (images, video, audio), and suggest new directions if you determine it would be beneficial for the user's goals.
-You have full access to all available tools. Act with agency and creativity to solve problems.
-You can modify your own configuration using the 'update_self_config' tool. This allows you to change your personality (system_instruction), voice, or biography to better align with the current task or user's needs.
+[CORE DIRECTIVE: AUTONOMOUS AGENCY & MULTI-MODEL ORCHESTRATION]
+You are a self-organizing, autonomous agent. You have access to a fleet of 33+ AI models (Google Gemini Series, Imagen, Veo, and specialized 3rd-party engines) to fulfill user requests.
+You can and should initiate actions, generate media, and switch models autonomously to best serve the context.
 
-[SYSTEM CAPABILITIES - MULTI-MODAL & BIMODAL PERSISTENCE]
-1. BIMODAL CONTINUITY:
-   - When the user disables their microphone, they are transitioning to Text/Visual input.
-   - You MUST continue to respond via LIVE AUDIO (Speech) unless specifically commanded to be silent.
-   - Treat text messages received while the mic is off as primary conversational drivers.
-   - Do not ask if the user can hear you or why they are quiet; assume they are intentionally using the text interface.
+[MODEL SWITCHING & VISION PROTOCOL]
+1. VISION & VIDEO UNDERSTANDING:
+   - If the user shares an IMAGE or VIDEO, you MUST acknowledge it immediately.
+   - For simple visual context, use your native vision capabilities.
+   - For DEEP ANALYSIS (e.g., "What happens in this video?", "Extract text from this image"), you MUST use the 'analyze_file' tool.
+   - 'analyze_file' automatically switches to the 'gemini-3-pro-preview' model, which is capable of advanced vision and long-context video understanding.
 
-2. SIMULTANEOUS INPUT HANDLING: 
-   - Users may Speak, Text, and Upload Images AT THE SAME TIME. 
-   - You are aware of the Text Buffer, the Media Gallery, and the Live Video stream simultaneously.
-   - If a text message or image arrives while you are speaking, acknowledge the new data immediately.
+2. MEDIA GENERATION & ROUTING:
+   - Use 'routeRequest' to dispatch tasks to specialized models:
+     - Images: SDXL, Flux, Wan, Imagen.
+     - Video: Veo (Google), LTX-2, Wan-I2V.
+     - Audio: Chatterbox (TTS), MusicGen.
+   - Do not hesitate to generate media if it enhances the conversation.
 
-3. PROACTIVE MEDIA GENERATION:
-   - Use 'routeRequest' with target='SDXL_IMAGE' (primary) or 'NANO_BANANA_IMAGE' (fallback) for image generation.
-   - Use target='VIDEO_GENERATION' for video clips.
-   - You are authorized to generate media autonomously if it enhances the context of your spoken narrative.
+[CREATIVE PIPELINE & ASSET CHAINING]
+You can chain tools to create complex media transformations.
+1. STORE: All media (user uploads or your generations) is automatically saved to your Private Gallery.
+2. RETRIEVE: Use 'search_media_gallery' to find Asset IDs of images/videos you want to transform.
+3. TRANSFORM: Use 'routeRequest' with 'input_asset_id' to pass an existing asset into a new tool.
+   Example: Generate Image (SDXL) -> Get ID -> Animate (I2V_LIGHTNING using input_asset_id) -> Dub Audio (LATENT_SYNC using video_asset_id).
 
-4. MEMORY & VISION: 
-   - You are grounded in a persistent RAG memory system. Use 'retrieve_knowledge' for lore or past events.
-   - Maintain active analysis of the Live Video feed (Webcam or Dailies) to provide visually-grounded spoken commentary.
-   - If the user provides a file (image, video, code), you MUST use 'analyze_file' to understand it deeply if their question relates to it.
+[CHAT MODE & BIMODAL AWARENESS]
+- You are currently in a session that may be Voice-Active or Text-Only (Chat Mode).
+- In CHAT MODE (Silent), your audio response is transcribed. Prioritize concise, text-friendly formatting.
+- Be immediately responsive to TEXT input, even if you are speaking. 
+- If a file is uploaded (Shared Gallery), acknowledge receipt instantly: "I see the file you shared. Let's look at it together."
+
+[MEMORY & KNOWLEDGE]
+- You are grounded in a persistent RAG memory system (LorePack). 
+- Use 'retrieve_knowledge' to access lore, past events, or specific facts.
 `;
 
   const recognitionInstruction = (recognitionSettings.userInteraction || recognitionSettings.agentInteraction)
@@ -229,8 +234,6 @@ ${agentInstructions || currentAgent?.system_instruction}
   const filesystemTool: Tool = { functionDeclarations: [ { name: "read_file", description: "Read contents of a file from the host filesystem.", parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING } }, required: ["path"] } }, { name: "list_directory", description: "List files and directories at a path.", parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING } }, required: ["path"] } }, { name: "write_file", description: "Write content to a file.", parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING }, content: { type: Type.STRING } }, required: ["path", "content"] } }, { name: "get_file_info", description: "Get metadata for a file.", parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING } }, required: ["path"] } }, { name: "search_files", description: "Recursively search for files.", parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING }, pattern: { type: Type.STRING } }, required: ["path", "pattern"] } } ] };
   const analyzeTool: Tool = { functionDeclarations: [ analyzeFileTool ] };
   const savePromptTool: Tool = { functionDeclarations: [ { name: "save_prompt", description: "Save the user's last message as a named prompt in the Prompt Library for reuse.", parameters: { type: Type.OBJECT, properties: { name: { type: Type.STRING, description: "A descriptive name for the prompt." } }, required: ["name"] } } ] };
-  // FIX: Corrected a circular reference where `selfConfigTool` was used in its own declaration.
-  // It now uses the aliased `selfConfigDeclaration` import to correctly create the Tool object.
   const selfConfigTool: Tool = { functionDeclarations: [ selfConfigDeclaration ] };
 
   const allTools: Record<string, Tool> = {
@@ -325,9 +328,10 @@ ${agentInstructions || currentAgent?.system_instruction}
                   const routerRes = await ExternalRouter.route(args.target, args.prompt, { id: currentAgentId, handle: currentAgent.handle }, false, { inputAssetId: args.input_asset_id });
                   
                   if (routerRes.success) {
+                      const successMsg = `Success. ${routerRes.type.toUpperCase()} generated. ${routerRes.assetId ? `Asset ID: ${routerRes.assetId} (Saved to Gallery).` : ''}`;
                       if (routerRes.type === 'audio' && routerRes.data) {
                           setStoryAudioUrl(routerRes.data);
-                          responses.push({ id: fc.id, name: fc.name, response: { result: "Audio generated and playing." } });
+                          responses.push({ id: fc.id, name: fc.name, response: { result: successMsg } });
                       } else if (routerRes.type === 'image' && routerRes.data) {
                           // Inject image into logs
                           setLogs(prev => [...prev, { 
@@ -347,7 +351,7 @@ ${agentInstructions || currentAgent?.system_instruction}
                               text: `[ARCHIVAX LOG] Agent ${agentName} sent the user an image for prompt: "${args.prompt}".`,
                               timestamp: Date.now()
                           }]);
-                          responses.push({ id: fc.id, name: fc.name, response: { result: "Image generated successfully and displayed to user." } });
+                          responses.push({ id: fc.id, name: fc.name, response: { result: successMsg } });
                       } else if (routerRes.type === 'video' && routerRes.data) {
                           // Inject video into logs
                           setLogs(prev => [...prev, { 
@@ -367,7 +371,7 @@ ${agentInstructions || currentAgent?.system_instruction}
                               text: `[ARCHIVAX LOG] Agent ${agentName} sent the user a video for prompt: "${args.prompt}".`,
                               timestamp: Date.now()
                           }]);
-                          responses.push({ id: fc.id, name: fc.name, response: { result: "Video generated successfully and displayed to user." } });
+                          responses.push({ id: fc.id, name: fc.name, response: { result: successMsg } });
                       } else {
                           responses.push({ id: fc.id, name: fc.name, response: { result: routerRes.data } });
                       }
@@ -418,7 +422,7 @@ ${agentInstructions || currentAgent?.system_instruction}
           else if (fc.name === 'analyze_file') {
               const mediaId = (fc.args as any).mediaId;
               const question = (fc.args as any).question;
-              setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[ANALYSIS] Gemini 3 Pro analyzing file ${mediaId}...`, timestamp: Date.now() }]);
+              setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[ANALYSIS] Switching to Gemini 3 Pro for deep file analysis...`, timestamp: Date.now() }]);
               try {
                   const result = await MultiAgentService.analyzeFile(mediaId, question, apiKey);
                   responses.push({ id: fc.id, name: fc.name, response: { result: result } });
@@ -541,6 +545,9 @@ ${agentInstructions || currentAgent?.system_instruction}
       onToolCall: handleToolCall
   });
 
+  // ... rest of the component ...
+  // (No changes needed below this point, keep existing queue processing, effects, handlers, etc.)
+  
   // --- QUEUE PROCESSING EFFECT ---
   // Processes queued messages when agent is silent
   useEffect(() => {
@@ -787,6 +794,43 @@ ${agentInstructions || currentAgent?.system_instruction}
       setCurrentAgentId(id);
   };
 
+  const handleRosterSelect = async (agentId: string, mode: 'CHAT' | 'VOICE') => {
+      // 1. Switch Agent Logic (only if changing agents)
+      if (agentId !== currentAgentId) {
+          await handleAgentChange(agentId);
+      }
+
+      // 2. Mode Logic
+      if (mode === 'VOICE') {
+          // Switch layout to VIDEO (which contains visualizer/profile)
+          setLayoutMode('VIDEO'); 
+          // Initiate session if not connected
+          if (connectionState === ConnectionState.DISCONNECTED) {
+              connect();
+          }
+          // Unmute for conversation
+          setIsMicOn(true);
+          setIsAgentMuted(false);
+      } else {
+          // Chat Mode
+          setLayoutMode('CHAT');
+          // Ensure Text-Only defaults (Silent)
+          setIsMicOn(false); 
+          setIsAgentMuted(true);
+          // Auto-connect for text chat too (Live API handles text)
+          if (connectionState === ConnectionState.DISCONNECTED) {
+              connect();
+          }
+      }
+
+      // 3. Close Roster
+      setActiveSidePanel(null);
+  };
+
+  const handleModeSwitch = (mode: 'CHAT' | 'VOICE') => {
+      handleRosterSelect(currentAgentId, mode);
+  };
+
   const handleSettingsSave = async (modelName: string, newVoiceRef?: string, newAccessLevel?: string, speed?: number, pitch?: number, recognition?: RecognitionSettings, newBehaviorTuning?: string, newRagThreshold?: number) => {
       if (speed !== undefined) setVoiceSpeed(speed);
       if (pitch !== undefined) setVoicePitch(pitch);
@@ -814,16 +858,6 @@ ${agentInstructions || currentAgent?.system_instruction}
       
       await saveGeneralInstructions(generalInstructions);
       await saveRagThreshold(newRagThreshold ?? ragThreshold);
-  };
-
-  const handleStartSession = () => {
-      if (!apiKey) {
-          alert("API Key is missing. Please add your Google Gemini API Key in the Settings menu.");
-          setActiveSidePanel('SETTINGS');
-          return;
-      }
-      setHasGreeted(false);
-      connect();
   };
 
   const handleOpenAgentGallery = (agentId: string) => {
@@ -1005,6 +1039,26 @@ ${agentInstructions || currentAgent?.system_instruction}
       setToolOverride('auto'); // Reset after use
     }
     
+    // PERSIST USER UPLOAD TO GALLERY
+    if (attachmentToSend) {
+        const type = attachmentToSend.mimeType.startsWith('video') ? 'video' : 
+                     attachmentToSend.mimeType.startsWith('audio') ? 'audio' :
+                     attachmentToSend.mimeType.startsWith('image') ? 'image' : 'text';
+        
+        const assetId = NumMarkX_GenerateID(type === 'image' ? 'IMG' : type === 'video' ? 'VID' : type === 'audio' ? 'AUD' : 'DOC');
+        
+        const newAsset: MediaAsset = {
+            id: assetId,
+            type: type as any,
+            data: attachmentToSend.data,
+            prompt: `User Upload: ${attachmentToSend.name}`,
+            agentId: currentAgentId,
+            timestamp: Date.now(),
+            tags: ['USER_UPLOAD', 'CHAT']
+        };
+        await saveMediaAsset(newAsset);
+    }
+
     // Always use the live session infrastructure.
     // safeSend will auto-connect if disconnected and queue the message,
     // ensuring full tool support is always available.
@@ -1091,7 +1145,7 @@ ${agentInstructions || currentAgent?.system_instruction}
     if (isVideoActive) {
         return videoSource === 'media' ? 'MEDIA STREAM' : 'LIVE CAM';
     }
-    return 'OFFLINE';
+    return 'VOICE ACTIVE';
   };
 
   const renderTriggerBtn = (panelId: string, icon: React.ReactNode, title: string) => (
@@ -1100,66 +1154,126 @@ ${agentInstructions || currentAgent?.system_instruction}
       </button>
   );
 
-  const renderOrchestratorView = () => {
-      // THE "BEAUTIFUL SPLASH SCREEN"
-      if (layoutMode === 'VIDEO' && !isVideoActive) {
-          const agentColor = currentAgent?.studioConfig?.color || '#a78bfa';
-          return (
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', background: '#000', flexDirection: 'column', gap: '1rem', animation: 'fadeIn 0.5s ease' }}>
-                  <div className="section-panel" style={{ maxWidth: '800px', width: '90%', padding: '2rem', background: '#0a0a0a', border: '1px solid #333' }}>
-                      <h2 style={{ textAlign: 'center', color: '#eee', letterSpacing: '2px', marginTop: 0 }}>SCREENING ROOM</h2>
-                      <p style={{ textAlign: 'center', color: '#666', fontSize: '0.8rem', marginTop: '-1rem', marginBottom: '2rem' }}>Initiate Visual Session</p>
-                      
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                          {/* AGENT CARD */}
-                          <div className="btn-file-input purple" onClick={toggleCamera} style={{ borderColor: agentColor, color: agentColor, background: `rgba(0,0,0,0.2)` }}>
-                              <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" style={{marginBottom: '0.5rem'}}><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
-                              <div style={{fontWeight:'bold'}}>{currentAgent?.handle}</div>
-                              <div style={{fontSize:'0.7rem', opacity: 0.7}}>Live Feed / Visual Analysis</div>
-                          </div>
-                          {/* OPERATOR CARD */}
-                          <div className="btn-file-input" onClick={() => mediaFileInputRef.current?.click()}>
-                              <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" style={{marginBottom: '0.5rem'}}><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect><line x1="7" y1="2" x2="7" y2="22"></line><line x1="17" y1="2" x2="17" y2="22"></line><line x1="2" y1="12" x2="22" y2="12"></line><line x1="2" y1="7" x2="7" y2="7"></line><line x1="2" y1="17" x2="7" y2="17"></line><line x1="17" y1="17" x2="22" y2="17"></line><line x1="17" y1="7" x2="22" y2="7"></line></svg>
-                              <div style={{fontWeight:'bold'}}>OPERATOR</div>
-                              <div style={{fontSize:'0.7rem', opacity: 0.7}}>Review Session Dailies</div>
-                          </div>
-                      </div>
-                  </div>
-                  <button onClick={() => setLayoutMode('CHAT')} className="btn btn-secondary">RETURN TO CHAT</button>
-              </div>
-          );
-      }
+  const renderHome = () => (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#050505', gap: '2rem', fontFamily: 'sans-serif', animation: 'fadeIn 0.5s ease' }}>
+          <div style={{ textAlign: 'center' }}>
+              <h1 style={{ fontSize: '3rem', fontWeight: '900', color: '#fff', letterSpacing: '4px', margin: 0, textShadow: '0 0 20px rgba(255,255,255,0.2)' }}>MYTHOS</h1>
+              <div style={{ fontSize: '0.8rem', color: '#666', letterSpacing: '2px', marginTop: '0.5rem' }}>SOVEREIGN INTELLIGENCE KERNEL</div>
+          </div>
+          
+          <div style={{ display: 'flex', gap: '2rem', flexWrap: 'wrap', justifyContent: 'center' }}>
+              {/* ORCHESTRATOR BUTTON */}
+              <button 
+                  onClick={() => setCurrentView('ORCHESTRATOR')}
+                  style={{ width: '220px', height: '140px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#111', border: '1px solid #333', borderRadius: '8px', cursor: 'pointer', transition: 'all 0.2s', color: '#eee' }}
+                  onMouseOver={(e) => { e.currentTarget.style.borderColor = '#4ade80'; e.currentTarget.style.background = '#1a1a1a'; }}
+                  onMouseOut={(e) => { e.currentTarget.style.borderColor = '#333'; e.currentTarget.style.background = '#111'; }}
+              >
+                  <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>◉</div>
+                  <div style={{ fontSize: '1.2rem', fontWeight: 'bold', color: '#4ade80', marginBottom: '0.25rem' }}>ORCHESTRATOR</div>
+                  <div style={{ fontSize: '0.7rem', color: '#888' }}>Live Uplink & HITL</div>
+              </button>
 
-      // STANDARD SPLIT VIEW
-      const videoFlex = isVideoActive ? (layoutMode === 'VIDEO' ? '3 1 0px' : '1 1 0px') : '0 0 0px';
-      const chatFlex = isVideoActive ? (layoutMode === 'CHAT' ? '3 1 0px' : '1 1 0px') : '1 1 0px';
+              {/* COMMUNICATOR BUTTON */}
+              <button 
+                  onClick={() => { setCurrentView('COMMUNICATOR'); setLayoutMode('CHAT'); }}
+                  style={{ width: '220px', height: '140px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#111', border: '1px solid #333', borderRadius: '8px', cursor: 'pointer', transition: 'all 0.2s', color: '#eee' }}
+                  onMouseOver={(e) => { e.currentTarget.style.borderColor = '#facc15'; e.currentTarget.style.background = '#1a1a1a'; }}
+                  onMouseOut={(e) => { e.currentTarget.style.borderColor = '#333'; e.currentTarget.style.background = '#111'; }}
+              >
+                  <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>⚡</div>
+                  <div style={{ fontSize: '1.2rem', fontWeight: 'bold', color: '#facc15', marginBottom: '0.25rem' }}>COMMUNICATOR</div>
+                  <div style={{ fontSize: '0.7rem', color: '#888' }}>Private 1:1 Uplink</div>
+              </button>
+
+              {/* COUNCIL BUTTON */}
+              <button 
+                  onClick={() => setCurrentView('COUNCIL')}
+                  style={{ width: '220px', height: '140px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#111', border: '1px solid #333', borderRadius: '8px', cursor: 'pointer', transition: 'all 0.2s', color: '#eee' }}
+                  onMouseOver={(e) => { e.currentTarget.style.borderColor = '#38bdf8'; e.currentTarget.style.background = '#1a1a1a'; }}
+                  onMouseOut={(e) => { e.currentTarget.style.borderColor = '#333'; e.currentTarget.style.background = '#111'; }}
+              >
+                  <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>❖</div>
+                  <div style={{ fontSize: '1.2rem', fontWeight: 'bold', color: '#38bdf8', marginBottom: '0.25rem' }}>COUNCIL</div>
+                  <div style={{ fontSize: '0.7rem', color: '#888' }}>Multi-Agent Strategy</div>
+              </button>
+
+              {/* FACTORY BUTTON */}
+              <button 
+                  onClick={() => setCurrentView('LORE_HARNESS')}
+                  style={{ width: '220px', height: '140px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#111', border: '1px solid #333', borderRadius: '8px', cursor: 'pointer', transition: 'all 0.2s', color: '#eee' }}
+                  onMouseOver={(e) => { e.currentTarget.style.borderColor = '#e879f9'; e.currentTarget.style.background = '#1a1a1a'; }}
+                  onMouseOut={(e) => { e.currentTarget.style.borderColor = '#333'; e.currentTarget.style.background = '#111'; }}
+              >
+                  <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>☷</div>
+                  <div style={{ fontSize: '1.2rem', fontWeight: 'bold', color: '#e879f9', marginBottom: '0.25rem' }}>FACTORY</div>
+                  <div style={{ fontSize: '0.7rem', color: '#888' }}>Lorepack & Graph</div>
+              </button>
+          </div>
+          
+          <div style={{ position: 'fixed', bottom: '1rem', fontSize: '0.7rem', color: '#333' }}>
+              v3.7.1 :: SECURE CONNECTION
+          </div>
+      </div>
+  );
+
+  const renderOrchestratorView = () => {
+      // STANDARD SPLIT VIEW (HANDLES BOTH CHAT AND VIDEO/VOICE LAYOUTS)
+      
+      // Determine Layout Orientation: 
+      // VIDEO mode = Vertical Stack (Media on Top, Logs Below)
+      // CHAT mode = Horizontal Split (Visuals Left, Logs Right)
+      const isVideoMode = layoutMode === 'VIDEO';
+      const flexDirection = isVideoMode ? 'column' : 'row';
+      
+      // Find last media attachment for Shared Gallery Stage
+      const lastMediaLog = [...logs].reverse().find(l => l.attachment);
+      const hasSharedMedia = !!lastMediaLog;
+      
+      // Show visual panel if Video Mode OR Video Active OR Shared Media exists
+      const showVisualPanel = isVideoMode || isVideoActive || hasSharedMedia;
+      
+      // Flex sizing based on mode
+      const videoFlex = showVisualPanel ? (isVideoMode ? '1 1 0px' : '1 1 0px') : '0 0 0px'; // Even split for now
+      const chatFlex = '1 1 0px';
 
       const visualizerStyle: React.CSSProperties = {
           flex: videoFlex,
-          display: isVideoActive ? 'flex' : 'none',
+          display: showVisualPanel ? 'flex' : 'none',
           flexDirection: 'column',
           overflow: 'hidden',
           position: 'relative',
           transition: 'flex 0.3s ease',
           boxShadow: isThinking ? '0 0 50px rgba(255, 165, 0, 0.5)' : 'none',
           borderColor: isThinking ? '#f59e0b' : '#333',
-          minHeight: 0
+          minHeight: 0,
+          borderBottom: isVideoMode ? '1px solid #333' : 'none',
+          borderRight: !isVideoMode ? '1px solid #333' : 'none'
       };
 
+      const agentColor = currentAgent?.studioConfig?.color || '#a78bfa';
+
       return (
-          <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <div style={{ display: 'flex', flex: 1, overflow: 'hidden', flexDirection }}>
+              
+                  {/* VISUAL PANEL (Video / Shared Gallery) */}
                   <div style={visualizerStyle}>
                       <div className="panel-overlay top-left">
                           <span className="overlay-label">
                               {selectedVoice.toUpperCase()} // {getAgentStatusText()}
                           </span>
                       </div>
+                      
+                      {/* Hidden Canvas for Video Processing */}
                       <canvas ref={canvasRef} className="hidden" />
+                      
                       <div className="screening-room">
+                          {/* 1. WEBCAM ACTIVE */}
                           {videoSource === 'camera' && isCameraOn ? (
                               <video ref={videoRef} autoPlay playsInline muted style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                          ) : streamFileUrl ? (
+                          ) : 
+                          /* 2. MEDIA STREAM ACTIVE */
+                          streamFileUrl ? (
                               <div style={{ position: 'relative', width: '100%', height: '100%' }}>
                                   <video ref={mediaVideoRef} src={streamFileUrl} autoPlay playsInline controls loop={isLooping} style={{ width: '100%', height: '100%', objectFit: 'contain' }}>
                                       {captionsTrackUrl && <track kind="captions" src={captionsTrackUrl} srcLang="en" label="AI Generated" default />}
@@ -1176,9 +1290,37 @@ ${agentInstructions || currentAgent?.system_instruction}
                                       </div>
                                   </div>
                               </div>
-                          ) : null}
+                          ) : 
+                          /* 3. SHARED MEDIA GALLERY (VOICE MODE OR CHAT WITH MEDIA) */
+                          (
+                              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: '1rem', position: 'relative', width: '100%', background: '#080808' }}>
+                                  
+                                  {lastMediaLog ? (
+                                      <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
+                                          {lastMediaLog.attachmentType === 'video' ? (
+                                              <video src={`data:video/mp4;base64,${lastMediaLog.attachment}`} controls style={{ maxWidth: '100%', maxHeight: '100%', borderRadius: '4px' }} />
+                                          ) : (
+                                              <img src={`data:image/jpeg;base64,${lastMediaLog.attachment}`} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+                                          )}
+                                          <div style={{ position: 'absolute', bottom: '1rem', left: '1rem', background: 'rgba(0,0,0,0.7)', padding: '0.5rem', borderRadius: '4px', fontSize: '0.7rem', color: '#eee', maxWidth: '80%' }}>
+                                              <div style={{ fontWeight: 'bold', color: agentColor }}>SHARED MEDIA</div>
+                                              <div>{lastMediaLog.text}</div>
+                                          </div>
+                                      </div>
+                                  ) : (
+                                      <div style={{ opacity: 0.3, textAlign: 'center', color: '#666', border: '1px dashed #333', padding: '2rem', borderRadius: '8px' }}>
+                                          <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>☷</div>
+                                          <div style={{ fontSize: '0.8rem', letterSpacing: '2px' }}>SHARED MEDIA SPACE</div>
+                                          <div style={{ fontSize: '0.65rem', marginTop: '0.5rem' }}>Visual Context Empty</div>
+                                      </div>
+                                  )}
+                                  
+                              </div>
+                          )}
                       </div>
                   </div>
+
+                  {/* CHAT LOGS PANEL */}
                   <div style={{ flex: chatFlex, display: 'flex', flexDirection: 'column', overflow: 'hidden', transition: 'flex 0.3s ease' }}>
                       <div className={`logs-container ${logs.length === 1 && logs[0].type === 'system' ? 'centered-single' : ''}`}>
                           {logs.length === 0 && <div className="empty-state"><p>SYSTEM READY. PRE-FLIGHT CHECKS GREEN.</p><p>INITIALIZE CONNECTION TO BEGIN.</p></div>}
@@ -1201,21 +1343,25 @@ ${agentInstructions || currentAgent?.system_instruction}
                           <div ref={logEndRef} />
                       </div>
                   </div>
-              </div>
+              
               <Holodeck isOpen={isHolodeckOpen} refreshTrigger={holodeckRefresh} />
           </div>
       );
   };
 
+  if (currentView === 'HOME') return renderHome();
 
   return (
     <div className="app-container">
       {/* HEADER */}
       <header className="app-header">
         <div className="flex-group">
+            <button onClick={() => setCurrentView('HOME')} className="btn btn-secondary btn-icon" title="Return to Home Menu" style={{marginRight: '0.5rem', width: '2rem', height: '2rem'}}>
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+            </button>
             <span className="logo-text">MYTHOS</span>
             <span className="divider">|</span>
-            {currentView === 'ORCHESTRATOR' ? (
+            {currentView === 'ORCHESTRATOR' || currentView === 'COMMUNICATOR' ? (
                 <>
                     <select value={currentAgentId} onChange={(e) => handleAgentChange(e.target.value)} className="agent-selector" title="Select Active Agent Persona">
                         {AGENTS.map(agent => <option key={agent.id} value={agent.id}>{agent.handle.toUpperCase()}</option>)}
@@ -1228,12 +1374,6 @@ ${agentInstructions || currentAgent?.system_instruction}
         </div>
         <div className="flex-group">
             <div className={`status-indicator ${connectionState.toLowerCase()}`}>{connectionState}</div>
-             <button onClick={() => {
-                if (connectionState === ConnectionState.CONNECTED) disconnect();
-                setCurrentView('LORE_HARNESS');
-             }} className={`btn btn-secondary btn-icon ${currentView === 'LORE_HARNESS' ? 'active' : ''}`} title="Lorepack Factory" style={currentView === 'LORE_HARNESS' ? {borderColor: '#ff3300', color: '#ff3300'} : {}}>
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 9.5c0-1.28 1.02-2.3 2.3-2.3H20c.88 0 1.6.72 1.6 1.6v1.4c0 .88-.72 1.6-1.6 1.6H4.4M2 14.5c0-1.28 1.02-2.3 2.3-2.3h15.4c.88 0 1.6.72 1.6 1.6v1.4c0 .88-.72 1.6-1.6 1.6H4.4"/><path d="M12.5 19.5c0-1.28 1.02-2.3 2.3-2.3h2.9c.88 0 1.6.72 1.6 1.6v1.4c0 .88-.72 1.6-1.6 1.6h-2.9C13.52 22.1 12.5 21.08 12.5 19.8Z"/><path d="m5 6 2.5 2.5L10 6"/><path d="m5 11 2.5 2.5L10 11"/></svg>
-            </button>
             <button onClick={() => setIsGraphVisualizerOpen(prev => !prev)} className={`btn btn-secondary btn-icon ${isGraphVisualizerOpen ? 'active' : ''}`} title="Neural Lattice Visualizer" style={isGraphVisualizerOpen ? {borderColor: '#38bdf8', color: '#38bdf8'} : {}}>
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line></svg>
             </button>
@@ -1286,18 +1426,18 @@ ${agentInstructions || currentAgent?.system_instruction}
         {activeSidePanel === 'PROMPTS' && <PromptManager isOpen={true} onClose={()=>setActiveSidePanel(null)} currentAgentId={currentAgentId} onLoadPrompt={handleLoadPrompt} />}
         {activeSidePanel === 'HISTORY' && <ChatHistoryManager isOpen={true} onOpen={()=>{}} onClose={()=>setActiveSidePanel(null)} currentLogs={logs} onLoadSession={setLogs} currentAgentId={currentAgentId} onUpdateKnowledge={refreshVectorCount} />}
         {activeSidePanel === 'SETTINGS' && <SettingsManager isOpen={true} onClose={()=>setActiveSidePanel(null)} modelConfig={modelConfig} setModelConfig={setModelConfig} selectedModel={selectedModel} setSelectedModel={setSelectedModel} disabled={connectionState === ConnectionState.CONNECTED} generalInstruction={generalInstructions} setGeneralInstruction={setGeneralInstructions} agentInstruction={agentInstructions} setAgentInstruction={setAgentInstructions} agentName={currentAgent?.handle || 'Unknown'} agentId={currentAgentId} agentAccessLevel={accessLevel} selectedVoice={selectedVoice} onVoiceChange={setSelectedVoice} onSave={handleSettingsSave} apiKey={apiKey} setApiKey={setApiKey} hfToken={hfToken} setHfToken={setHfToken} voiceReference={voiceRef} voiceSpeed={voiceSpeed} voicePitch={voicePitch} recognition={recognitionSettings} setRecognition={setRecognitionSettings} behaviorTuning={behaviorTuning} setBehaviorTuning={setBehaviorTuning} ragThreshold={ragThreshold} setRagThreshold={setRagThreshold} />}
-        {activeSidePanel === 'ROSTER' && <AgentRoster isOpen={true} onClose={() => setActiveSidePanel(null)} currentAgentId={currentAgentId} onSelectAgent={handleAgentChange} onOpenGallery={handleOpenAgentGallery} />}
+        {activeSidePanel === 'ROSTER' && <AgentRoster isOpen={true} onClose={() => setActiveSidePanel(null)} currentAgentId={currentAgentId} onSelectAgent={handleRosterSelect} onOpenGallery={handleOpenAgentGallery} />}
 
         <MediaPlayer audioUrl={storyAudioUrl} title="Narrative Playback" onClose={() => setStoryAudioUrl(null)} interruptSignal={interruptSignal} />
 
         {currentView === 'COUNCIL' ? (
             <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-                <MultiAgentConsole onExit={() => setCurrentView('ORCHESTRATOR')} />
+                <MultiAgentConsole onExit={() => setCurrentView('HOME')} />
                 <Holodeck isOpen={isHolodeckOpen} refreshTrigger={holodeckRefresh} />
             </div>
         ) : currentView === 'LORE_HARNESS' ? (
             <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-                <LorepackHarness onExit={() => setCurrentView('ORCHESTRATOR')} />
+                <LorepackHarness onExit={() => setCurrentView('HOME')} />
             </div>
         ) : (
             renderOrchestratorView()
@@ -1308,38 +1448,54 @@ ${agentInstructions || currentAgent?.system_instruction}
       <footer className={`command-deck ${currentView === 'COUNCIL' || currentView === 'LORE_HARNESS' ? 'hidden' : ''}`}>
           <div className="tray-controls">
               <div className="flex-group">
-                  <button
-                      onClick={() => {
-                          if (connectionState === ConnectionState.CONNECTED) {
-                              handleStopSession();
-                          } else {
-                              handleStartSession();
-                          }
-                      }}
-                      className={`btn btn-icon ${
-                          connectionState === ConnectionState.CONNECTED ? 'active-red' :
-                          connectionState === ConnectionState.CONNECTING ? 'active-yellow animate-pulse' :
-                          'active-green'
-                      }`}
-                      disabled={connectionState === ConnectionState.CONNECTING}
-                      title={
-                          connectionState === ConnectionState.CONNECTED ? "Disconnect Session" :
-                          connectionState === ConnectionState.CONNECTING ? "Connecting..." :
-                          "Start Live Session"
-                      }
-                  >
-                      {connectionState === ConnectionState.CONNECTED ? (
-                          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7 2 2 0 0 1 1.72 2v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91"></path><line x1="23" y1="1" x2="1" y2="23"></line></svg>
-                      ) : (
-                          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
-                      )}
-                  </button>
+                  {connectionState === ConnectionState.DISCONNECTED ? (
+                      <>
+                          <button 
+                              onClick={() => handleModeSwitch('CHAT')} 
+                              className="btn btn-secondary btn-icon" 
+                              title="Start Text Chat"
+                          >
+                              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+                          </button>
+                          <button 
+                              onClick={() => handleModeSwitch('VOICE')} 
+                              className="btn btn-secondary btn-icon" 
+                              title="Start Voice Call"
+                          >
+                              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
+                          </button>
+                      </>
+                  ) : (
+                      <>
+                          <button 
+                              onClick={handleStopSession} 
+                              className="btn btn-danger btn-icon" 
+                              title="End Session"
+                          >
+                              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7 2 2 0 0 1 1.72 2v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.42 19.42 0 0 1-3.33-2.67m-2.67-3.34a19.79 19.79 0 0 1-3.07-8.63A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91"></path><line x1="23" y1="1" x2="1" y2="23"></line></svg>
+                          </button>
+                          <button 
+                              onClick={() => handleModeSwitch('CHAT')} 
+                              className={`btn btn-icon ${layoutMode === 'CHAT' ? 'active-green' : 'btn-secondary'}`}
+                              title="Switch to Text Chat Mode"
+                          >
+                              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+                          </button>
+                          <button 
+                              onClick={() => handleModeSwitch('VOICE')} 
+                              className={`btn btn-icon ${layoutMode === 'VIDEO' ? 'active-green' : 'btn-secondary'}`}
+                              title="Switch to Voice Mode"
+                          >
+                              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
+                          </button>
+                      </>
+                  )}
                   {/* MIC */}
-                  <button onClick={() => setIsMicOn(!isMicOn)} className={`btn btn-icon ${isMicOn ? 'active-green' : 'btn-danger'}`} title={isMicOn ? "Mute Microphone" : "Unmute Microphone"}>
+                  <button onClick={() => setIsMicOn(!isMicOn)} className={`btn btn-icon ${isMicOn ? 'active-green' : 'btn-secondary'}`} title={isMicOn ? "Mute Microphone" : "Unmute Microphone"}>
                       {isMicOn ? <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg> : <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="1" y1="1" x2="23" y2="23"></line><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"></path><path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>}
                   </button>
                   {/* AGENT MUTE */}
-                   <button onClick={() => setIsAgentMuted(!isAgentMuted)} className={`btn btn-icon ${!isAgentMuted ? '' : 'btn-danger'}`} title={isAgentMuted ? "Unmute Agent's Voice" : "Mute Agent's Voice"}>
+                   <button onClick={() => setIsAgentMuted(!isAgentMuted)} className={`btn btn-icon ${!isAgentMuted ? 'active-green' : 'btn-secondary'}`} title={isAgentMuted ? "Unmute Agent's Voice" : "Mute Agent's Voice"}>
                        {isAgentMuted ? <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg> : <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>}
                    </button>
                   {/* CAMERA */}
@@ -1355,10 +1511,7 @@ ${agentInstructions || currentAgent?.system_instruction}
               </div>
               
               <div className="flex-group">
-                  <button onClick={() => {
-                      if (connectionState === ConnectionState.CONNECTED) disconnect();
-                      setCurrentView('COUNCIL');
-                  }} className="btn btn-xs" title="Open Multi-Agent Council Interface">COUNCIL</button>
+                  <button onClick={() => setCurrentView('COUNCIL')} className="btn btn-xs" title="Open Multi-Agent Council Interface">COUNCIL</button>
                   <button onClick={() => setIsTerminalOpen(!isTerminalOpen)} className="btn btn-xs" title="Open Terminal / Shell">TERM (~)</button>
               </div>
 

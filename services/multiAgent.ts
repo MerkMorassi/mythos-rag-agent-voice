@@ -1,4 +1,5 @@
 
+// ... existing imports ...
 import { GoogleGenAI, FunctionDeclaration, Type, Tool, FinishReason, Content } from "@google/genai";
 import { Agent, MultiAgentMessage, SomaActionType, MediaAsset } from "../types";
 import { AGENTS } from "../agents";
@@ -275,6 +276,7 @@ const googleMapsTool: Tool = {
 
 export const MultiAgentService = {
     
+    // ... existing generateVideoCaptions, analyzeVideo, analyzeFile methods ...
     /**
      * Generate WebVTT Captions for a video file using Gemini 3 Pro
      */
@@ -592,7 +594,10 @@ export const MultiAgentService = {
             
             if (fc.name === 'routeRequest') {
                 const res = await ExternalRouter.route(fc.args.target, fc.args.prompt, { id: agent.id, handle: agent.handle }, fc.args.generate_audio, { inputAssetId: fc.args.input_asset_id });
-                result = res.success ? res.data : { error: res.error };
+                // Include Asset ID for chaining
+                result = res.success 
+                    ? `Success: ${res.type.toUpperCase()} generated.${res.assetId ? ` Asset ID: ${res.assetId} (Saved to Gallery)` : ''}` 
+                    : { error: res.error };
             }
             else if (fc.name === 'execute_python') {
                  result = await PythonSandbox.execute(fc.args.code);
