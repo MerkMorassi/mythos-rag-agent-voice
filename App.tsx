@@ -110,6 +110,7 @@ const App: React.FC = () => {
   const [recognitionSettings, setRecognitionSettings] = useState<RecognitionSettings>({ userInteraction: '', agentInteraction: '' });
   const [behaviorTuning, setBehaviorTuning] = useState('');
   const [ragThreshold, setRagThreshold] = useState(0.35);
+  const [isHistoryLoaded, setIsHistoryLoaded] = useState(false);
 
   // Layout & View Modes
   const [layoutMode, setLayoutMode] = useState<LayoutMode>('CHAT');
@@ -649,24 +650,41 @@ ${agentInstructions || currentAgent?.system_instruction}
   useEffect(() => { logEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [logs]);
 
   // --- ACTIVE CHAT PERSISTENCE ---
-  // Load chat history when the agent changes
+  // Load chat history when the agent changes. Now with error handling.
   useEffect(() => {
       let active = true;
       const loadLogs = async () => {
-          const saved = await loadActiveChat(currentAgentId);
-          if (active) {
-              setLogs(saved || []);
+          try {
+              const saved = await loadActiveChat(currentAgentId);
+              if (active) {
+                  setLogs(saved || []);
+              }
+          } catch (err) {
+              console.error(`[Persistence] Failed to load chat history for agent ${currentAgentId}:`, err);
+              if (active) {
+                  setLogs([]); // Fallback to an empty chat on error
+              }
+          } finally {
+              if (active) {
+                setIsHistoryLoaded(true);
+              }
           }
           refreshVectorCount();
       };
+      
       loadLogs();
+      
       return () => { active = false; };
   }, [currentAgentId]);
 
-  // Save chat history whenever logs or the current agent change
+  // Save chat history whenever logs change, after initial load is complete.
   useEffect(() => {
-      saveActiveChat(currentAgentId, logs);
-  }, [logs, currentAgentId]);
+      if (!isHistoryLoaded) return; // Prevents overwriting history on agent switch before load completes
+
+      saveActiveChat(currentAgentId, logs).catch(err => {
+        console.error(`[Persistence] Failed to save chat history for agent ${currentAgentId}:`, err);
+      });
+  }, [logs, currentAgentId, isHistoryLoaded]);
 
 
   // Sync Video Tracks with State
@@ -785,6 +803,8 @@ ${agentInstructions || currentAgent?.system_instruction}
           await autoSaveSessionIfNeeded(currentAgentId, logs);
       }
       
+      setIsHistoryLoaded(false);
+
       const agent = AGENTS.find(a => a.id === id);
       if (agent) {
           const count = await getVectorCountByAgent(agent.handle);
