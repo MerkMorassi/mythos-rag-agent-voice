@@ -96,7 +96,7 @@ const DEFAULT_ENDPOINTS: Record<string, ExternalToolConfig> = {
         url: 'http://192.168.56.1:1234',
         isDefault: true
     },
-    LM_STUDIO_UNCENSORED: {
+     LM_STUDIO_UNCENSORED: {
         name: 'Local Uncensored (LM Studio)',
         description: 'Local uncensored model (e.g., Dolphin) served via LM Studio.',
         url: 'http://192.168.56.1:1234',
@@ -828,7 +828,13 @@ export const ExternalRouter = {
             // Using 'gemini-2.5-flash-image' for image generation as per spec
             const response = await ai.models.generateContent({
                 model: 'gemini-2.5-flash-image',
-                contents: { parts: [{ text: prompt }] }
+                contents: { parts: [{ text: prompt }] },
+                safetySettings: [
+                  { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+                  { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+                  { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+                  { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
+                ]
             });
 
             // Extract Image from Response
