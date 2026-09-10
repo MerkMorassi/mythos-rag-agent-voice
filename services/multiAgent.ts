@@ -288,7 +288,7 @@ export const MultiAgentService = {
 
             const ai = new GoogleGenAI({ apiKey });
             const response = await ai.models.generateContent({
-                model: 'gemini-3-pro-preview',
+                model: 'gemini-3.1-pro-preview',
                 contents: [
                     {
                         role: 'user',
@@ -331,7 +331,7 @@ export const MultiAgentService = {
             // 3. Generate Analysis
             const ai = new GoogleGenAI({ apiKey });
             const response = await ai.models.generateContent({
-                model: 'gemini-3-pro-preview',
+                model: 'gemini-3.1-pro-preview',
                 contents: [
                     {
                         role: 'user',
@@ -360,7 +360,7 @@ export const MultiAgentService = {
             
             const ai = new GoogleGenAI({ apiKey });
             
-            const model = asset.type === 'video' ? 'gemini-3-pro-preview' : 'gemini-3-pro-preview';
+            const model = asset.type === 'video' ? 'gemini-3.1-pro-preview' : 'gemini-3.1-pro-preview';
             let parts: any[] = [];
             
             if (asset.type === 'text') {
@@ -471,9 +471,9 @@ export const MultiAgentService = {
                 selfConfigTool, // Agent can now configure itself
                 analyzeFileTool,
                 consultAgentTool, readCanvasTool, updateCanvasTool,
-                ...googleMapsTool.functionDeclarations,
+                ...(googleMapsTool.functionDeclarations || []),
                 ...(canRoute ? [routeRequestTool] : []),
-                ...(canExec ? [pythonTool, ...filesystemTool.functionDeclarations] : []),
+                ...(canExec ? [pythonTool, ...(filesystemTool.functionDeclarations || [])] : []),
                 ...(agent.agentClass === 'PARTNER' ? [greenlightTool] : [])
             ];
             

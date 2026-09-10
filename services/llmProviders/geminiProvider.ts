@@ -10,7 +10,7 @@ export class GeminiProvider implements ILLMProvider {
   private apiKey: string;
   private model: string;
 
-  constructor(apiKey: string, model: string = 'gemini-2.5-flash') {
+  constructor(apiKey: string, model: string = 'gemini-3.8-flash') {
     this.apiKey = apiKey;
     this.model = model;
   }
@@ -24,7 +24,7 @@ export class GeminiProvider implements ILLMProvider {
   ): Promise<LLMResponse> {
     
     const lastUserContent = contents.filter(c => c.role === 'user').pop();
-    const query = lastUserContent?.parts.find((p): p is { text: string } => 'text' in p)?.text || '';
+    const query = lastUserContent?.parts?.find((p): p is { text: string } => 'text' in p)?.text || '';
     const modelToUse = ModelGate.selectModel(query);
     
     try {
@@ -33,15 +33,17 @@ export class GeminiProvider implements ILLMProvider {
       const streamResult = await ai.models.generateContentStream({
         model: modelToUse,
         contents: contents,
-        safetySettings: [
-          { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
-          { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-          { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
-          { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
-          { category: "HARM_CATEGORY_CIVIC_INTEGRITY", threshold: "BLOCK_NONE" }
-        ],
-        generationConfig: config.modelConfig,
-        tools: config.tools
+        config: {
+          ...config.modelConfig,
+          safetySettings: [
+            { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+            { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+            { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+            { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
+            { category: "HARM_CATEGORY_CIVIC_INTEGRITY", threshold: "BLOCK_NONE" }
+          ] as any,
+          tools: config.tools
+        }
       });
 
       let aggregatedText = "";
@@ -65,17 +67,15 @@ export class GeminiProvider implements ILLMProvider {
             isRefusal = true;
         }
 
-        if (response.usageMetadata) {
-            finalUsage.inputTokens = response.usageMetadata.promptTokenCount;
-            finalUsage.outputTokens = response.usageMetadata.candidatesTokenCount;
+        if (response.promptFeedback?.blockReason) {
+            isRefusal = true;
+            aggregatedText = `[SYSTEM] Content Blocked by Filters. (Reason: ${response.promptFeedback.blockReason})`;
         }
-      }
 
-      // Final check on the aggregated response for safety feedback, in case it wasn't in a chunk.
-      const aggregatedResponse = await streamResult.response;
-      if (aggregatedResponse?.promptFeedback?.blockReason) {
-        isRefusal = true;
-        aggregatedText = `[SYSTEM] Content Blocked by Filters. (Reason: ${aggregatedResponse.promptFeedback.blockReason})`;
+        if (response.usageMetadata) {
+            finalUsage.inputTokens = response.usageMetadata.promptTokenCount || 0;
+            finalUsage.outputTokens = response.usageMetadata.candidatesTokenCount || 0;
+        }
       }
 
       return {
@@ -109,6 +109,22 @@ export class GeminiProvider implements ILLMProvider {
   }
 
   async embed(text: string): Promise<number[]> {
+    // Attempt latest Gemini embedding model first (gemini-embedding-2-preview)
+    try {
+      const ai = new GoogleGenAI({ apiKey: this.apiKey });
+      const result = await ai.models.embedContent({
+        model: 'gemini-embedding-2-preview',
+        contents: text,
+      });
+      const values = result.embeddings?.[0]?.values || (result as any).embedding?.values;
+      if (values && values.length > 0) {
+        return values;
+      }
+    } catch (err) {
+      console.warn("gemini-embedding-2-preview failed, falling back to text-embedding-004:", err);
+    }
+
+    // Resilient fallback to text-embedding-004
     const url = `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key=${this.apiKey}`;
     const body = {
       model: 'models/text-embedding-004',

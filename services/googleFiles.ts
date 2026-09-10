@@ -33,13 +33,13 @@ export const listCloudFiles = async (): Promise<CloudFile[]> => {
     // The list method returns a Pager which is an async iterable
     for await (const f of response) {
       files.push({
-        name: f.name,
+        name: f.name || '',
         displayName: f.displayName || 'Untitled',
-        mimeType: f.mimeType,
-        sizeBytes: f.sizeBytes,
-        createTime: f.createTime,
+        mimeType: f.mimeType || '',
+        sizeBytes: f.sizeBytes || '',
+        createTime: f.createTime || '',
         state: f.state as any,
-        uri: f.uri
+        uri: f.uri || ''
       });
     }
     return files;

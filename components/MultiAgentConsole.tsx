@@ -703,7 +703,7 @@ ${focus.rules.map(r => "- " + r).join('\n')}
                             {msg.senderId !== 'SYSTEM' && (
                                 <span className="council-sender" style={{ color: msg.senderId === 'USER' ? '#38bdf8' : '#a78bfa' }}>
                                     {msg.senderName} 
-                                    {msg.model && <span className="model-badge">{msg.model.replace('gemini-3-pro-preview', 'G-Pro').replace('gemini-3-flash-preview', 'G-Flash')}</span>}
+                                    {msg.model && <span className="model-badge">{msg.model.replace('gemini-3.1-pro-preview', 'G-Pro 3.1').replace('gemini-3.8-flash', 'G-Flash 3.8').replace('gemini-3-pro-preview', 'G-Pro').replace('gemini-3-flash-preview', 'G-Flash')}</span>}
                                     {msg.targets && msg.targets.length > 0 && <span style={{ opacity: 0.5, marginLeft: '0.5rem', fontWeight: 'normal', fontSize: '0.65rem' }}>to {msg.targets.length} agents</span>}
                                 </span>
                             )}

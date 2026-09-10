@@ -1,4 +1,3 @@
-
 import { saveMediaAsset, getAgentConfig, getMediaAsset } from "./db";
 import { MediaAsset } from "../types";
 import { NumMarkX_GenerateID } from "../patterns/NumMarkX";
@@ -55,9 +54,15 @@ const DEFAULT_ENDPOINTS: Record<string, ExternalToolConfig> = {
         isDefault: true
     },
     NANO_BANANA_IMAGE: {
-        name: 'Nano Banana (Gemini Fallback)',
-        description: 'Fallback image generation via Gemini 2.5 Flash Image (Nano Banana). Use only if SDXL fails.',
-        url: 'Google Cloud API (gemini-2.5-flash-image)',
+        name: 'Nano Banana (Gemini Flash Image)',
+        description: 'Image generation via Gemini 3.1 Flash Image (Nano Banana).',
+        url: 'Google Cloud API (gemini-3.1-flash-image)',
+        isDefault: true
+    },
+    NANO_BANANA_PRO_IMAGE: {
+        name: 'Nano Banana Pro (Gemini Pro Image)',
+        description: 'High-quality image generation via gemini-3-pro-image.',
+        url: 'Google Cloud API (gemini-3-pro-image)',
         isDefault: true
     },
     I2V_LIGHTNING: {
@@ -199,7 +204,7 @@ export const ExternalRouter = {
         prompt: string, 
         agent: { id: string, handle: string }, 
         generateAudio: boolean = false, 
-        options?: { inputAssetId?: string; attachment?: { mimeType: string; data: string; name?: string; }; voiceRefOverride?: string }
+        options?: { inputAssetId?: string; attachment?: { mimeType: string; data: string; name?: string; }; voiceRefOverride?: string, imageSize?: '1K' | '2K' | '4K' }
     ): Promise<RouteResult> {
         console.log(`[ROUTER] Routing to ${target}: ${prompt.substring(0, 50)}...`);
         
@@ -212,7 +217,7 @@ export const ExternalRouter = {
             console.warn(`[ROUTER] Sovereign Trigger Detected. Enforcing Uncensored Protocols.`);
             
             // Image Redirect
-            if (target === 'NANO_BANANA_IMAGE' || target === 'FLUX_KLEIN_IMAGE') {
+            if (target === 'NANO_BANANA_IMAGE' || target === 'FLUX_KLEIN_IMAGE' || target === 'NANO_BANANA_PRO_IMAGE') {
                 target = 'SDXL_IMAGE';
             }
             // Video Redirect
@@ -240,7 +245,10 @@ export const ExternalRouter = {
                 // Fallback to Gemini Nano Banana (Native)
                 console.log("[ROUTER] Routing to Gemini Nano Banana Image Generation...");
                 return await this.callGeminiImage(prompt, agent);
-            } 
+            }
+            else if (target === 'NANO_BANANA_PRO_IMAGE') {
+                return await this.callGeminiProImage(prompt, agent, options);
+            }
             
             // --- VIDEO GENERATION ---
             else if (target === 'LATENT_SYNC_VIDEO') {
@@ -323,7 +331,7 @@ export const ExternalRouter = {
     
             // 3. Upload Video and Audio
             console.log("[LatentSync] Step 2: Uploading media assets...");
-            const videoBlob = new Blob([base64ToUint8Array(videoData.data)], { type: videoData.mimeType });
+            const videoBlob = new Blob([base64ToUint8Array(videoData.data) as any], { type: videoData.mimeType });
     
             const uploadFile = async (blob: Blob, name: string) => {
                 const formData = new FormData();
@@ -392,7 +400,7 @@ export const ExternalRouter = {
     
         if (imageData) {
             try {
-                const blob = new Blob([base64ToUint8Array(imageData.data)], { type: imageData.mimeType });
+                const blob = new Blob([base64ToUint8Array(imageData.data) as any], { type: imageData.mimeType });
                 const formData = new FormData();
                 formData.append('files', blob, imageData.name);
     
@@ -458,7 +466,7 @@ export const ExternalRouter = {
 
         if (options?.attachment) {
             try {
-                const blob = new Blob([base64ToUint8Array(options.attachment.data)], { type: options.attachment.mimeType });
+                const blob = new Blob([base64ToUint8Array(options.attachment.data) as any], { type: options.attachment.mimeType });
                 const formData = new FormData();
                 formData.append('files', blob, options.attachment.name || 'input.jpg');
 
@@ -594,7 +602,7 @@ export const ExternalRouter = {
     
         if (imageData) {
             try {
-                const blob = new Blob([base64ToUint8Array(imageData.data)], { type: imageData.mimeType });
+                const blob = new Blob([base64ToUint8Array(imageData.data) as any], { type: imageData.mimeType });
                 const formData = new FormData();
                 formData.append('files', blob, imageData.name);
     
@@ -825,24 +833,26 @@ export const ExternalRouter = {
             if (!apiKey) return { success: false, type: 'text', error: "No API Key configured for Native Generation." };
 
             const ai = new GoogleGenAI({ apiKey });
-            // Using 'gemini-2.5-flash-image' for image generation as per spec
+            // Using 'gemini-3.1-flash-image' for image generation as per spec
             const response = await ai.models.generateContent({
-                model: 'gemini-2.5-flash-image',
+                model: 'gemini-3.1-flash-image',
                 contents: { parts: [{ text: prompt }] },
-                safetySettings: [
-                  { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
-                  { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-                  { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
-                  { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
-                ]
+                config: {
+                    safetySettings: [
+                      { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+                      { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+                      { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+                      { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
+                    ] as any
+                }
             });
 
             // Extract Image from Response
             let base64Image = "";
             const candidates = response.candidates;
-            if (candidates && candidates.length > 0) {
+            if (candidates && candidates.length > 0 && candidates[0].content?.parts) {
                 for (const part of candidates[0].content.parts) {
-                    if (part.inlineData) {
+                    if (part.inlineData?.data) {
                         base64Image = part.inlineData.data;
                         break;
                     }
@@ -866,6 +876,79 @@ export const ExternalRouter = {
                 return { success: false, type: 'text', error: "I cannot generate that image due to Google's Safety Policies regarding generated content." };
             }
             return { success: false, type: 'text', error: `Native Image Gen Failed: ${e.message}` };
+        }
+    },
+
+    // --- NATIVE GEMINI PRO IMAGE ---
+    async callGeminiProImage(
+        prompt: string, 
+        agent: { id: string, handle: string }, 
+        options?: { imageSize?: '1K' | '2K' | '4K' }
+    ): Promise<RouteResult> {
+        if (typeof window.aistudio === 'undefined' || typeof window.aistudio.hasSelectedApiKey !== 'function') {
+            return { success: false, type: 'text', error: "AI Studio environment not available for API key selection." };
+        }
+
+        let hasKey = await window.aistudio.hasSelectedApiKey();
+        if (!hasKey) {
+            await window.aistudio.openSelectKey();
+            // Assume success after opening dialog, per guidelines.
+        }
+
+        try {
+            const apiKey = process.env.API_KEY || localStorage.getItem('gemini_api_key') || '';
+            if (!apiKey) return { success: false, type: 'text', error: "No API Key configured. Please select one." };
+            
+            const ai = new GoogleGenAI({ apiKey });
+
+            const response = await ai.models.generateContent({
+                model: 'gemini-3-pro-image',
+                contents: { parts: [{ text: prompt }] },
+                config: {
+                    imageConfig: {
+                        imageSize: options?.imageSize || '1K',
+                        aspectRatio: '1:1'
+                    },
+                    safetySettings: [
+                      { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+                      { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+                      { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+                      { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
+                    ] as any
+                }
+            });
+
+            let base64Image = "";
+            const candidates = response.candidates;
+            if (candidates && candidates.length > 0 && candidates[0].content?.parts) {
+                for (const part of candidates[0].content.parts) {
+                    if (part.inlineData?.data) {
+                        base64Image = part.inlineData.data;
+                        break;
+                    }
+                }
+            }
+
+            if (!base64Image) {
+                const text = response.text;
+                if (text && (text.includes("policy") || text.includes("safety") || text.includes("unable"))) {
+                    return { success: false, type: 'text', error: `Request refused by Safety Guidelines: ${text}` };
+                }
+                return { success: false, type: 'text', error: "Model did not return an image." };
+            }
+
+            const assetId = await this.saveGeneratedImage(`data:image/png;base64,${base64Image}`, prompt, agent, 'IMG', 'GEMINI_PRO');
+            return { success: true, type: 'image', data: `data:image/png;base64,${base64Image}`, assetId };
+
+        } catch (e: any) {
+            if (e.message?.includes("Requested entity was not found") || e.message?.includes("API key not valid")) {
+                await window.aistudio.openSelectKey();
+                return { success: false, type: 'text', error: "API Key selection was required. Please try your request again." };
+            }
+             if (e.message?.includes('400') || e.message?.includes('SAFETY')) {
+                return { success: false, type: 'text', error: "I cannot generate that image due to Google's Safety Policies." };
+            }
+            return { success: false, type: 'text', error: `Gemini Pro Image Failed: ${e.message}` };
         }
     },
 
@@ -992,8 +1075,6 @@ export const ExternalRouter = {
             return { success: false, type: 'text', error: `TTS Failed: ${e.message}` };
         }
     },
-
-    exportRouteResult: undefined as RouteResult | undefined, // Type reference for compatibility
 
     async saveGeneratedImage(urlOrBase64: string, prompt: string, agent: { id: string, handle: string }, type: 'IMG' | 'VID' | 'AUD' = 'IMG', tag: string = 'GENERATED'): Promise<string> {
         try {

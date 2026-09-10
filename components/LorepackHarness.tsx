@@ -43,7 +43,7 @@ export const LorepackHarness: React.FC<LorepackHarnessProps> = ({ onExit }) => {
 
     // Params State
     const [agentId, setAgentId] = useState('');
-    const [model, setModel] = useState('gemini-2.5-flash');
+    const [model, setModel] = useState('gemini-3.8-flash');
     const [systemPrompt, setSystemPrompt] = useState(`
 You are ARCHIVAX, an autonomous, multimodal agent in a bidirectional conversation.
 
@@ -141,7 +141,7 @@ Acknowledge the new input and seamlessly integrate it into the ongoing conversat
     
     const { connect, disconnect, connectionState, sendText, isMicOn, setIsMicOn } = useGeminiLive({
         apiKey: apiKeys.find(k => k) || '',
-        modelName: 'gemini-2.5-flash-native-audio-preview-12-2025',
+        modelName: 'gemini-3.1-flash-live-preview',
         systemInstruction: systemPrompt,
         voiceName: selectedVoice,
         tools: factoryTools,
@@ -492,8 +492,10 @@ Acknowledge the new input and seamlessly integrate it into the ongoing conversat
                                 ))
                             ) : (
                                 <>
+                                    <option value="gemini-3.8-flash">GEMINI 3.8 FLASH (ECONOMIC)</option>
+                                    <option value="gemini-3.1-pro-preview">GEMINI 3.1 PRO (COMPLEX)</option>
+                                    <option value="gemini-3.1-flash-lite">GEMINI 3.1 FLASH LITE</option>
                                     <option value="gemini-2.5-flash">GEMINI 2.5 FLASH</option>
-                                    <option value="gemini-3-pro-preview">GEMINI 3 PRO</option>
                                 </>
                             )}
                         </select>

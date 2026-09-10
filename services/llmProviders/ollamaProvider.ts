@@ -35,7 +35,7 @@ export class OllamaProvider implements ILLMProvider {
   ): Promise<LLMResponse> {
 
     const messages: any[] = contents.map(c => {
-        const textPart = c.parts.find(p => 'text' in p);
+        const textPart = c.parts?.find(p => 'text' in p);
         return {
             role: c.role === 'model' ? 'assistant' : 'user',
             content: textPart?.text || ''

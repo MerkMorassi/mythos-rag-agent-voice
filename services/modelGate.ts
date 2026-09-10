@@ -10,13 +10,13 @@ export const ModelGate = {
     /**
      * Selects the optimal Gemini model based on query complexity.
      * @param query The user's input text
-     * @returns string - The name of the model to use ('gemini-3-pro-preview' or 'gemini-3-flash-preview')
+     * @returns string - The name of the model to use ('gemini-3.1-pro-preview' or 'gemini-3.8-flash')
      */
     selectModel(query: string): string {
         if (this.shouldActivateDeepAnalysis(query)) {
-            return 'gemini-3-pro-preview';
+            return 'gemini-3.1-pro-preview';
         }
-        return 'gemini-3-flash-preview';
+        return 'gemini-3.8-flash';
     },
 
     /**

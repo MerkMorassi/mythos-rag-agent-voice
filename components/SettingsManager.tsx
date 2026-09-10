@@ -284,8 +284,11 @@ const SettingsManager: React.FC<SettingsManagerProps> = (props) => {
                             ))
                         ) : (
                             <>
-                                <option value="gemini-3-flash-preview">Gemini 3 Flash (Fast)</option>
-                                <option value="gemini-3-pro-preview">Gemini 3 Pro (Complex)</option>
+                                <option value="gemini-3.8-flash">Gemini 3.8 Flash (Economic & Fast)</option>
+                                <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro (Complex Reasoning)</option>
+                                <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash Lite (Ultra Economic)</option>
+                                <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+                                <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
                             </>
                         )}
                     </select>

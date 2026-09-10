@@ -1,4 +1,3 @@
-
 // The standard LorePack vector definition.
 export interface VectorRecord {
   id: string;
@@ -302,4 +301,17 @@ export interface CanonBlock {
     status: ApprovalStatus;
     version: number;
     feedback?: string; // Director's notes
+}
+
+// FIX: Moved AIStudio interface into declare global and removed export to fix duplicate declaration errors.
+declare global {
+    interface AIStudio {
+        hasSelectedApiKey: () => Promise<boolean>;
+        openSelectKey: () => Promise<void>;
+    }
+
+    interface Window {
+// FIX: Make `aistudio` optional to resolve conflict with another declaration.
+        aistudio?: AIStudio;
+    }
 }

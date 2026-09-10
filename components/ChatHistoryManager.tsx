@@ -1,6 +1,4 @@
-
 import React, { useState, useEffect } from 'react';
-import { GoogleGenAI } from '@google/genai';
 import { LogMessage, ChatSession, VectorRecord } from '../types';
 import { saveChatSession, getChatSessionsByAgentId, deleteChatSession, putVector } from '../services/db';
 import { IngestionService } from '../services/ingestion';

@@ -192,18 +192,44 @@ export class Lorepack {
   // FIX: Changed method from private to public to allow access from LorepackHarness.
   public async embedBatch(texts: string[], keyOverride: string | null = null): Promise<number[][]> {
     const key = keyOverride || this._getKey();
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:batchEmbedContents?key=${encodeURIComponent(key)}`;
-    const body = {
+
+    // Attempt latest Gemini embedding model first (gemini-embedding-2-preview)
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2-preview:batchEmbedContents?key=${encodeURIComponent(key)}`;
+      const body = {
+        requests: texts.map(t => ({
+          model: 'models/gemini-embedding-2-preview',
+          content: { parts: [{ text: t }] }
+        }))
+      };
+
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+      const json = await res.json();
+      if (res.ok && !json.error && Array.isArray(json.embeddings) && json.embeddings.length > 0) {
+        return json.embeddings.map((e: any) => e.values);
+      }
+    } catch (err) {
+      console.warn('gemini-embedding-2-preview batch failed, falling back to text-embedding-004:', err);
+    }
+
+    // Resilient fallback to text-embedding-004
+    const fallbackUrl = `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:batchEmbedContents?key=${encodeURIComponent(key)}`;
+    const fallbackBody = {
       requests: texts.map(t => ({
         model: 'models/text-embedding-004',
         content: { parts: [{ text: t }] }
       }))
     };
 
-    const res = await fetch(url, {
+    const res = await fetch(fallbackUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify(fallbackBody),
     });
 
     const json = await res.json();
@@ -281,7 +307,7 @@ export class Lorepack {
       const promises = batch.map(async (node) => {
         const prompt = `CONTEXT: ${node.text}\nTASK: Extract narrative relationships.\nFOCUS: RootLayer > RoleLayerID.\nOUTPUT FORMAT: [{"s": "Subject", "r": "Relation", "o": "Object"}]\nSYSTEM: JSON ONLY.`;
         try {
-          const res = await this.chat(prompt, agentId, "SYSTEM: You are a Relationship Extractor. Output strictly JSON.", 'gemini-2.5-flash');
+          const res = await this.chat(prompt, agentId, "SYSTEM: You are a Relationship Extractor. Output strictly JSON.", 'gemini-3.8-flash');
           let clean = res.response.trim();
           if (clean.startsWith('```json')) clean = clean.slice(7);
           if (clean.startsWith('```')) clean = clean.slice(3);
@@ -347,9 +373,9 @@ export class Lorepack {
         }
     }
 
-    let stream: ReadableStream<Uint8Array> = fileOrBlob.stream();
-    if (fileName.endsWith('.gz')) stream = stream.pipeThrough(new DecompressionStream('gzip'));
-    const reader = stream.pipeThrough(new TextDecoderStream()).getReader();
+    let stream: ReadableStream<any> = fileOrBlob.stream() as any;
+    if (fileName.endsWith('.gz')) stream = stream.pipeThrough(new DecompressionStream('gzip') as any);
+    const reader = (stream.pipeThrough(new TextDecoderStream() as any) as any).getReader();
 
     let buffer = '';
     let count = 0;
@@ -403,7 +429,7 @@ export class Lorepack {
     return { success: true, nodesImported: count };
   }
 
-  async chat(userQuery: string, agentId: string | null, systemPrompt?: string, model = 'gemini-2.5-flash', topK = 6, threshold = 0.45): Promise<{ response: string, derivation: string, source: string }> {
+  async chat(userQuery: string, agentId: string | null, systemPrompt?: string, model = 'gemini-3.8-flash', topK = 6, threshold = 0.45): Promise<{ response: string, derivation: string, source: string }> {
     await this.db.ready;
     const pool = await this.getNodes(agentId || undefined);
     if (!pool.length) return { response: 'Vault empty.', derivation: 'EMPTY_VAULT', source: 'NULL' };

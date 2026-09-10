@@ -32,8 +32,20 @@ class GeminiClient {
      * @throws An error if the API key is missing or the request fails.
      */
     async listModels(apiKey: string): Promise<{ name: string, displayName: string }[]> {
+        const fallbackModels = [
+            { name: 'gemini-3.8-flash', displayName: 'Gemini 3.8 Flash (Economic & Fast)' },
+            { name: 'gemini-3.1-pro-preview', displayName: 'Gemini 3.1 Pro (Complex Reasoning)' },
+            { name: 'gemini-3.1-flash-lite', displayName: 'Gemini 3.1 Flash Lite (Ultra Economic)' },
+            { name: 'gemini-2.5-flash', displayName: 'Gemini 2.5 Flash' },
+            { name: 'gemini-2.5-pro', displayName: 'Gemini 2.5 Pro' },
+            { name: 'gemini-2.0-flash-exp', displayName: 'Gemini 2.0 Flash Experimental' },
+            { name: 'gemini-1.5-flash', displayName: 'Gemini 1.5 Flash' },
+            { name: 'gemini-1.5-pro', displayName: 'Gemini 1.5 Pro' }
+        ];
+
         if (!apiKey) {
-            throw new Error("API Key is required to fetch models.");
+            console.warn("API Key is missing, returning fallback Gemini models.");
+            return fallbackModels;
         }
     
         const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`;
@@ -47,6 +59,10 @@ class GeminiClient {
             }
     
             const data = await response.json();
+            
+            if (!data.models || !Array.isArray(data.models)) {
+                return fallbackModels;
+            }
     
             const compatibleModels = data.models
                 .filter((model: any) => model.supportedGenerationMethods?.includes("generateContent"))
@@ -56,11 +72,11 @@ class GeminiClient {
                     displayName: model.displayName
                 }));
     
-            return compatibleModels;
+            return compatibleModels.length > 0 ? compatibleModels : fallbackModels;
     
         } catch (error) {
-            console.error("Failed to list Gemini models:", error);
-            throw error;
+            console.warn("Failed to list Gemini models via API, utilizing resilient fallback list:", error);
+            return fallbackModels;
         }
     }
 }
