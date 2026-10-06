@@ -1,6 +1,8 @@
 
 // ... existing imports ...
 import React, { useState, useEffect, useRef } from 'react';
+import { AuthManager } from './components/AuthManager';
+import { User } from 'firebase/auth';
 import { GoogleGenAI, Tool, Type, Content } from "@google/genai";
 import { AGENTS } from './agents';
 import { 
@@ -71,6 +73,24 @@ type ViewMode = 'HOME' | 'ORCHESTRATOR' | 'COUNCIL' | 'LORE_HARNESS' | 'COMMUNIC
 type ToolOverride = 'auto' | 'image' | 'video' | 'speech' | 'i2v';
 type LayoutMode = 'CHAT' | 'VIDEO';
 
+function formatToHtml(text: string): string {
+    if (!text) return '';
+    const hasHtml = /<[a-z][\s\S]*>/i.test(text);
+    if (hasHtml) return text;
+    let html = text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+    html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/__(.*?)__/g, '<strong>$1</strong>');
+    html = html.replace(/\*(.*?)\*/g, '<em>$1</em>');
+    html = html.replace(/_(.*?)_/g, '<em>$1</em>');
+    html = html.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>');
+    html = html.replace(/`(.*?)`/g, '<code>$1</code>');
+    html = html.replace(/\n/g, '<br/>');
+    return html;
+}
+
 function cosineSimilarity(a: number[], b: number[]): number {
     if (!a || !b || a.length !== b.length) return 0;
     let dot = 0, nA = 0, nB = 0;
@@ -83,10 +103,12 @@ function cosineSimilarity(a: number[], b: number[]): number {
 }
 
 const App: React.FC = () => {
+  const defaultAgent = AGENTS.find(a => a.handle === 'ARCHIVAX') || AGENTS[0];
+
   // --- STATE ---
   const [apiKey, setApiKey] = useState(process.env.API_KEY || localStorage.getItem('gemini_api_key') || '');
   const [hfToken, setHfToken] = useState(process.env.HF_TOKEN || localStorage.getItem('hf_token') || '');
-  const [currentAgentId, setCurrentAgentId] = useState(AGENTS[0].id);
+  const [currentAgentId, setCurrentAgentId] = useState(defaultAgent.id);
   const [logs, setLogs] = useState<LogMessage[]>([]);
   
   // Input State
@@ -98,11 +120,13 @@ const App: React.FC = () => {
   const [generalInstructions, setGeneralInstructions] = useState('');
   const [agentInstructions, setAgentInstructions] = useState('');
   const [selectedModel, setSelectedModel] = useState('gemini-3.8-flash');
-  const [selectedVoice, setSelectedVoice] = useState(AGENTS[0].voice);
+  const [selectedVoice, setSelectedVoice] = useState(defaultAgent.voice);
   const [voiceRef, setVoiceRef] = useState('');
   const [voiceSpeed, setVoiceSpeed] = useState(1.0);
   const [voicePitch, setVoicePitch] = useState(0);
-  const [accessLevel, setAccessLevel] = useState(AGENTS[0].accessLevel);
+  const [liveVoiceSpeed, setLiveVoiceSpeed] = useState(1.0);
+  const [liveVoicePitch, setLiveVoicePitch] = useState(0);
+  const [accessLevel, setAccessLevel] = useState(defaultAgent.accessLevel);
   const [toolOverride, setToolOverride] = useState<ToolOverride>('auto');
   const [hasGreeted, setHasGreeted] = useState(false);
   const [vectorCount, setVectorCount] = useState(0);
@@ -111,6 +135,7 @@ const App: React.FC = () => {
   const [behaviorTuning, setBehaviorTuning] = useState('');
   const [ragThreshold, setRagThreshold] = useState(0.35);
   const [isHistoryLoaded, setIsHistoryLoaded] = useState(false);
+  const [authUser, setAuthUser] = useState<User | null>(null);
 
   // Layout & View Modes
   const [layoutMode, setLayoutMode] = useState<LayoutMode>('CHAT');
@@ -126,6 +151,12 @@ const App: React.FC = () => {
 
   // Vision / Stream State
   const [isCameraOn, setIsCameraOn] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [isAudioRecording, setIsAudioRecording] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
+  const audioChunksRef = useRef<Blob[]>([]);
   const [videoSource, setVideoSource] = useState<'camera' | 'media'>('camera');
   const [streamFileUrl, setStreamFileUrl] = useState<string | null>(null);
   const [mediaFile, setMediaFile] = useState<File | null>(null); // Store actual file for deep analysis
@@ -238,6 +269,10 @@ ${agentInstructions || currentAgent?.system_instruction}
   const filesystemTool: Tool = { functionDeclarations: [ { name: "read_file", description: "Read contents of a file from the host filesystem.", parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING } }, required: ["path"] } }, { name: "list_directory", description: "List files and directories at a path.", parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING } }, required: ["path"] } }, { name: "write_file", description: "Write content to a file.", parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING }, content: { type: Type.STRING } }, required: ["path", "content"] } }, { name: "get_file_info", description: "Get metadata for a file.", parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING } }, required: ["path"] } }, { name: "search_files", description: "Recursively search for files.", parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING }, pattern: { type: Type.STRING } }, required: ["path", "pattern"] } } ] };
   const analyzeTool: Tool = { functionDeclarations: [ analyzeFileTool ] };
   const savePromptTool: Tool = { functionDeclarations: [ { name: "save_prompt", description: "Save the user's last message as a named prompt in the Prompt Library for reuse.", parameters: { type: Type.OBJECT, properties: { name: { type: Type.STRING, description: "A descriptive name for the prompt." } }, required: ["name"] } } ] };
+  const saveAudioTool: Tool = { functionDeclarations: [ { name: "save_session_audio", description: "Start or stop recording the current session audio stream.", parameters: { type: Type.OBJECT, properties: { action: { type: Type.STRING, enum: ["start", "stop"], description: "The action to perform." } }, required: ["action"] } } ] };
+  const handoverTool: Tool = { functionDeclarations: [ { name: "handover", description: "Hand over the current session context to another agent.", parameters: { type: Type.OBJECT, properties: { targetAgentId: { type: Type.STRING, description: "The ID of the target agent." }, summary: { type: Type.STRING, description: "Summary of the conversation context." } }, required: ["targetAgentId", "summary"] } } ] };
+  const saveSummaryTool: Tool = { functionDeclarations: [ { name: "save_session_summary", description: "Generate a text-based summary of the current session chat history and save it to the MediaGallery.", parameters: { type: Type.OBJECT, properties: {}, required: [] } } ] };
+  const exportSessionTool: Tool = { functionDeclarations: [ { name: "export_session_chat", description: "Export the current chat session logs to a JSON file and trigger a download.", parameters: { type: Type.OBJECT, properties: {}, required: [] } } ] };
   const selfConfigTool: Tool = { functionDeclarations: [ selfConfigDeclaration ] };
 
   const allTools: Record<string, Tool> = {
@@ -250,11 +285,15 @@ ${agentInstructions || currentAgent?.system_instruction}
     filesystem: filesystemTool,
     analyzeFile: analyzeTool,
     selfConfig: selfConfigTool,
-    savePrompt: savePromptTool
+    savePrompt: savePromptTool,
+    handover: handoverTool,
+    saveSummary: saveSummaryTool,
+    saveAudio: saveAudioTool,
+    exportSession: exportSessionTool
   };
 
   const [enabledToolIds, setEnabledToolIds] = useState<string[]>([
-    'retrieval', 'mediaGallery', 'googleMaps', 'routeRequest', 'holodeck', 'analyzeFile', 'python', 'selfConfig', 'savePrompt'
+    'retrieval', 'mediaGallery', 'googleMaps', 'routeRequest', 'holodeck', 'analyzeFile', 'python', 'selfConfig', 'savePrompt', 'saveSummary', 'saveAudio', 'exportSession'
   ]);
 
   const getPermittedTools = (): Tool[] => {
@@ -298,6 +337,57 @@ ${agentInstructions || currentAgent?.system_instruction}
                   responses.push({ id: fc.id, name: fc.name, response: { error: "No recent user prompt found to save." } });
               }
           }
+          else if (fc.name === 'handover') {
+              const targetAgentId = (fc.args as any).targetAgentId;
+              const summary = (fc.args as any).summary;
+              setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[HANDOVER] Transferring session to ${targetAgentId}. Summary: ${summary}`, timestamp: Date.now() }]);
+              setCurrentAgentId(targetAgentId);
+              responses.push({ id: fc.id, name: fc.name, response: { result: "Handover successful. Session context transferred." } });
+          }
+          else if (fc.name === 'save_session_summary') {
+              const chatContent = logs.map(l => `${l.sender}: ${l.text}`).join('\n');
+              setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[SUMMARY] Generating session summary...`, timestamp: Date.now() }]);
+              try {
+                  const provider = new GeminiProvider(apiKey);
+                  const llmResponse = await provider.generateResponse([{ role: 'user', parts: [{ text: `Summarize this chat session:\n${chatContent}` }] }], {});
+                  const summary = llmResponse.content || "No summary generated.";
+                  const asset: MediaAsset = {
+                      id: NumMarkX_GenerateID('CODE'),
+                      type: 'text',
+                      data: summary,
+                      prompt: `Session Summary ${new Date().toLocaleString()}`,
+                      agentId: currentAgentId,
+                      timestamp: Date.now(),
+                      tags: ['SUMMARY', 'SESSION']
+                  };
+                  await saveMediaAsset(asset);
+                  setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[SUMMARY] Session summary saved to MediaGallery as ${asset.prompt}.`, timestamp: Date.now() }]);
+                  responses.push({ id: fc.id, name: fc.name, response: { result: "Session summary generated and saved." } });
+              } catch (e: any) {
+                  setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[SUMMARY] Failed: ${e.message}`, timestamp: Date.now() }]);
+                  responses.push({ id: fc.id, name: fc.name, response: { error: e.message } });
+              }
+          }
+          else if (fc.name === 'save_session_audio') {
+              const action = (fc.args as any).action;
+              if (action === 'start') {
+                  await handleStartAudioRecording();
+                  responses.push({ id: fc.id, name: fc.name, response: { result: "Audio recording started." } });
+              } else if (action === 'stop') {
+                  handleStopAudioRecording();
+                  responses.push({ id: fc.id, name: fc.name, response: { result: "Audio recording stopped." } });
+              }
+          }
+          else if (fc.name === 'save_session_audio') {
+              const action = (fc.args as any).action;
+              if (action === 'start') {
+                  await handleStartAudioRecording();
+                  responses.push({ id: fc.id, name: fc.name, response: { result: "Audio recording started." } });
+              } else if (action === 'stop') {
+                  handleStopAudioRecording();
+                  responses.push({ id: fc.id, name: fc.name, response: { result: "Audio recording stopped." } });
+              }
+          }
           else if (fc.name === 'update_self_config') {
               const { new_system_instruction, new_voice_name, new_access_level, new_bio } = fc.args as any;
               
@@ -305,9 +395,7 @@ ${agentInstructions || currentAgent?.system_instruction}
               setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[SOMA] Agent ${agentHandle} is reconfiguring its own parameters...`, timestamp: Date.now() }]);
 
               const currentConfig = await getAgentConfig(currentAgentId);
-              
-              const updates: Partial<AgentConfig> = {};
-              if (new_system_instruction) updates.systemInstruction = new_system_instruction;
+              const updates: any = {};
               if (new_voice_name) updates.voiceName = new_voice_name;
               if (new_access_level) updates.accessLevel = new_access_level;
               if (new_bio) updates.bio = new_bio;
@@ -477,7 +565,9 @@ ${agentInstructions || currentAgent?.system_instruction}
                   const provider = new GeminiProvider(apiKey);
                   const vec = await provider.embed(query);
                   const vectorDocs = await RetrievalGate.query(vec, query, 8, ragThreshold);
-                  const combined = `DOCS:\n${vectorDocs.map(d => `- ${d.text.substring(0,400)}...`).join('\n')}`;
+                  const combined = vectorDocs.length > 0 
+                      ? `DOCS:\n${vectorDocs.map(d => `- ${d.text.substring(0,400)}...`).join('\n')}`
+                      : "No matching records found in local knowledge base/RAG. Please use your general training data and default knowledge to answer the user query directly.";
                   responses.push({ id: fc.id, name: fc.name, response: { result: combined } });
               } catch(e: any) {
                   responses.push({ id: fc.id, name: fc.name, response: { result: `Error: ${e.message}` } });
@@ -512,17 +602,34 @@ ${agentInstructions || currentAgent?.system_instruction}
               setIsHolodeckOpen(true);
               responses.push({ id: fc.id, name: fc.name, response: { result: "Canvas Updated." } });
           }
+          else if (fc.name === "export_session_chat") {
+              const exportData = {
+                  timestamp: Date.now(),
+                  agentId: currentAgentId,
+                  logs: logs
+              };
+              const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = `chat_session_${currentAgentId}_${Date.now()}.json`;
+              a.click();
+              URL.revokeObjectURL(url);
+              responses.push({ id: fc.id, name: fc.name, response: { result: "Session exported and download triggered." } });
+          }
       }
       return responses;
   };
 
   const { connect, disconnect, connectionState, analyser, sendText, sendRealtimeInput, stopPlayback, isMicOn, setIsMicOn, isThinking, isPlaying } = useGeminiLive({
       apiKey,
-      modelName: 'gemini-3.1-flash-live-preview',
+      modelName: (selectedModel && selectedModel.includes('live')) ? selectedModel : 'gemini-3.1-flash-live-preview',
       systemInstruction,
       voiceName: selectedVoice,
       tools: getPermittedTools(),
       isMuted: isAgentMuted,
+      liveVoiceSpeed,
+      liveVoicePitch,
       onLog: (log) => {
           // Enriched log with sender info
           const enrichedLog = { ...log };
@@ -733,7 +840,7 @@ ${agentInstructions || currentAgent?.system_instruction}
                   ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
                   const base64 = canvas.toDataURL('image/jpeg', 0.6).split(',')[1];
                   
-                  sendRealtimeInput({ media: { mimeType: 'image/jpeg', data: base64 } });
+                  sendRealtimeInput({ video: { mimeType: 'image/jpeg', data: base64 } });
               }
           }, 1000); // 1 FPS
       }
@@ -751,6 +858,8 @@ ${agentInstructions || currentAgent?.system_instruction}
       setVoiceRef(cfg.voiceReference || '');
       setVoiceSpeed(cfg.voiceSpeed || 1.0);
       setVoicePitch(cfg.voicePitch || 0);
+      setLiveVoiceSpeed(cfg.liveVoiceSpeed || 1.0);
+      setLiveVoicePitch(cfg.liveVoicePitch || 0);
       setAccessLevel(cfg.accessLevel || agent?.accessLevel || '400');
       setRecognitionSettings(cfg.recognition || agent?.recognition || { userInteraction: '', agentInteraction: '' });
       setBehaviorTuning(cfg.behaviorTuning || agent?.behaviorTuning || '');
@@ -789,7 +898,83 @@ ${agentInstructions || currentAgent?.system_instruction}
       }
   };
 
-  const handleStopSession = async () => {
+    const handleStartAudioRecording = async () => {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            audioRecorderRef.current = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+            audioChunksRef.current = [];
+            audioRecorderRef.current.ondataavailable = (event) => {
+                if (event.data.size > 0) audioChunksRef.current.push(event.data);
+            };
+            audioRecorderRef.current.onstop = async () => {
+                const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+                const reader = new FileReader();
+                reader.onloadend = async () => {
+                    const base64data = reader.result as string;
+                    const asset: MediaAsset = {
+                        id: NumMarkX_GenerateID('AUD'),
+                        type: 'audio',
+                        data: base64data.split(',')[1],
+                        prompt: `Session Audio ${new Date().toLocaleString()}`,
+                        agentId: currentAgentId,
+                        timestamp: Date.now(),
+                        tags: ['RECORDING', 'AUDIO', 'SESSION']
+                    };
+                    await saveMediaAsset(asset);
+                    setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[AUDIO RECORDING] Session audio saved to MediaGallery as ${asset.prompt}.`, timestamp: Date.now() }]);
+                };
+                reader.readAsDataURL(blob);
+                stream.getTracks().forEach(track => track.stop());
+            };
+            audioRecorderRef.current.start();
+            setIsAudioRecording(true);
+            setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[AUDIO RECORDING] Session audio recording started.`, timestamp: Date.now() }]);
+        } catch (e: any) {
+            setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[AUDIO RECORDING] Failed to start: ${e.message}`, timestamp: Date.now() }]);
+        }
+    };
+    const handleStopAudioRecording = () => {
+        audioRecorderRef.current?.stop();
+        setIsAudioRecording(false);
+        setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[AUDIO RECORDING] Session audio recording stopped.`, timestamp: Date.now() }]);
+    };
+    const handleStartRecording = async () => {
+        if (!canvasRef.current) return;
+        const stream = (canvasRef.current as any).captureStream(30);
+        mediaRecorderRef.current = new MediaRecorder(stream, { mimeType: 'video/webm' });
+        recordedChunksRef.current = [];
+        mediaRecorderRef.current.ondataavailable = (event) => {
+            if (event.data.size > 0) recordedChunksRef.current.push(event.data);
+        };
+        mediaRecorderRef.current.onstop = async () => {
+            const blob = new Blob(recordedChunksRef.current, { type: 'video/webm' });
+            const reader = new FileReader();
+            reader.onloadend = async () => {
+                const base64data = reader.result as string;
+                const asset: MediaAsset = {
+                    id: NumMarkX_GenerateID('VID'),
+                    type: 'video',
+                    data: base64data.split(',')[1],
+                    prompt: `Session Recording ${new Date().toLocaleString()}`,
+                    agentId: currentAgentId,
+                    timestamp: Date.now(),
+                    tags: ['RECORDING', 'SESSION']
+                };
+                await saveMediaAsset(asset);
+                setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[RECORDING] Session saved to MediaGallery as ${asset.prompt}.`, timestamp: Date.now() }]);
+            };
+            reader.readAsDataURL(blob);
+        };
+        mediaRecorderRef.current.start();
+        setIsRecording(true);
+        setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[RECORDING] Session recording started.`, timestamp: Date.now() }]);
+    };
+    const handleStopRecording = () => {
+        mediaRecorderRef.current?.stop();
+        setIsRecording(false);
+        setLogs(prev => [...prev, { id: crypto.randomUUID(), type: 'system', sender: 'SYSTEM', text: `[RECORDING] Session recording stopped.`, timestamp: Date.now() }]);
+    };
+    const handleStopSession = async () => {
       if (connectionState === ConnectionState.CONNECTED) {
           await autoSaveSessionIfNeeded(currentAgentId, logs);
           disconnect();
@@ -854,9 +1039,11 @@ ${agentInstructions || currentAgent?.system_instruction}
       handleRosterSelect(currentAgentId, mode);
   };
 
-  const handleSettingsSave = async (modelName: string, newVoiceRef?: string, newAccessLevel?: string, speed?: number, pitch?: number, recognition?: RecognitionSettings, newBehaviorTuning?: string, newRagThreshold?: number) => {
+  const handleSettingsSave = async (modelName: string, newVoiceRef?: string, newAccessLevel?: string, speed?: number, pitch?: number, recognition?: RecognitionSettings, newBehaviorTuning?: string, newRagThreshold?: number, liveSpeed?: number, livePitch?: number) => {
       if (speed !== undefined) setVoiceSpeed(speed);
       if (pitch !== undefined) setVoicePitch(pitch);
+      if (liveSpeed !== undefined) setLiveVoiceSpeed(liveSpeed);
+      if (livePitch !== undefined) setLiveVoicePitch(livePitch);
       if (newVoiceRef !== undefined) setVoiceRef(newVoiceRef);
       if (newAccessLevel !== undefined) setAccessLevel(newAccessLevel);
       if (recognition) setRecognitionSettings(recognition);
@@ -875,6 +1062,8 @@ ${agentInstructions || currentAgent?.system_instruction}
           accessLevel: newAccessLevel ?? accessLevel, 
           voiceSpeed: speed ?? voiceSpeed, 
           voicePitch: pitch ?? voicePitch,
+          liveVoiceSpeed: liveSpeed ?? liveVoiceSpeed,
+          liveVoicePitch: livePitch ?? liveVoicePitch,
           recognition: recognition ?? recognitionSettings,
           behaviorTuning: newBehaviorTuning ?? behaviorTuning
       });
@@ -1179,6 +1368,9 @@ ${agentInstructions || currentAgent?.system_instruction}
 
   const renderHome = () => (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#050505', gap: '2rem', fontFamily: 'sans-serif', animation: 'fadeIn 0.5s ease' }}>
+          <div style={{ position: 'fixed', top: '1rem', right: '1rem', zIndex: 100 }}>
+              <AuthManager onUserChange={setAuthUser} />
+          </div>
           <div style={{ textAlign: 'center' }}>
               <h1 style={{ fontSize: '3rem', fontWeight: '900', color: '#fff', letterSpacing: '4px', margin: 0, textShadow: '0 0 20px rgba(255,255,255,0.2)' }}>MYTHOS</h1>
               <div style={{ fontSize: '0.8rem', color: '#666', letterSpacing: '2px', marginTop: '0.5rem' }}>SOVEREIGN INTELLIGENCE KERNEL</div>
@@ -1359,7 +1551,7 @@ ${agentInstructions || currentAgent?.system_instruction}
                                            <div style={{ padding: '1rem', fontSize: '0.8rem', background: '#111', color: '#eee' }}>File Attached</div>}
                                       </div>
                                   )}
-                                  <span className="log-text">{log.text}</span>
+                                  <span className="log-text" dangerouslySetInnerHTML={{ __html: formatToHtml(log.text) }}></span>
                                   {log.isStreaming && <span className="animate-pulse">_</span>}
                               </div>
                           ))}
@@ -1372,6 +1564,10 @@ ${agentInstructions || currentAgent?.system_instruction}
       );
   };
 
+  if (!authUser) {
+      return <AuthManager onUserChange={setAuthUser} />;
+  }
+
   if (currentView === 'HOME') return renderHome();
 
   return (
@@ -1379,8 +1575,8 @@ ${agentInstructions || currentAgent?.system_instruction}
       {/* HEADER */}
       <header className="app-header">
         <div className="flex-group">
-            <button onClick={() => setCurrentView('HOME')} className="btn btn-secondary btn-icon" title="Return to Home Menu" style={{marginRight: '0.5rem', width: '2rem', height: '2rem'}}>
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+            <button onClick={() => setCurrentView('HOME')} className="btn btn-secondary btn-icon" title="Return to Home Menu" style={{marginRight: '0.5rem'}}>
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
             </button>
             <span className="logo-text">MYTHOS</span>
             <span className="divider">|</span>
@@ -1389,7 +1585,7 @@ ${agentInstructions || currentAgent?.system_instruction}
                     <select value={currentAgentId} onChange={(e) => handleAgentChange(e.target.value)} className="agent-selector" title="Select Active Agent Persona">
                         {AGENTS.map(agent => <option key={agent.id} value={agent.id}>{agent.handle.toUpperCase()}</option>)}
                     </select>
-                    <button onClick={() => setActiveSidePanel('ROSTER')} className="btn btn-secondary btn-sm" title="Open Agent Roster Cards">
+                    <button onClick={() => setActiveSidePanel('ROSTER')} className="btn btn-secondary btn-md" title="Open Agent Roster Cards">
                         ROSTER
                     </button>
                 </>
@@ -1419,6 +1615,7 @@ ${agentInstructions || currentAgent?.system_instruction}
             {renderTriggerBtn('PROMPTS', <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>, "Prompt Library")}
             {renderTriggerBtn('HISTORY', <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>, "Chat History")}
             {renderTriggerBtn('SETTINGS', <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>, "Settings")}
+            <AuthManager onUserChange={setAuthUser} />
         </div>
       </header>
 
@@ -1445,11 +1642,11 @@ ${agentInstructions || currentAgent?.system_instruction}
         {activeSidePanel === 'FOCUS' && <RoomFocusConfig isOpen={true} onOpen={()=>{}} onClose={()=>setActiveSidePanel(null)} />}
         {activeSidePanel === 'MEDIA' && <MediaGallery isOpen={true} onOpen={()=>{}} onClose={() => { setActiveSidePanel(null); setGalleryAgentScope(null); }} currentAgentId={currentAgentId} agentScope={galleryAgentScope} />}
         {activeSidePanel === 'MCP' && <McpManager isOpen={true} onOpen={()=>{}} onClose={()=>setActiveSidePanel(null)} />}
-        {activeSidePanel === 'KNOWLEDGE' && <KnowledgeManager isOpen={true} onClose={()=>setActiveSidePanel(null)} onUpdate={refreshVectorCount} currentAgentId={currentAgentId} />}
+        {activeSidePanel === 'KNOWLEDGE' && <KnowledgeManager isOpen={true} onClose={()=>setActiveSidePanel(null)} onUpdate={refreshVectorCount} currentAgentId={currentAgentId} ragThreshold={ragThreshold} setRagThreshold={setRagThreshold} />}
         {activeSidePanel === 'PROMPTS' && <PromptManager isOpen={true} onClose={()=>setActiveSidePanel(null)} currentAgentId={currentAgentId} onLoadPrompt={handleLoadPrompt} />}
         {activeSidePanel === 'HISTORY' && <ChatHistoryManager isOpen={true} onOpen={()=>{}} onClose={()=>setActiveSidePanel(null)} currentLogs={logs} onLoadSession={setLogs} currentAgentId={currentAgentId} onUpdateKnowledge={refreshVectorCount} />}
-        {activeSidePanel === 'SETTINGS' && <SettingsManager isOpen={true} onClose={()=>setActiveSidePanel(null)} modelConfig={modelConfig} setModelConfig={setModelConfig} selectedModel={selectedModel} setSelectedModel={setSelectedModel} disabled={connectionState === ConnectionState.CONNECTED} generalInstruction={generalInstructions} setGeneralInstruction={setGeneralInstructions} agentInstruction={agentInstructions} setAgentInstruction={setAgentInstructions} agentName={currentAgent?.handle || 'Unknown'} agentId={currentAgentId} agentAccessLevel={accessLevel} selectedVoice={selectedVoice} onVoiceChange={setSelectedVoice} onSave={handleSettingsSave} apiKey={apiKey} setApiKey={setApiKey} hfToken={hfToken} setHfToken={setHfToken} voiceReference={voiceRef} voiceSpeed={voiceSpeed} voicePitch={voicePitch} recognition={recognitionSettings} setRecognition={setRecognitionSettings} behaviorTuning={behaviorTuning} setBehaviorTuning={setBehaviorTuning} ragThreshold={ragThreshold} setRagThreshold={setRagThreshold} />}
-        {activeSidePanel === 'ROSTER' && <AgentRoster isOpen={true} onClose={() => setActiveSidePanel(null)} currentAgentId={currentAgentId} onSelectAgent={handleRosterSelect} onOpenGallery={handleOpenAgentGallery} />}
+        {activeSidePanel === 'SETTINGS' && <SettingsManager isOpen={true} onClose={()=>setActiveSidePanel(null)} modelConfig={modelConfig} setModelConfig={setModelConfig} selectedModel={selectedModel} setSelectedModel={setSelectedModel} disabled={connectionState === ConnectionState.CONNECTED} generalInstruction={generalInstructions} setGeneralInstruction={setGeneralInstructions} agentInstruction={agentInstructions} setAgentInstruction={setAgentInstructions} agentName={currentAgent?.handle || 'Unknown'} agentId={currentAgentId} agentAccessLevel={accessLevel} selectedVoice={selectedVoice} onVoiceChange={setSelectedVoice} onSave={handleSettingsSave} apiKey={apiKey} setApiKey={setApiKey} hfToken={hfToken} setHfToken={setHfToken} voiceReference={voiceRef} voiceSpeed={voiceSpeed} voicePitch={voicePitch} liveVoiceSpeed={liveVoiceSpeed} setLiveVoiceSpeed={setLiveVoiceSpeed} liveVoicePitch={liveVoicePitch} setLiveVoicePitch={setLiveVoicePitch} recognition={recognitionSettings} setRecognition={setRecognitionSettings} behaviorTuning={behaviorTuning} setBehaviorTuning={setBehaviorTuning} ragThreshold={ragThreshold} setRagThreshold={setRagThreshold} />}
+        {activeSidePanel === 'ROSTER' && <AgentRoster isOpen={true} onClose={() => setActiveSidePanel(null)} currentAgentId={currentAgentId} onSelectAgent={handleRosterSelect} onOpenGallery={handleOpenAgentGallery} onAgentUpdated={(id) => { if (id === currentAgentId) loadAgentConfig(id); }} />}
 
         <MediaPlayer audioUrl={storyAudioUrl} title="Narrative Playback" onClose={() => setStoryAudioUrl(null)} interruptSignal={interruptSignal} />
 
@@ -1460,7 +1657,11 @@ ${agentInstructions || currentAgent?.system_instruction}
             </div>
         ) : currentView === 'LORE_HARNESS' ? (
             <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-                <LorepackHarness onExit={() => setCurrentView('HOME')} />
+                <LorepackHarness 
+                    onExit={() => setCurrentView('HOME')} 
+                    currentAgentId={currentAgentId}
+                    onSelectAgent={handleAgentChange}
+                />
             </div>
         ) : (
             renderOrchestratorView()
@@ -1528,6 +1729,9 @@ ${agentInstructions || currentAgent?.system_instruction}
                   {/* MOVIE CAMERA (MEDIA STREAM) */}
                   <button onClick={() => mediaFileInputRef.current?.click()} className={`btn btn-icon ${isCameraOn && videoSource === 'media' ? 'active-green' : ''}`} title="Stream Video File to Agent">
                       <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect><line x1="7" y1="2" x2="7" y2="22"></line><line x1="17" y1="2" x2="17" y2="22"></line><line x1="2" y1="12" x2="22" y2="12"></line><line x1="2" y1="7" x2="7" y2="7"></line><line x1="2" y1="17" x2="7" y2="17"></line><line x1="17" y1="17" x2="22" y2="17"></line><line x1="17" y1="7" x2="22" y2="7"></line></svg>
+                  </button>
+                  <button onClick={isRecording ? handleStopRecording : handleStartRecording} className={`btn btn-icon ${isRecording ? 'active-red' : 'btn-secondary'}`} title={isRecording ? "Stop Recording" : "Start Recording Session"}>
+                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="3" fill={isRecording ? "currentColor" : "none"}></circle></svg>
                   </button>
                   {/* Hidden Input for Movie Camera */}
                   <input type="file" accept="video/*" ref={mediaFileInputRef} className="hidden" onChange={handleMediaFileSelect} />

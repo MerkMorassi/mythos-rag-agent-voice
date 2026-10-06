@@ -33,14 +33,12 @@ class GeminiClient {
      */
     async listModels(apiKey: string): Promise<{ name: string, displayName: string }[]> {
         const fallbackModels = [
+            { name: 'gemini-3.1-flash-live-preview', displayName: 'Gemini 3.1 Flash Live (Voice & Real-Time)' },
             { name: 'gemini-3.8-flash', displayName: 'Gemini 3.8 Flash (Economic & Fast)' },
             { name: 'gemini-3.1-pro-preview', displayName: 'Gemini 3.1 Pro (Complex Reasoning)' },
             { name: 'gemini-3.1-flash-lite', displayName: 'Gemini 3.1 Flash Lite (Ultra Economic)' },
             { name: 'gemini-2.5-flash', displayName: 'Gemini 2.5 Flash' },
-            { name: 'gemini-2.5-pro', displayName: 'Gemini 2.5 Pro' },
-            { name: 'gemini-2.0-flash-exp', displayName: 'Gemini 2.0 Flash Experimental' },
-            { name: 'gemini-1.5-flash', displayName: 'Gemini 1.5 Flash' },
-            { name: 'gemini-1.5-pro', displayName: 'Gemini 1.5 Pro' }
+            { name: 'gemini-2.5-pro', displayName: 'Gemini 2.5 Pro' }
         ];
 
         if (!apiKey) {
@@ -63,9 +61,26 @@ class GeminiClient {
             if (!data.models || !Array.isArray(data.models)) {
                 return fallbackModels;
             }
+
+            const isDeprecated = (name: string) => {
+                const lower = name.toLowerCase();
+                return (
+                    lower.includes('1.5') ||
+                    lower.includes('1.0') ||
+                    lower.includes('gemini-1.') ||
+                    lower.includes('gemini-2.0') ||
+                    lower.includes('-exp') ||
+                    lower.includes('experimental') ||
+                    lower.includes('gemini-3-flash-preview') ||
+                    lower.includes('gemini-3-pro-preview')
+                );
+            };
     
             const compatibleModels = data.models
-                .filter((model: any) => model.supportedGenerationMethods?.includes("generateContent"))
+                .filter((model: any) => 
+                    model.supportedGenerationMethods?.includes("generateContent") &&
+                    !isDeprecated(model.name)
+                )
                 .map((model: any) => ({
                     // The SDK expects the model name without the 'models/' prefix.
                     name: model.name.replace('models/', ''),

@@ -94,8 +94,13 @@ export class GeminiProvider implements ILLMProvider {
     } catch (error: any) {
         console.error("Gemini Provider Error (SDK):", error);
         
+        const errMsg = error.message || "";
+        if (errMsg.includes('quota') || errMsg.includes('429') || errMsg.includes('resource_exhausted')) {
+            throw new Error(`QUOTA EXCEEDED: The model ${modelToUse} is currently overloaded or you have hit your rate limit. Please switch models or wait a few minutes.`);
+        }
+
         // Handle specific safety errors from the SDK
-        if (error.message && error.message.includes('SAFETY')) {
+        if (errMsg.includes('SAFETY')) {
             return {
                 content: `[SYSTEM] Content Blocked by Filters. (Reason: ${error.message})`,
                 isSafetyRefusal: true,
@@ -109,7 +114,6 @@ export class GeminiProvider implements ILLMProvider {
   }
 
   async embed(text: string): Promise<number[]> {
-    // Attempt latest Gemini embedding model first (gemini-embedding-2-preview)
     try {
       const ai = new GoogleGenAI({ apiKey: this.apiKey });
       const result = await ai.models.embedContent({
@@ -121,15 +125,13 @@ export class GeminiProvider implements ILLMProvider {
         return values;
       }
     } catch (err) {
-      console.warn("gemini-embedding-2-preview failed, falling back to text-embedding-004:", err);
+      console.warn("gemini-embedding-2-preview SDK call failed, retrying via direct endpoint:", err);
     }
 
-    // Resilient fallback to text-embedding-004
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key=${this.apiKey}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2-preview:embedContent?key=${this.apiKey}`;
     const body = {
-      model: 'models/text-embedding-004',
-      content: { parts: [{ text: text }] },
-      taskType: 'RETRIEVAL_DOCUMENT'
+      model: 'models/gemini-embedding-2-preview',
+      content: { parts: [{ text: text }] }
     };
 
     const response = await fetch(url, { 
@@ -139,12 +141,13 @@ export class GeminiProvider implements ILLMProvider {
     });
 
     if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(`Embedding failed: ${errorData.error?.message}`);
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(`Embedding failed: ${errorData.error?.message || response.statusText}`);
     }
 
     const data = await response.json();
-    if (!data.embedding) throw new Error("Embedding failed: No embedding returned.");
-    return data.embedding.values;
+    const values = data.embedding?.values || data.embeddings?.[0]?.values;
+    if (!values) throw new Error("Embedding failed: No embedding returned.");
+    return values;
   }
 }

@@ -10,9 +10,10 @@ interface AgentRosterProps {
     currentAgentId: string;
     onSelectAgent: (id: string, mode: 'CHAT' | 'VOICE') => void;
     onOpenGallery: (agentId: string) => void;
+    onAgentUpdated?: (id: string) => void;
 }
 
-export const AgentRoster: React.FC<AgentRosterProps> = ({ isOpen, onClose, currentAgentId, onSelectAgent, onOpenGallery }) => {
+export const AgentRoster: React.FC<AgentRosterProps> = ({ isOpen, onClose, currentAgentId, onSelectAgent, onOpenGallery, onAgentUpdated }) => {
     const [agents, setAgents] = useState<Agent[]>([]);
     const [editingId, setEditingId] = useState<string | null>(null);
     
@@ -69,6 +70,9 @@ export const AgentRoster: React.FC<AgentRosterProps> = ({ isOpen, onClose, curre
         });
         setEditingId(null);
         await refreshAgents();
+        if (onAgentUpdated) {
+            onAgentUpdated(id);
+        }
     };
 
     if (!isOpen) return null;

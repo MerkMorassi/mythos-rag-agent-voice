@@ -11,6 +11,8 @@ interface UseGeminiLiveProps {
     voiceName: string;
     tools?: Tool[];
     isMuted?: boolean;
+    liveVoiceSpeed?: number;
+    liveVoicePitch?: number;
     onLog: (log: LogMessage) => void;
     onToolCall?: (toolCall: any) => Promise<any[]>; // Returns tool responses
 }
@@ -22,6 +24,8 @@ export function useGeminiLive({
     voiceName, 
     tools,
     isMuted,
+    liveVoiceSpeed = 1.0,
+    liveVoicePitch = 0,
     onLog,
     onToolCall 
 }: UseGeminiLiveProps) {
@@ -43,10 +47,24 @@ export function useGeminiLive({
     const isIntentionalDisconnect = useRef(false);
 
     // Config Refs to prevent stale closures in callbacks
-    const configRef = useRef({ apiKey, modelName, systemInstruction, voiceName, tools, isMicOn, isMuted });
+    const configRef = useRef({ apiKey, modelName, systemInstruction, voiceName, tools, isMicOn, isMuted, liveVoiceSpeed, liveVoicePitch });
     useEffect(() => {
-        configRef.current = { apiKey, modelName, systemInstruction, voiceName, tools, isMicOn, isMuted };
-    }, [apiKey, modelName, systemInstruction, voiceName, tools, isMicOn, isMuted]);
+        configRef.current = { apiKey, modelName, systemInstruction, voiceName, tools, isMicOn, isMuted, liveVoiceSpeed, liveVoicePitch };
+    }, [apiKey, modelName, systemInstruction, voiceName, tools, isMicOn, isMuted, liveVoiceSpeed, liveVoicePitch]);
+
+    // Dynamically adjust active playing sources when live speed or pitch changes
+    useEffect(() => {
+        sourcesRef.current.forEach(source => {
+            try {
+                if (audioContextRef.current) {
+                    source.playbackRate.setValueAtTime(liveVoiceSpeed, audioContextRef.current.currentTime);
+                    source.detune.setValueAtTime(liveVoicePitch * 100, audioContextRef.current.currentTime);
+                }
+            } catch (e) {
+                // Ignore if source is stopped or released
+            }
+        });
+    }, [liveVoiceSpeed, liveVoicePitch]);
 
     // Callback Ref to prevent stale closures
     const callbackRef = useRef({ onLog, onToolCall });
@@ -89,8 +107,9 @@ export function useGeminiLive({
                 outputAudioTranscription: {} 
             };
 
+            const liveModel = configRef.current.modelName || 'gemini-3.1-flash-live-preview';
             const sessionPromise = ai.live.connect({
-                model: configRef.current.modelName,
+                model: liveModel,
                 config,
                 callbacks: {
                     onopen: async () => {
@@ -129,7 +148,7 @@ registerProcessor('audio-stream-processor', AudioStreamProcessor);
                                     
                                     sessionPromise.then(session => {
                                         if (isIntentionalDisconnect.current) return;
-                                        session.sendRealtimeInput({ media: pcmBlob });
+                                    session.sendRealtimeInput({ audio: pcmBlob });
                                     }).catch(err => {
                                         if(!isIntentionalDisconnect.current) console.warn("Input Send Error:", err);
                                     });
@@ -162,13 +181,19 @@ registerProcessor('audio-stream-processor', AudioStreamProcessor);
                         }
 
                         // B. Audio Output
-                        const audioData = msg.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
+                        const audioPart = msg.serverContent?.modelTurn?.parts?.find(p => p.inlineData?.data);
+                        const audioData = audioPart?.inlineData?.data || msg.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
                         if (audioData && audioContextRef.current && analyserRef.current && !configRef.current.isMuted) {
                             const ctx = audioContextRef.current;
                             nextStartTimeRef.current = Math.max(nextStartTimeRef.current, ctx.currentTime);
                             const audioBuffer = await decodeAudioData(base64ToUint8Array(audioData), ctx, 24000);
                             const source = ctx.createBufferSource();
                             source.buffer = audioBuffer;
+                            
+                            // Apply real-time speed and pitch
+                            source.playbackRate.value = configRef.current.liveVoiceSpeed;
+                            source.detune.value = configRef.current.liveVoicePitch * 100; // Convert semitones to cents
+                            
                             source.connect(analyserRef.current);
                             analyserRef.current.connect(ctx.destination);
                             
@@ -182,7 +207,8 @@ registerProcessor('audio-stream-processor', AudioStreamProcessor);
                             };
                             
                             source.start(nextStartTimeRef.current);
-                            nextStartTimeRef.current += audioBuffer.duration;
+                            // Mathematically scale the buffer duration added to nextStartTimeRef by the speed/playbackRate
+                            nextStartTimeRef.current += audioBuffer.duration / configRef.current.liveVoiceSpeed;
                             
                             sourcesRef.current.add(source);
                             activeSourcesCountRef.current++;
@@ -195,6 +221,11 @@ registerProcessor('audio-stream-processor', AudioStreamProcessor);
                         }
                         if (msg.serverContent?.outputTranscription?.text) {
                             callbackRef.current.onLog({ id: crypto.randomUUID(), type: 'model', text: msg.serverContent.outputTranscription.text, timestamp: Date.now(), isStreaming: true });
+                        } else {
+                            const textPart = msg.serverContent?.modelTurn?.parts?.find(p => p.text)?.text;
+                            if (textPart) {
+                                callbackRef.current.onLog({ id: crypto.randomUUID(), type: 'model', text: textPart, timestamp: Date.now(), isStreaming: true });
+                            }
                         }
                         if (msg.serverContent?.turnComplete) {
                            setIsThinking(false);
@@ -287,9 +318,14 @@ registerProcessor('audio-stream-processor', AudioStreamProcessor);
                 }
 
                 if (parts.length > 0) {
-                    session.sendRealtimeInput({
-                        turns: [{ role: 'user', parts: parts }]
-                    });
+                    if (typeof (session as any).sendClientContent === 'function') {
+                        (session as any).sendClientContent({
+                            turns: [{ role: 'user', parts: parts }],
+                            turnComplete: true
+                        });
+                    } else if (typeof (session as any).sendRealtimeInput === 'function') {
+                        (session as any).sendRealtimeInput({ text });
+                    }
                 }
             } catch(e) {
                 if(!isIntentionalDisconnect.current) console.error("Send Text Error:", e);
@@ -301,7 +337,11 @@ registerProcessor('audio-stream-processor', AudioStreamProcessor);
         if (sessionPromiseRef.current && !isIntentionalDisconnect.current) {
             try {
                 const session = await sessionPromiseRef.current;
-                session.sendRealtimeInput(input);
+                if (typeof (session as any).sendRealtimeInput === 'function') {
+                    // Normalize { image: ... } to { video: ... } per Gemini Live API specification
+                    const payload = (input?.image && !input?.video) ? { ...input, video: input.image } : input;
+                    (session as any).sendRealtimeInput(payload);
+                }
             } catch(e) {
                 // Silently fail if session is busy/closed
             }

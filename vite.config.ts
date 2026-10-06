@@ -41,16 +41,12 @@ export default defineConfig(({ mode }) => {
         }
     ],
     server: {
-      port: 4000, 
-      strictPort: true, 
-      host: true, 
-      open: true
+      port: 3000, 
+      host: '0.0.0.0'
     },
     preview: {
-      port: 7860, 
-      strictPort: true,
-      host: true, 
-      allowedHosts: ['hf.space', 'localhost']
+      port: 3000, 
+      host: '0.0.0.0'
     },
     define: {
       'process.env.API_KEY': JSON.stringify(env.API_KEY),

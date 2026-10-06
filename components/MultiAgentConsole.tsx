@@ -645,9 +645,9 @@ ${focus.rules.map(r => "- " + r).join('\n')}
             <div className="council-sidebar">
                 <div style={{ paddingBottom: '1rem', borderBottom: '1px solid #333' }}>
                     <div className="section-header-title" style={{ marginBottom: '0.5rem', color: '#38bdf8' }}>COUNCIL ROSTER</div>
-                    <div className="flex-group">
-                        <button className="btn btn-secondary btn-xs" style={{ flex: 1 }} onClick={handleSelectAll} title="Activate all agents">SELECT ALL</button>
-                        <button className="btn btn-secondary btn-xs" style={{ flex: 1 }} onClick={() => setActiveAgents(new Set())} title="Deactivate all agents">NONE</button>
+                    <div className="flex-group" style={{ gap: '0.5rem' }}>
+                        <button className="btn btn-secondary btn-md" style={{ flex: 1 }} onClick={handleSelectAll} title="Activate all agents">SELECT ALL</button>
+                        <button className="btn btn-secondary btn-md" style={{ flex: 1 }} onClick={() => setActiveAgents(new Set())} title="Deactivate all agents">NONE</button>
                     </div>
                 </div>
                 
@@ -703,7 +703,7 @@ ${focus.rules.map(r => "- " + r).join('\n')}
                             {msg.senderId !== 'SYSTEM' && (
                                 <span className="council-sender" style={{ color: msg.senderId === 'USER' ? '#38bdf8' : '#a78bfa' }}>
                                     {msg.senderName} 
-                                    {msg.model && <span className="model-badge">{msg.model.replace('gemini-3.1-pro-preview', 'G-Pro 3.1').replace('gemini-3.8-flash', 'G-Flash 3.8').replace('gemini-3-pro-preview', 'G-Pro').replace('gemini-3-flash-preview', 'G-Flash')}</span>}
+                                    {msg.model && <span className="model-badge">{msg.model.replace('gemini-3.1-pro-preview', 'G-Pro 3.1').replace('gemini-3.8-flash', 'G-Flash 3.8').replace('gemini-3.1-flash-lite', 'G-Lite 3.1').replace('gemini-2.5-flash', 'G-Flash 2.5').replace('gemini-2.5-pro', 'G-Pro 2.5')}</span>}
                                     {msg.targets && msg.targets.length > 0 && <span style={{ opacity: 0.5, marginLeft: '0.5rem', fontWeight: 'normal', fontSize: '0.65rem' }}>to {msg.targets.length} agents</span>}
                                 </span>
                             )}

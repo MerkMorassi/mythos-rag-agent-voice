@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { VectorRecord, LorePack } from '../types';
+import { KnowledgeDashboard } from './KnowledgeDashboard';
 import { 
   getVectorsByAgent,
   deleteVectorsByAgent,
@@ -18,13 +19,17 @@ interface KnowledgeManagerProps {
   currentAgentId: string;
   isOpen: boolean;
   onClose: () => void;
+  ragThreshold: number;
+  setRagThreshold: (threshold: number) => void;
 }
 
 export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({ 
     onUpdate, 
     currentAgentId,
     isOpen,
-    onClose
+    onClose,
+    ragThreshold,
+    setRagThreshold
 }) => {
   const [activeTab, setActiveTab] = useState<'local' | 'library'>('local');
   const [vectors, setVectors] = useState<VectorRecord[]>([]);
@@ -114,11 +119,31 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
               <input type="file" ref={importInputRef} className="hidden" onChange={handleImport} accept=".jsonl,.jsonl.gz,.gz,.json" />
           </div>
 
+          <div className="section-panel" style={{ marginBottom: '1rem', padding: '1rem' }}>
+              <div className="flex-group justify-content-space-between">
+                  <label className="section-header-title">RETRIEVAL DENSITY (THRESHOLD: {ragThreshold.toFixed(2)})</label>
+              </div>
+              <input 
+                  type="range" 
+                  min="0" 
+                  max="1" 
+                  step="0.05" 
+                  value={ragThreshold} 
+                  onChange={(e) => setRagThreshold(parseFloat(e.target.value))}
+                  className="w-full"
+              />
+              <div className="text-dim-small" style={{ marginTop: '0.5rem' }}>
+                  Preview: Higher thresholds include only the most relevant nodes.
+              </div>
+          </div>
+
           {isLoading && (
               <div className="status-banner status-info">
                   {importProgress.t > 0 ? `Syncing Lattice: ${importProgress.p} / ${importProgress.t}` : 'Accessing Vault...'}
               </div>
           )}
+
+          <KnowledgeDashboard vectors={vectors} />
 
           <div className="flex-col">
               <span className="section-header-title">ACTIVE KNOWLEDGE NODES ({vectors.length})</span>

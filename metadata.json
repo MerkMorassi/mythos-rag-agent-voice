@@ -1,6 +1,6 @@
 {
   "name": "MythOS COMMS - SOMA A2A Graph MAGRAGMAS Lite with Voice",
-  "description": "Real-time voice conversation powered by Gemini 2.5 Native Audio (Interface) and Gemini 3.0 Pro (Cognition), grounded in your own local knowledge base.",
+  "description": "Real-time voice and multimodal conversations powered by Gemini 3.1 Flash Live (Live API) grounded in your local knowledge base.",
   "requestFramePermissions": [
     "camera",
     "microphone"

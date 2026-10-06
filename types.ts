@@ -87,6 +87,8 @@ export interface AgentConfig {
   voiceReference?: string; // Base64 audio string for Voice Cloning
   voiceSpeed?: number;     // Playback Rate (default 1.0)
   voicePitch?: number;     // Detune in Semitones (default 0)
+  liveVoiceSpeed?: number; // Real-time voice speaking rate (default 1.0)
+  liveVoicePitch?: number; // Real-time voice pitch (default 0)
   accessLevel?: string; // "777", "755", etc.
   // FIX: Added bio for overrides
   bio?: string;

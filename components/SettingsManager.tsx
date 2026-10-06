@@ -19,7 +19,7 @@ interface SettingsManagerProps {
   agentAccessLevel: string;
   selectedVoice: string;
   onVoiceChange: (voice: string) => void;
-  onSave: (modelName: string, voiceRef?: string, accessLevel?: string, voiceSpeed?: number, voicePitch?: number, recognition?: RecognitionSettings, behaviorTuning?: string, ragThreshold?: number) => Promise<void>;
+  onSave: (modelName: string, voiceRef?: string, accessLevel?: string, voiceSpeed?: number, voicePitch?: number, recognition?: RecognitionSettings, behaviorTuning?: string, ragThreshold?: number, liveSpeed?: number, livePitch?: number) => Promise<void>;
   isOpen: boolean;
   onClose: () => void;
   apiKey: string;
@@ -29,6 +29,10 @@ interface SettingsManagerProps {
   voiceReference?: string;
   voiceSpeed?: number;
   voicePitch?: number;
+  liveVoiceSpeed?: number;
+  setLiveVoiceSpeed?: (val: number) => void;
+  liveVoicePitch?: number;
+  setLiveVoicePitch?: (val: number) => void;
   recognition: RecognitionSettings;
   setRecognition: (recognition: RecognitionSettings) => void;
   behaviorTuning: string;
@@ -43,6 +47,8 @@ const SettingsManager: React.FC<SettingsManagerProps> = (props) => {
   const [accessLevel, setAccessLevel] = useState(props.agentAccessLevel);
   const [speed, setSpeed] = useState(props.voiceSpeed || 1.0);
   const [pitch, setPitch] = useState(props.voicePitch || 0);
+  const [liveSpeed, setLiveSpeed] = useState(props.liveVoiceSpeed || 1.0);
+  const [livePitch, setLivePitch] = useState(props.liveVoicePitch || 0);
   const [modelsList, setModelsList] = useState<{ name: string, displayName: string }[]>([]);
   const [recognition, setRecognition] = useState(props.recognition || { userInteraction: '', agentInteraction: '' });
   const [dolphinUrl, setDolphinUrl] = useState('');
@@ -65,9 +71,11 @@ const SettingsManager: React.FC<SettingsManagerProps> = (props) => {
     setAccessLevel(props.agentAccessLevel);
     setSpeed(props.voiceSpeed || 1.0);
     setPitch(props.voicePitch || 0);
+    setLiveSpeed(props.liveVoiceSpeed || 1.0);
+    setLivePitch(props.liveVoicePitch || 0);
     setRecognition(props.recognition || { userInteraction: '', agentInteraction: '' });
     setThreshold(props.ragThreshold || 0.35);
-  }, [props.voiceReference, props.agentAccessLevel, props.voiceSpeed, props.voicePitch, props.recognition, props.ragThreshold, props.isOpen]);
+  }, [props.voiceReference, props.agentAccessLevel, props.voiceSpeed, props.voicePitch, props.liveVoiceSpeed, props.liveVoicePitch, props.recognition, props.ragThreshold, props.isOpen]);
 
   if (!props.isOpen) return null;
 
@@ -93,7 +101,7 @@ const SettingsManager: React.FC<SettingsManagerProps> = (props) => {
     
     ExternalRouter.updateToolConfig('DOLPHIN_LLM', { url: dolphinUrl });
 
-    await props.onSave(props.selectedModel, voiceRef, accessLevel, speed, pitch, recognition, props.behaviorTuning, threshold);
+    await props.onSave(props.selectedModel, voiceRef, accessLevel, speed, pitch, recognition, props.behaviorTuning, threshold, liveSpeed, livePitch);
     
     setIsSaving(false);
     alert("NEURAL SYNC: System parameters updated.");
@@ -284,6 +292,7 @@ const SettingsManager: React.FC<SettingsManagerProps> = (props) => {
                             ))
                         ) : (
                             <>
+                                <option value="gemini-3.1-flash-live-preview">Gemini 3.1 Flash Live (Voice & Real-Time)</option>
                                 <option value="gemini-3.8-flash">Gemini 3.8 Flash (Economic & Fast)</option>
                                 <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro (Complex Reasoning)</option>
                                 <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash Lite (Ultra Economic)</option>
@@ -325,6 +334,41 @@ const SettingsManager: React.FC<SettingsManagerProps> = (props) => {
                         <option value="Callirrhoe">Callirrhoe (Wisdom/Sophisticated)</option>
                         <option value="Leda">Leda (Oracle/Intuitive)</option>
                     </select>
+                </div>
+                
+                <div className="flex-group" style={{ gap: '1rem', marginTop: '0.5rem' }}>
+                    <div style={{ flex: 1 }}>
+                        <label className="form-label">LIVE VOICE SPEED: {liveSpeed}x</label>
+                        <input 
+                            type="range" 
+                            min="0.5" 
+                            max="2.0" 
+                            step="0.1" 
+                            value={liveSpeed} 
+                            onChange={e => {
+                                const val = parseFloat(e.target.value);
+                                setLiveSpeed(val);
+                                props.setLiveVoiceSpeed?.(val);
+                            }} 
+                            style={{ width: '100%' }} 
+                        />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                        <label className="form-label">LIVE VOICE PITCH: {livePitch > 0 ? `+${livePitch}` : livePitch} semitones</label>
+                        <input 
+                            type="range" 
+                            min="-12" 
+                            max="12" 
+                            step="1" 
+                            value={livePitch} 
+                            onChange={e => {
+                                const val = parseInt(e.target.value);
+                                setLivePitch(val);
+                                props.setLiveVoicePitch?.(val);
+                            }} 
+                            style={{ width: '100%' }} 
+                        />
+                    </div>
                 </div>
             </div>
 
